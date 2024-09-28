@@ -12,6 +12,9 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     private readonly Container _container = new();
 
     private static T _domain;
+
+    private IDomain _parent;
+    
     
     public static T Instance => _domain ??= BuildDomain();
     
@@ -33,7 +36,12 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         _container.Clear();
         _domain = null;
     }
-    
+
+    public void SetParent(IDomain parent)
+    {
+        _parent = parent;
+    }
+
     public void RegisterSystem<TSystem>(TSystem system) where TSystem : ISystem
     {
         system.SetDomain(this);
@@ -51,14 +59,20 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     public void RegisterUtility<TUtility>(TUtility utility) where TUtility : IUtility
         => _container.Register(utility);
 
-    public TSystem GetSystem<TSystem>() where TSystem : class, ISystem =>
-        _container.Get<TSystem>();
+    public TSystem GetSystem<TSystem>() where TSystem : class, ISystem
+    {
+        return _container.Get<TSystem>() ?? _parent?.GetSystem<TSystem>();
+    }
 
-    public TModel GetModel<TModel>() where TModel : class, IModel =>
-        _container.Get<TModel>();
+    public TModel GetModel<TModel>() where TModel : class, IModel
+    {
+        return _container.Get<TModel>() ?? _parent?.GetModel<TModel>();
+    }
 
-    public TUtility GetUtility<TUtility>() where TUtility : class, IUtility => 
-        _container.Get<TUtility>();
+    public TUtility GetUtility<TUtility>() where TUtility : class, IUtility
+    {
+        return _container.Get<TUtility>() ?? _parent?.GetUtility<TUtility>();
+    }
 
     public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.Register(onEvent);
 

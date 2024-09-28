@@ -9,6 +9,12 @@ namespace SimpleFramework;
 public interface IDomain
 {
     /// <summary>
+    /// 设置当前域的父作用域。
+    /// <para>当System, Model, Utility在当前作用域中无法找到时，会尝试去父作用域查找</para>
+    /// </summary>
+    void SetParent(IDomain domain);
+    
+    /// <summary>
     /// 注册系统。
     /// </summary>
     /// <param name="system"><see cref="ISystem"/></param>

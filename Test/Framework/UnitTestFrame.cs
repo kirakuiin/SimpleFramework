@@ -10,6 +10,7 @@ public class TestFramework
     private Control _control;
 
     private const int IntVal = 3;
+    private const int AnoVal = 4;
     private const string StrVal = "hello";
     
     [SetUp]
@@ -79,6 +80,23 @@ public class TestFramework
         
         Assert.AreNotEqual(System.InitVal, system.Value);
     }
+
+    [Test]
+    public void TestParentExists()
+    {
+        BDomain.Instance.SetParent(ADomain.Instance);
+        
+        Assert.AreEqual(IntVal, BDomain.Instance.GetUtility<Utility>().Value);
+    }
+    
+    [Test]
+    public void TestParentOverride()
+    {
+        BDomain.Instance.SetParent(ADomain.Instance);
+        BDomain.Instance.RegisterUtility(new Utility(AnoVal));
+        
+        Assert.AreEqual(AnoVal, BDomain.Instance.GetUtility<Utility>().Value);
+    }
 }
 
 #region DomainDefine
@@ -90,7 +108,14 @@ public class ADomain : AbstractDomain<ADomain>
     }
 }
 
-    public class Control : IController
+public class BDomain : AbstractDomain<BDomain>
+{
+    protected override void Init()
+    {
+    }
+}
+
+public class Control : IController
 {
     public IDomain Domain => ADomain.Instance;
     
@@ -124,7 +149,7 @@ public class ADomain : AbstractDomain<ADomain>
 public class System : AbstractSystem
 {
     public const string InitVal = "init";
-    public string Value { get; private set; } = default;
+    public string Value { get; private set; }
     
     protected override void OnInitialize()
     {
