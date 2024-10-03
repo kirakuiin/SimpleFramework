@@ -35,7 +35,10 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
             system => system.UnInitialize());
         _container.Clear();
         _domain = null;
+        UnInit();
     }
+    
+    protected virtual void UnInit() {}
 
     public void SetParent(IDomain parent)
     {
