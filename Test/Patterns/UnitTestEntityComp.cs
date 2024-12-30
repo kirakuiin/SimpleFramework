@@ -1,8 +1,8 @@
 ﻿using System.Linq;
 using NUnit.Framework;
-using SimpleFramework;
+using SimpleFramework.Patterns;
 
-namespace Test.Framework;
+namespace Test.Patterns;
 
 [TestFixture]
 public class TestEc

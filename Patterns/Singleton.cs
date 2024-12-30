@@ -1,4 +1,4 @@
-﻿namespace SimpleFramework;
+﻿namespace SimpleFramework.Patterns;
 
 /// <summary>
 /// 实现单例模式必须实现的接口

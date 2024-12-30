@@ -1,6 +1,6 @@
-﻿namespace SimpleFramework;
+﻿using SimpleFramework.Collections;
 
-using Collections;
+namespace SimpleFramework.Patterns;
 
 /// <summary>
 /// 代表一个组件对象
