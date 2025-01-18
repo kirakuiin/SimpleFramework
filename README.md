@@ -26,6 +26,11 @@
 - **DisposableGroup**: 资源管理组
 - **EntityComponent**: 实体组件系统
 - **NetworkUtil**: 网络工具类
+- **UdpBroadcast**: UDP广播工具
+  - 支持基础的UDP广播发送和接收
+  - 支持定时广播功能
+  - 支持持续监听广播
+  - 支持泛型消息格式
 - **SerializeTool**: JSON序列化工具
 - **TimeUtil**: 时间转换工具
 
