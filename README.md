@@ -38,3 +38,7 @@
 - **List**: 列表操作扩展
 - **Random**: 随机数相关扩展
 - **String**: 字符串处理扩展
+
+### 6. 数学相关
+
+- **六边形网格**: 基于 [Red Blob Games](http://www.redblobgames.com/grids/hexagons/) 的六边形网格实现，支持尖角朝上和平边朝上两种布局，可自定义大小和形状。

@@ -18,8 +18,4 @@
       <None Remove="Test\**" />
     </ItemGroup>
 
-    <ItemGroup>
-      <Folder Include="Math\" />
-    </ItemGroup>
-
 </Project>

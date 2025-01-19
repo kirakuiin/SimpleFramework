@@ -1,4 +1,10 @@
-# 项目介绍
+# 生成规范
+
+1. 每次更新代码时，请更新README.md文件，添加新的功能和修改的细节。
+2. 测试用例的代码尽量符合BOC原则(build-operate-check)。
+3. 测试用例的每个测试方法只测试单一功能。
+4. 代码的公开接口和属性添加注释。
+5. 生成git commit message时，如果有多个修改，用列表形式列出。
 
 # C# source files
 *.cs text diff=csharp
