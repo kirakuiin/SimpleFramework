@@ -8,14 +8,35 @@
 
     <ItemGroup>
       <Compile Remove="Test\**" />
+      <Compile Remove="Utility\**" />
+      <Compile Remove="Net\**" />
+      <Compile Remove="Maths\**" />
+      <Compile Remove="ECS\**" />
+      <Compile Remove="Collections\**" />
+      <Compile Remove="Patterns\**" />
+      <Compile Remove="Pattern\**" />
     </ItemGroup>
 
     <ItemGroup>
       <EmbeddedResource Remove="Test\**" />
+      <EmbeddedResource Remove="Utility\**" />
+      <EmbeddedResource Remove="Net\**" />
+      <EmbeddedResource Remove="Maths\**" />
+      <EmbeddedResource Remove="ECS\**" />
+      <EmbeddedResource Remove="Collections\**" />
+      <EmbeddedResource Remove="Patterns\**" />
+      <EmbeddedResource Remove="Pattern\**" />
     </ItemGroup>
 
     <ItemGroup>
       <None Remove="Test\**" />
+      <None Remove="Utility\**" />
+      <None Remove="Net\**" />
+      <None Remove="Maths\**" />
+      <None Remove="ECS\**" />
+      <None Remove="Collections\**" />
+      <None Remove="Patterns\**" />
+      <None Remove="Pattern\**" />
     </ItemGroup>
 
 </Project>

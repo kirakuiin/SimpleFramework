@@ -30,7 +30,6 @@ public class TestSerializeTool
         Assert.AreEqual(msg.Name, finalRes.Name);
         Assert.IsTrue(finalRes.IsTrue);
     }
-    
 }
 
 public struct Message

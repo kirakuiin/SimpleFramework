@@ -17,16 +17,17 @@
     &lt;TestId&gt;NUnit3x::31586A58-D773-48FD-AE32-CBCE40527A87::net6.0::Test.Network.TestUdpBroadcast.TestCancelScheduledBroadcast&lt;/TestId&gt;&#xD;
   &lt;/TestAncestor&gt;&#xD;
 &lt;/SessionState&gt;</s:String>
-	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=948f1ca4_002D7496_002D4987_002Db1a6_002D46a6b32ee5b4/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" IsActive="True" Name="TestMessageChange" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
+	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=948f1ca4_002D7496_002D4987_002Db1a6_002D46a6b32ee5b4/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" Name="TestMessageChange" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
   &lt;Or&gt;&#xD;
     &lt;TestAncestor&gt;&#xD;
       &lt;TestId&gt;NUnit3x::31586A58-D773-48FD-AE32-CBCE40527A87::net6.0::Test.Maths.TestMathUtils&lt;/TestId&gt;&#xD;
+      &lt;TestId&gt;NUnit3x::31586A58-D773-48FD-AE32-CBCE40527A87::net6.0::Test.Utility.TestSerializeTool&lt;/TestId&gt;&#xD;
     &lt;/TestAncestor&gt;&#xD;
     &lt;ProjectFile&gt;31586A58-D773-48FD-AE32-CBCE40527A87/d:Maths/f:UnitTestMatrix2D.cs&lt;/ProjectFile&gt;&#xD;
     &lt;ProjectFile&gt;31586A58-D773-48FD-AE32-CBCE40527A87/d:Maths/f:UnitTestHexagonGrid.cs&lt;/ProjectFile&gt;&#xD;
   &lt;/Or&gt;&#xD;
 &lt;/SessionState&gt;</s:String>
 	
-	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=a770b4b7_002Df98c_002D43dd_002Da847_002D52edf56828a3/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" Name="All tests from Solution" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
+	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=a770b4b7_002Df98c_002D43dd_002Da847_002D52edf56828a3/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" IsActive="True" Name="All tests from Solution" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
   &lt;Solution /&gt;&#xD;
 &lt;/SessionState&gt;</s:String></wpf:ResourceDictionary>

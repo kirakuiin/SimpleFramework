@@ -1,4 +1,4 @@
-﻿namespace SimpleFramework.Extensions;
+﻿namespace SimpleFramework.Utility.Extensions;
     
 public static class RandomExtensions
 {

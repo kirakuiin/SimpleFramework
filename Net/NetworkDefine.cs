@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace SimpleFramework.Utility;
+namespace SimpleFramework.Net;
 
 /// <summary>
 /// 提供若干和网络地址相关函数的静态类。

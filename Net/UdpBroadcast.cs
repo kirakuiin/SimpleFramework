@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using SimpleFramework.Utility;
 
-namespace SimpleFramework.Network;
+namespace SimpleFramework.Net;
 
 /// <summary>
 /// 任务标记。

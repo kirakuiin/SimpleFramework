@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using SimpleFramework.Utility;
 
-namespace SimpleFramework.Network;
+namespace SimpleFramework.Net;
 
 /// <summary>
 /// ping命令执行器

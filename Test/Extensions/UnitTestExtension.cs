@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using NUnit.Framework;
-using SimpleFramework.Extensions;
+using SimpleFramework.Utility.Extensions;
 
 namespace Test.Extensions;
 
