@@ -270,4 +270,52 @@ public class UnitTestWorld
         Assert.IsNotNull(query);
         Assert.AreEqual(1, query.GetArchetypes().Count);
     }
+
+    [Test]
+    public void TestOnArchetypeUpdateEvent()
+    {
+        Archetype? updatedArchetype = null;
+        _world.OnArchetypeUpdate += (world, archetype) => updatedArchetype = archetype;
+        
+        var entity = _world.CreateEntity<TestIntComponent>();
+        Assert.IsNotNull(updatedArchetype);
+        Assert.IsTrue(updatedArchetype.Has<TestIntComponent>());
+    }
+
+    [Test]
+    public void TestOnEntityAddedEvent()
+    {
+        Entity? addedEntity = null;
+        _world.OnEntityAdded += (world, entity) => addedEntity = entity;
+        
+        var entity = _world.CreateEntity();
+        Assert.IsNotNull(addedEntity);
+        Assert.AreEqual(entity, addedEntity);
+    }
+
+    [Test]
+    public void TestOnEntityRemovedEvent()
+    {
+        Entity? removedEntity = null;
+        _world.OnEntityRemoved += (world, entity) => removedEntity = entity;
+        
+        var entity = _world.CreateEntity();
+        _world.RemoveEntity(entity);
+        Assert.IsNotNull(removedEntity);
+        Assert.AreEqual(entity, removedEntity);
+    }
+
+    [Test]
+    public void TestMoveEntity()
+    {
+        var entity = _world.CreateEntity<TestIntComponent>();
+        var beforeSignature = entity.Archetype.TypeSignature;
+        
+        entity.Add(new TestStringComponent { Value = "test" });
+        var afterSignature = entity.Archetype.TypeSignature;
+        
+        Assert.AreNotEqual(beforeSignature, afterSignature);
+        Assert.IsTrue(afterSignature.Has<TestIntComponent>());
+        Assert.IsTrue(afterSignature.Has<TestStringComponent>());
+    }
 } 

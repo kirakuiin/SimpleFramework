@@ -14,7 +14,7 @@ public class UnitTestQuery
     public void Setup()
     {
         _world = new World();
-        _query = new Query(_world);
+        _query = _world.CreateQuery();
     }
 
     [Test]
@@ -27,18 +27,26 @@ public class UnitTestQuery
     [Test]
     public void TestHasComponent()
     {
-        _world.CreateEntity<TestStringComponent>();
-        
         _query.Has<TestIntComponent>();
+        var entity = _world.CreateEntity<TestIntComponent>();
         
-        Assert.AreEqual(0, _query.GetArchetypes().Count);
+        var archetypes = _query.GetArchetypes();
+        Assert.AreEqual(1, archetypes.Count);
+        Assert.IsTrue(archetypes[0].Has<TestIntComponent>());
     }
 
     [Test]
     public void TestNotComponent()
     {
-        _query.Not<TestIntComponent>();
-        Assert.AreEqual(0, _query.ToList().Count);
+        _query.Has<TestIntComponent>().Not<TestStringComponent>();
+        
+        var entity1 = _world.CreateEntity<TestIntComponent>();
+        var entity2 = _world.CreateEntity<TestIntComponent, TestStringComponent>();
+        
+        var archetypes = _query.GetArchetypes();
+        Assert.AreEqual(1, archetypes.Count);
+        Assert.IsTrue(archetypes[0].Has<TestIntComponent>());
+        Assert.IsFalse(archetypes[0].Has<TestStringComponent>());
     }
 
     [Test]
@@ -56,27 +64,30 @@ public class UnitTestQuery
     [Test]
     public void TestHasTag()
     {
-        var entity = _world.CreateEntity<TestIntComponent>();
-        entity.AddTag("test", "help");
-        var entity1 = _world.CreateEntity();
-        entity1.AddTag("test", "nop");
-
-        _query.HasTag("help");
+        _query.HasTag("test");
         
-        Assert.AreEqual(1, _query.ToList().Count);
+        var entity = _world.CreateEntity();
+        entity.AddTag("test");
+        
+        var count = 0;
+        _query.Foreach(e => count++);
+        Assert.AreEqual(1, count);
     }
 
     [Test]
     public void TestNotTag()
     {
-        var entity = _world.CreateEntity<TestIntComponent>();
-        entity.AddTag("test", "help");
+        _query.NotTag("test");
+        
         var entity1 = _world.CreateEntity();
-        entity1.AddTag("world", "nop");
+        entity1.AddTag("test");
         
-        _query.NotTag("test").NotTag("nop");
+        var entity2 = _world.CreateEntity();
+        entity2.AddTag("other");
         
-        Assert.AreEqual(0, _query.ToList().Count);
+        var count = 0;
+        _query.Foreach(e => count++);
+        Assert.AreEqual(1, count);
     }
 
     [Test]
@@ -109,5 +120,54 @@ public class UnitTestQuery
         Assert.IsTrue(str.Contains("Exclude:"));
         Assert.IsTrue(str.Contains("IncludeTags:"));
         Assert.IsTrue(str.Contains("ExcludeTags:"));
+    }
+
+    [Test]
+    public void TestComplexQuery()
+    {
+        _query.Has<TestIntComponent>()
+              .Has<TestStringComponent>()
+              .Not<TestDoubleComponent>()
+              .HasTag("test")
+              .NotTag("exclude");
+        
+        var entity1 = _world.CreateEntity<TestIntComponent, TestStringComponent>();
+        entity1.AddTag("test");
+        
+        var entity2 = _world.CreateEntity<TestIntComponent, TestStringComponent, TestDoubleComponent>();
+        entity2.AddTag("test");
+        
+        var entity3 = _world.CreateEntity<TestIntComponent, TestStringComponent>();
+        entity3.AddTag("test");
+        entity3.AddTag("exclude");
+        
+        var count = 0;
+        _query.Foreach(e => count++);
+        Assert.AreEqual(1, count);
+    }
+
+    [Test]
+    public void TestGetArchetypes()
+    {
+        _query.Has<TestIntComponent>();
+        
+        _world.CreateEntity<TestIntComponent>();
+        _world.CreateEntity<TestIntComponent, TestStringComponent>();
+        
+        var archetypes = _query.GetArchetypes();
+        Assert.AreEqual(2, archetypes.Count);
+        Assert.IsTrue(archetypes.All(a => a.Has<TestIntComponent>()));
+    }
+
+    [Test]
+    public void TestQueryUpdateOnArchetypeChange()
+    {
+        _query.Has<TestIntComponent>();
+        
+        var entity = _world.CreateEntity<TestIntComponent>();
+        Assert.AreEqual(1, _query.Count());
+        
+        entity.Remove<TestIntComponent>();
+        Assert.AreEqual(0, _query.Count());
     }
 } 

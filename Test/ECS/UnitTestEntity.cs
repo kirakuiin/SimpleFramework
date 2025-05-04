@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using SimpleFramework.ECS;
 
@@ -127,5 +128,65 @@ public class UnitTestEntity
         var hash1 = _entity.GetHashCode();
         var hash2 = _entity.GetHashCode();
         Assert.AreEqual(hash1, hash2);
+    }
+
+    [Test]
+    public void TestTryGet()
+    {
+        var intComp = new TestIntComponent { Value = 42 };
+        _entity.Add(intComp);
+        
+        Assert.IsTrue(_entity.TryGet<TestIntComponent>(out var comp));
+        Assert.AreEqual(intComp, comp);
+        
+        Assert.IsFalse(_entity.TryGet<TestStringComponent>(out var _));
+    }
+
+    [Test]
+    public void TestGetByType()
+    {
+        var intComp = new TestIntComponent { Value = 42 };
+        _entity.Add(intComp);
+        
+        var comp = _entity.Get(typeof(TestIntComponent));
+        Assert.AreEqual(intComp, comp);
+        
+        Assert.Throws<KeyNotFoundException>(() => _entity.Get(typeof(TestStringComponent)));
+    }
+
+    [Test]
+    public void TestComponentEnumeration()
+    {
+        var intComp = new TestIntComponent { Value = 42 };
+        var stringComp = new TestStringComponent { Value = "test" };
+        var doubleComp = new TestDoubleComponent { Value = 3.14 };
+        
+        _entity.Add(intComp);
+        _entity.Add(stringComp);
+        _entity.Add(doubleComp);
+        
+        var components = _entity.ToList();
+        Assert.AreEqual(3, components.Count);
+        Assert.Contains(intComp, components);
+        Assert.Contains(stringComp, components);
+        Assert.Contains(doubleComp, components);
+    }
+
+    [Test]
+    public void TestComponentEnumerationAfterRemoval()
+    {
+        var intComp = new TestIntComponent { Value = 42 };
+        var stringComp = new TestStringComponent { Value = "test" };
+        
+        _entity.Add(intComp);
+        _entity.Add(stringComp);
+        
+        var components = _entity.ToList();
+        Assert.AreEqual(2, components.Count);
+        
+        _entity.Remove<TestIntComponent>();
+        components = _entity.ToList();
+        Assert.AreEqual(1, components.Count);
+        Assert.Contains(stringComp, components);
     }
 } 
