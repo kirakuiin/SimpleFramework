@@ -32,10 +32,10 @@ public class TestTypeSignature
     {
         var sig = new TypeSignature();
         
-        sig.Add(typeof(int)).Add(typeof(string)).Add(typeof(List<int>));
-        sig.Add<float>().Add<int>();
+        sig.Add(typeof(double)).Add(typeof(string)).Add(typeof(List<int>));
+        sig.Add<float>().Add<float>();
         
-        Assert.AreEqual(5, sig.Count);
+        Assert.AreEqual(4, sig.Count);
     }
     
     [Test]
@@ -77,9 +77,11 @@ public class TestTypeSignature
         var sig1 = new TypeSignature(typeof(int), typeof(List<int>)); 
         var sig2 = new TypeSignature(typeof(string), typeof(List<int>)); 
         var sig3 = new TypeSignature(typeof(int)); 
+        var sig4 = new TypeSignature(typeof(List<int>), typeof(string)); 
         
         Assert.IsFalse(sig1.HasAll(sig2));
         Assert.IsTrue(sig1.HasAll(sig3));
+        Assert.IsTrue(sig2.HasAll(sig4));
     }
     
     [Test]
@@ -120,7 +122,7 @@ public class TestTypeSignature
         var sig1 = new TypeSignature(typeof(int), typeof(float), typeof(string));
         var sig2 = new TypeSignature(typeof(int), typeof(string), typeof(float));
         
-        Assert.AreNotEqual(sig1, sig2);
+        Assert.AreEqual(sig1, sig2);
     }
     
     [Test]

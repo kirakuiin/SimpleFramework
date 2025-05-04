@@ -5,16 +5,16 @@ using SimpleFramework.Utility.Extensions;
 namespace SimpleFramework.ECS;
 
 /// <summary>
-/// 将一系列类型聚合为一个签名
+/// 将一系列类型聚合为一个签名，类型不能重复，且类型的顺序不会被保留
 /// </summary>
 public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Type>
 {
-    private readonly List<Type> _typeList = new();
+    private readonly SortedSet<Type> _typeSet = new(TypeSignatureComparer.Comparer);
 
     /// <summary>
     /// 签名中包含的类型数量
     /// </summary>
-    public int Count => _typeList.Count;
+    public int Count => _typeSet.Count;
 
     public TypeSignature(IEnumerable<Type> types)
     {
@@ -31,25 +31,12 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
         types.Apply(Add);
     }
 
-    public TypeSignature(Archetype archetype)
-    {
-        /*
-        if (archetype.IsValid())
-        {
-            var signature = archetype.GetTypeSignature();
-            type_ids = new int[signature.type_count + 1];
-            this.Copy(signature);
-        }
-        else type_ids = new int[2];
-        */
-    }
-
     /// <summary>
     /// 清理签名内的全部类型
     /// </summary>
     public TypeSignature Clear()
     {
-        _typeList.Clear();
+        _typeSet.Clear();
         return this;
     }
 
@@ -81,25 +68,17 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
     public TypeSignature Copy(TypeSignature signature)
     {
         Clear();
-        foreach (var typeId in signature._typeList)
-        {
-            _typeList.Add(typeId);
-        }
+        _typeSet.UnionWith(signature._typeSet);
         return this;
     }
-
-    /// <summary>
-    /// 将原型的签名复制到自身
-    /// </summary>
-    /// public TypeSignature Copy(Archetype archetype) => this.Copy(archetype.GetTypeSignature());
 
     /// <summary>
     /// 新增一个类型
     /// </summary>
     public TypeSignature Add(Type type)
     {
-         _typeList.Add(type);
-         return this;
+        _typeSet.Add(type);
+        return this;
     }
     
     /// <summary>
@@ -112,7 +91,7 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
     /// </summary>
     public TypeSignature Remove(Type type)
     {
-         _typeList.Remove(type);   
+         _typeSet.Remove(type);   
          return this;
     }
 
@@ -129,14 +108,14 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
     /// <summary>
     /// 如果签名中含有类型，返回真
     /// </summary>
-    public bool Has(Type type) => _typeList.Contains(type);
+    public bool Has(Type type) => _typeSet.Contains(type);
 
     /// <summary>
     /// 如果含有签名里的任意一个类型，返回真
     /// </summary>
     public bool HasAny(TypeSignature other)
     {
-        return other._typeList.Any(Has);
+        return other._typeSet.Intersect(_typeSet).Any();
     }
 
     /// <summary>
@@ -145,13 +124,13 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
     /// <returns></returns>
     public bool HasAll(TypeSignature other)
     {
-        return other._typeList.All(Has);
+        return _typeSet.IsSupersetOf(other._typeSet);
     }
 
     public override int GetHashCode()
     {
         var b = new StringBuilder();
-        foreach (var type in _typeList)
+        foreach (var type in _typeSet)
         {
             b.Append(type.Name);
         }
@@ -164,7 +143,8 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
         {
             return false;
         }
-        return _typeList.SequenceEqual(other._typeList);
+
+        return _typeSet.SetEquals(other._typeSet);
     }
 
     public override bool Equals(object? obj)
@@ -173,7 +153,7 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
     public override string ToString()
     {
         var sig = new StringBuilder("TypeSignature [");
-        foreach (var type in _typeList)
+        foreach (var type in _typeSet)
         {
             sig.Append($"{type.Name}, ");
         }
@@ -181,23 +161,40 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Typ
         return sig.ToString();
     }
 
-    Type IReadOnlyList<Type>.this[int index] => _typeList[index];
+    Type IReadOnlyList<Type>.this[int index] => _typeSet.ToList()[index];
 
     IEnumerator<Type> IEnumerable<Type>.GetEnumerator()
     {
-        foreach (var type in _typeList)
-        {
-            yield return type;
-        }
+        return ((IEnumerable<Type>)_typeSet).GetEnumerator();
     }
 
     IEnumerator IEnumerable.GetEnumerator()
     {
-        foreach (var type in _typeList)
-        {
-            yield return type;
-        }
+        return _typeSet.GetEnumerator();
     }
 
     int IReadOnlyCollection<Type>.Count => Count;
+}
+
+
+
+/// <summary>
+/// 签名排序函数
+/// </summary>
+internal class TypeSignatureComparer : IComparer<Type>
+{
+    /// <summary>
+    /// 静态比较器
+    /// </summary>
+    public static readonly TypeSignatureComparer Comparer = new();
+    
+    public int Compare(Type? x, Type? y)
+    {
+        return x switch
+        {
+            null when y == null => 0,
+            null => -1,
+            _ => y == null ? 1 : string.Compare(x.FullName, y.FullName, StringComparison.Ordinal)
+        };
+    }
 }
