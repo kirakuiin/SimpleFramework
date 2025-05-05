@@ -14,12 +14,8 @@
 public class BlackBoard
 {
     private readonly Dictionary<string, object> _data = new();
+    private readonly Dictionary<string, EventHandler<BlackBoardEventArgs>> _events = new();
     private readonly ReaderWriterLockSlim _lock = new();
-
-    /// <summary>
-    /// 当黑板中的数据发生变更时触发的事件。
-    /// </summary>
-    public event EventHandler<BlackBoardEventArgs>? OnDataChanged;
 
     /// <summary>
     /// 初始化黑板的新实例。
@@ -35,12 +31,56 @@ public class BlackBoard
     /// <summary>
     /// 获取黑板的名称。
     /// </summary>
-    public string Name { init; get; }
+    public string Name { get; }
 
     /// <summary>
     /// 获取父级黑板。
     /// </summary>
     public BlackBoard? Parent { get; }
+
+    /// <summary>
+    /// 监听指定键的变化
+    /// </summary>
+    /// <param name="key">键</param>
+    /// <param name="handler">处理函数</param>
+    public void Register(string key, EventHandler<BlackBoardEventArgs> handler)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            if (!_events.TryAdd(key, handler))
+            {
+                _events[key] += handler;
+            }
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+    
+    /// <summary>
+    /// 取消监听指定键的变化
+    /// </summary>
+    /// <param name="key">键</param>
+    /// <param name="handler">处理函数</param>
+    public void Unregister(string key, EventHandler<BlackBoardEventArgs> handler)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            if (!_events.TryGetValue(key, out var existingHandler)) return;
+            existingHandler -= handler;
+            if (existingHandler == null)
+            {
+                _events.Remove(key);
+            }
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
 
     /// <summary>
     /// 设置指定键的值。
@@ -50,12 +90,13 @@ public class BlackBoard
     /// <param name="value">值</param>
     public void Set<T>(string key, T value)
     {
+        var type = Contains(key) ? BlackBoardEventType.Modify: BlackBoardEventType.Set;
         _lock.EnterWriteLock();
         try
         {
             var oldValue = GetInternal<T>(key);
             _data[key] = value!;
-            NotifyDataChanged(key, oldValue, value);
+            NotifyDataChanged(key, type, oldValue, value);
         }
         finally
         {
@@ -177,7 +218,7 @@ public class BlackBoard
     private bool RemoveWithoutLock(string key)
     {
         if (!_data.Remove(key, out var oldValue)) return false;
-        NotifyDataChanged(key, oldValue, null);
+        NotifyDataChanged(key, BlackBoardEventType.Remove, oldValue, null);
         return true;
     }
 
@@ -185,11 +226,15 @@ public class BlackBoard
     /// 通知数据变更。
     /// </summary>
     /// <param name="key">变更的键</param>
+    /// <param name="type">变化类型</param>
     /// <param name="oldValue">旧值</param>
     /// <param name="newValue">新值</param>
-    private void NotifyDataChanged(string key, object? oldValue, object? newValue)
+    private void NotifyDataChanged(string key, BlackBoardEventType type, object? oldValue, object? newValue)
     {
-        OnDataChanged?.Invoke(this, new BlackBoardEventArgs(key, oldValue, newValue));
+        if (_events.TryGetValue(key, out var handler))
+        {
+            handler.Invoke(this, new BlackBoardEventArgs(key, type, oldValue, newValue));
+        }
     }
 
     /// <summary>
@@ -244,6 +289,18 @@ public class BlackBoard
     }
 }
 
+
+/// <summary>
+/// 事件类型枚举，用于表示黑板数据变更的类型。
+/// </summary>
+public enum BlackBoardEventType
+{
+    Set,
+    Modify,
+    Remove,
+}
+
+
 /// <summary>
 /// 黑板数据变更事件的参数。
 /// </summary>
@@ -253,6 +310,11 @@ public class BlackBoardEventArgs : EventArgs
     /// 获取变更的键。
     /// </summary>
     public string Key { get; }
+    
+    /// <summary>
+    /// 变化类型
+    /// </summary>
+    public BlackBoardEventType EventType { get; }
 
     /// <summary>
     /// 获取旧值。
@@ -268,11 +330,13 @@ public class BlackBoardEventArgs : EventArgs
     /// 初始化黑板数据变更事件参数的新实例。
     /// </summary>
     /// <param name="key">变更的键</param>
+    /// <param name="type"></param>
     /// <param name="oldValue">旧值</param>
     /// <param name="newValue">新值</param>
-    public BlackBoardEventArgs(string key, object? oldValue, object? newValue)
+    public BlackBoardEventArgs(string key, BlackBoardEventType type, object? oldValue, object? newValue)
     {
         Key = key;
+        EventType = type;
         OldValue = oldValue;
         NewValue = newValue;
     }

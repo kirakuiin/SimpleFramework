@@ -1,5 +1,4 @@
 #nullable enable
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -103,12 +102,14 @@ public class TestBlackBoard
         object? oldValue = null;
         object? newValue = null;
 
-        _blackBoard.OnDataChanged += (sender, args) =>
+        void Handler(object? sender, BlackBoardEventArgs args)
         {
             changedKey = args.Key;
             oldValue = args.OldValue;
             newValue = args.NewValue;
-        };
+        }
+
+        _blackBoard.Register("test", Handler);
 
         _blackBoard.Set("test", 42);
         Assert.AreEqual("test", changedKey);
@@ -124,6 +125,8 @@ public class TestBlackBoard
         Assert.AreEqual("test", changedKey);
         Assert.AreEqual(100, oldValue);
         Assert.IsNull(newValue);
+
+        _blackBoard.Unregister("test", Handler);
     }
 
     [Test]
@@ -293,8 +296,11 @@ public class TestBlackBoard
         var eventCount = 0;
         var eventCount2 = 0;
 
-        _blackBoard.OnDataChanged += (sender, args) => eventCount++;
-        _blackBoard.OnDataChanged += (sender, args) => eventCount2++;
+        void Handler1(object? sender, BlackBoardEventArgs args) => eventCount++;
+        void Handler2(object? sender, BlackBoardEventArgs args) => eventCount2++;
+
+        _blackBoard.Register("test", Handler1);
+        _blackBoard.Register("test", Handler2);
 
         _blackBoard.Set("test", 42);
         Assert.AreEqual(1, eventCount);
@@ -303,20 +309,74 @@ public class TestBlackBoard
         _blackBoard.Set("test", 100);
         Assert.AreEqual(2, eventCount);
         Assert.AreEqual(2, eventCount2);
+
+        _blackBoard.Unregister("test", Handler1);
+        _blackBoard.Unregister("test", Handler2);
     }
 
     [Test]
     public void TestEventUnsubscribe()
     {
         var eventCount = 0;
-        EventHandler<BlackBoardEventArgs> handler = (sender, args) => eventCount++;
+        void Handler(object? sender, BlackBoardEventArgs args) => eventCount++;
 
-        _blackBoard.OnDataChanged += handler;
+        _blackBoard.Register("test", Handler);
         _blackBoard.Set("test", 42);
         Assert.AreEqual(1, eventCount);
 
-        _blackBoard.OnDataChanged -= handler;
+        _blackBoard.Unregister("test", Handler);
         _blackBoard.Set("test", 100);
         Assert.AreEqual(1, eventCount); // 事件计数不应该增加
+    }
+
+    [Test]
+    public void TestMultipleKeyEvents()
+    {
+        var key1Count = 0;
+        var key2Count = 0;
+
+        void Handler1(object? sender, BlackBoardEventArgs args) => key1Count++;
+        void Handler2(object? sender, BlackBoardEventArgs args) => key2Count++;
+
+        _blackBoard.Register("key1", Handler1);
+        _blackBoard.Register("key2", Handler2);
+
+        _blackBoard.Set("key1", 42);
+        Assert.AreEqual(1, key1Count);
+        Assert.AreEqual(0, key2Count);
+
+        _blackBoard.Set("key2", "test");
+        Assert.AreEqual(1, key1Count);
+        Assert.AreEqual(1, key2Count);
+
+        _blackBoard.Unregister("key1", Handler1);
+        _blackBoard.Unregister("key2", Handler2);
+    }
+
+    [Test]
+    public void TestEventType()
+    {
+        BlackBoardEventType? eventType = null;
+
+        void Handler(object? sender, BlackBoardEventArgs args)
+        {
+            eventType = args.EventType;
+        }
+
+        _blackBoard.Register("test", Handler);
+
+        // Test Set event
+        _blackBoard.Set("test", 42);
+        Assert.AreEqual(BlackBoardEventType.Set, eventType);
+
+        // Test Modify event
+        _blackBoard.Set("test", 100);
+        Assert.AreEqual(BlackBoardEventType.Modify, eventType);
+
+        // Test Remove event
+        _blackBoard.Remove("test");
+        Assert.AreEqual(BlackBoardEventType.Remove, eventType);
+
+        _blackBoard.Unregister("test", Handler);
     }
 } 
