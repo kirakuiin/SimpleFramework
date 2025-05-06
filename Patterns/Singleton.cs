@@ -41,7 +41,7 @@ public enum SingletonInitializationStatus
 /// <typeparam name="T"></typeparam>
 public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
 {
-    private static T _instance;
+    private static T? _instance;
 
     private SingletonInitializationStatus _status;
 
@@ -114,7 +114,7 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
         if (_instance is null) return;
 
         _instance.Clear();
-        _instance = default;
+        _instance = null;
     }
 
     public virtual void Clear()
