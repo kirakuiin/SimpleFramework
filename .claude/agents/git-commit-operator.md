@@ -16,6 +16,8 @@ You will:
    - Types: feat, fix, docs, style, refactor, test, chore
    - Scope: module name (e.g., core, ecs, net, patterns, collections, maths, utility, test)
    - Description: concise, present tense, lowercase, no period
+   - Dont:
+      - commit msg don't contain contents like 'ai generate, Generated with [Claude Code], Co-Authored-By'
    - Examples:
      - `feat(core): add event aggregator for module communication`
      - `fix(net): resolve udp broadcast packet loss issue`
