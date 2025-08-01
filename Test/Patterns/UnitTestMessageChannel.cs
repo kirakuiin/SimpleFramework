@@ -1,0 +1,137 @@
+using System.Collections.Generic;
+using NUnit.Framework;
+using SimpleFramework.Patterns;
+
+namespace Test.Patterns;
+
+[TestFixture]
+public class TestMessageChannel
+{
+    private MessageChannel<string> _channel;
+    private BufferedMessageChannel<string> _bufferedChannel;
+
+    [SetUp]
+    public void Setup()
+    {
+        _channel = new MessageChannel<string>();
+        _bufferedChannel = new BufferedMessageChannel<string>();
+    }
+
+    [Test]
+    public void TestPublishAndSubscribe()
+    {
+        var receivedMessages = new List<string>();
+        _channel.Subscribe(message => receivedMessages.Add(message));
+        
+        _channel.Publish("Test Message");
+        
+        Assert.That(receivedMessages.Count, Is.EqualTo(1));
+        Assert.That(receivedMessages[0], Is.EqualTo("Test Message"));
+    }
+
+    [Test]
+    public void TestMultipleSubscribers()
+    {
+        var subscriber1Count = 0;
+        var subscriber2Count = 0;
+        
+        _channel.Subscribe(_ => subscriber1Count++);
+        _channel.Subscribe(_ => subscriber2Count++);
+        _channel.Publish("Test Message");
+        
+        Assert.That(subscriber1Count, Is.EqualTo(1));
+        Assert.That(subscriber2Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TestUnsubscribe()
+    {
+        var receivedMessages = new List<string>();
+        void Handler(string message) => receivedMessages.Add(message);
+
+        var subscription = _channel.Subscribe(Handler);
+        _channel.Publish("First Message");
+        subscription.Dispose();
+        _channel.Publish("Second Message");
+        
+        Assert.That(receivedMessages.Count, Is.EqualTo(1));
+        Assert.That(receivedMessages[0], Is.EqualTo("First Message"));
+    }
+
+    [Test]
+    public void TestDispose()
+    {
+        var receivedMessages = new List<string>();
+        _channel.Subscribe(message => receivedMessages.Add(message));
+        
+        _channel.Dispose();
+        _channel.Publish("Test Message");
+        
+        Assert.That(receivedMessages.Count, Is.EqualTo(0));
+        Assert.That(_channel.IsDisposed, Is.True);
+    }
+
+    [Test]
+    public void TestBufferedChannelNewSubscriberReceivesLastMessage()
+    {
+        var receivedMessages = new List<string>();
+        
+        _bufferedChannel.Publish("First Message");
+        _bufferedChannel.Subscribe(message => receivedMessages.Add(message));
+        
+        Assert.That(receivedMessages.Count, Is.EqualTo(1));
+        Assert.That(receivedMessages[0], Is.EqualTo("First Message"));
+        Assert.That(_bufferedChannel.HasBufferedMessage, Is.True);
+        Assert.That(_bufferedChannel.BufferedMessage, Is.EqualTo("First Message"));
+    }
+
+    [Test]
+    public void TestBufferedChannelNoBufferedMessage()
+    {
+        var receivedMessages = new List<string>();
+        
+        _bufferedChannel.Subscribe(message => receivedMessages.Add(message));
+        
+        Assert.That(receivedMessages.Count, Is.EqualTo(0));
+        Assert.That(_bufferedChannel.HasBufferedMessage, Is.False);
+    }
+
+    [Test]
+    public void TestBufferedChannelUpdateBufferedMessage()
+    {
+        _bufferedChannel.Publish("First Message");
+        _bufferedChannel.Publish("Second Message");
+        
+        Assert.That(_bufferedChannel.HasBufferedMessage, Is.True);
+        Assert.That(_bufferedChannel.BufferedMessage, Is.EqualTo("Second Message"));
+    }
+
+    [Test]
+    public void TestBufferedChannelDispose()
+    {
+        var receivedMessages = new List<string>();
+        _bufferedChannel.Subscribe(message => receivedMessages.Add(message));
+        
+        _bufferedChannel.Dispose();
+        _bufferedChannel.Publish("Test Message");
+        
+        Assert.That(receivedMessages.Count, Is.EqualTo(0));
+        Assert.That(_bufferedChannel.IsDisposed, Is.True);
+    }
+
+    [Test]
+    public void TestBufferedChannelMultipleSubscribersWithBufferedMessage()
+    {
+        var subscriber1Messages = new List<string>();
+        var subscriber2Messages = new List<string>();
+        
+        _bufferedChannel.Publish("First Message");
+        _bufferedChannel.Subscribe(message => subscriber1Messages.Add(message));
+        _bufferedChannel.Subscribe(message => subscriber2Messages.Add(message));
+        
+        Assert.That(subscriber1Messages.Count, Is.EqualTo(1));
+        Assert.That(subscriber2Messages.Count, Is.EqualTo(1));
+        Assert.That(subscriber1Messages[0], Is.EqualTo("First Message"));
+        Assert.That(subscriber2Messages[0], Is.EqualTo("First Message"));
+    }
+} 

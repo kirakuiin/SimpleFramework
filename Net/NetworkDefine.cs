@@ -1,4 +1,6 @@
 using System.Net;
+using SimpleFramework.Utility;
+using static System.Net.IPAddress;
 
 namespace SimpleFramework.Net;
 
@@ -10,7 +12,7 @@ public static class NetworkUtil
     /// <summary>
     /// 返回默认的终结点对象。
     /// </summary>
-    public static readonly IPEndPoint DefaultIpEndPoint = new IPEndPoint(IPAddress.Any, 0);
+    public static readonly IPEndPoint DefaultIpEndPoint = new IPEndPoint(Any, 0);
 
     /// <summary>
     /// 获得万用的IP，代表本机所有的IP。
@@ -18,8 +20,8 @@ public static class NetworkUtil
     /// <returns></returns>
     public static IPAddress GetUniversalIpAddress()
     {
-        IPAddress.TryParse("0.0.0.0", out var result);
-        return result;
+        TryParse("0.0.0.0", out var result);
+        return result!;
     }
 
     /// <summary>
@@ -29,7 +31,7 @@ public static class NetworkUtil
     /// <returns><c>IPEndPoint</c>代表一个网络上的IP,端口对</returns>
     public static IPEndPoint GetBroadcastIpEndPoint(int port)
     {
-        return new IPEndPoint(IPAddress.Broadcast, port);
+        return new IPEndPoint(Broadcast, port);
     }
 
     /// <summary>
@@ -41,10 +43,34 @@ public static class NetworkUtil
     /// <exception cref="ArgumentException"></exception>
     public static IPEndPoint GetIpEndPoint(string ip, ushort port)
     {
-        if (IPAddress.TryParse(ip, out var ipAddress))
+        if (TryParse(ip, out var ipAddress))
         {
             return new IPEndPoint(ipAddress, port);
         }
         throw new ArgumentException("Invalid ip address");
+    }
+}
+
+
+/// <summary>
+/// 网络模块的logger
+/// </summary>
+public static class NetLog
+{
+    public static Logger Logger { get; } = Logging.GetLogger("Net");
+    
+    public static void Debug(string message)
+    {
+        Logger.Debug(message);
+    }
+    
+    public static void Info(string message)
+    {
+        Logger.Info(message);
+    }
+    
+    public static void Error(string message, Exception? exception = null)
+    {
+        Logger.Error(message, exception);
     }
 }

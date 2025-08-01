@@ -26,11 +26,7 @@
 	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=322c0111_002Dd3e8_002D4b8f_002D84ce_002D98dc7d2e9f91/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" Name="All tests from Solution #2" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
   &lt;Solution /&gt;&#xD;
 &lt;/SessionState&gt;</s:String>
-	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=340fa5ce_002D2969_002D4bd9_002Da4f3_002D34c88b46992d/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" Name="TestCancelScheduledBroadcast" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
-  &lt;TestAncestor&gt;&#xD;
-    &lt;TestId&gt;NUnit3x::31586A58-D773-48FD-AE32-CBCE40527A87::net6.0::Test.Network.TestUdpBroadcast.TestCancelScheduledBroadcast&lt;/TestId&gt;&#xD;
-  &lt;/TestAncestor&gt;&#xD;
-&lt;/SessionState&gt;</s:String>
+	
 	<s:String x:Key="/Default/Environment/UnitTesting/UnitTestSessionStore/Sessions/=948f1ca4_002D7496_002D4987_002Db1a6_002D46a6b32ee5b4/@EntryIndexedValue">&lt;SessionState ContinuousTestingMode="0" Name="TestMessageChange" xmlns="urn:schemas-jetbrains-com:jetbrains-ut-session"&gt;&#xD;
   &lt;Or&gt;&#xD;
     &lt;TestAncestor&gt;&#xD;
