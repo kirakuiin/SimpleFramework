@@ -10,11 +10,12 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     private readonly EventBus _eventBus = new();
 
     private readonly Container _container = new();
-
+    
     private static T _domain;
 
-    private IDomain _parent;
+    private WeakReference<IDomain> _parent;
     
+    private readonly List<WeakReference<IDomain>> _children = new();
     
     public static T Instance => _domain ??= BuildDomain();
     
@@ -29,20 +30,61 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     public void UnInitialize()
     {
+        foreach (var child in _children)
+        {
+            if (child.TryGetTarget(out var domain))
+            {
+                domain.UnInitialize();
+            }
+        }
+        _children.Clear();
+        
         _container.GetComponents<ISystem>().ToList().ForEach(
             system => system.UnInitialize());
         _container.GetComponents<IModel>().ToList().ForEach(
             system => system.UnInitialize());
         _container.Clear();
         _domain = null;
+        _parent = null;
         UnInit();
     }
     
     protected virtual void UnInit() {}
 
+    public IDomain Parent => _parent?.TryGetTarget(out var parent) == true ? parent : null;
+
     public void SetParent(IDomain parent)
     {
-        _parent = parent;
+        if (parent == null || ReferenceEquals(Parent, parent)) return;
+        
+        if (_parent?.TryGetTarget(out var prevParent) == true)
+        {
+            prevParent.RemoveChild(this);
+        }
+        _parent = new WeakReference<IDomain>(parent);
+    }
+
+    public void AddChild(IDomain child)
+    {
+        RemoveChild(child);
+        _children.Add(new WeakReference<IDomain>(child));
+        if (!ReferenceEquals(child.Parent, this))
+        {
+            child.SetParent(this);
+        }
+    }
+
+    public void RemoveChild(IDomain child)
+    {
+        if (child == null) return;
+
+        // 遍历子域列表，找到匹配的弱引用并移除
+        for (var i = _children.Count - 1; i >= 0; i--)
+        {
+            if (!_children[i].TryGetTarget(out var existingChild) || !ReferenceEquals(existingChild, child)) continue;
+            _children.RemoveAt(i);
+            break;
+        }
     }
 
     public void RegisterSystem<TSystem>(TSystem system) where TSystem : ISystem
@@ -64,17 +106,26 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     public TSystem GetSystem<TSystem>() where TSystem : class, ISystem
     {
-        return _container.Get<TSystem>() ?? _parent?.GetSystem<TSystem>();
+        var result = _container.Get<TSystem>();
+        if (result != null) return result;
+
+        return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetSystem<TSystem>() : null;
     }
 
     public TModel GetModel<TModel>() where TModel : class, IModel
     {
-        return _container.Get<TModel>() ?? _parent?.GetModel<TModel>();
+        var result = _container.Get<TModel>();
+        if (result != null) return result;
+
+        return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetModel<TModel>() : null;
     }
 
     public TUtility GetUtility<TUtility>() where TUtility : class, IUtility
     {
-        return _container.Get<TUtility>() ?? _parent?.GetUtility<TUtility>();
+        var result = _container.Get<TUtility>();
+        if (result != null) return result;
+
+        return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetUtility<TUtility>() : null;
     }
 
     public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.Register(onEvent);

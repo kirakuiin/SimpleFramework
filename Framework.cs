@@ -11,8 +11,27 @@ public interface IDomain
     /// <summary>
     /// 设置当前域的父作用域。
     /// <para>当System, Model, Utility在当前作用域中无法找到时，会尝试去父作用域查找</para>
+    /// <param name="domain">父<see cref="IDomain"/></param>
     /// </summary>
     void SetParent(IDomain domain);
+    
+    /// <summary>
+    /// 获得父Domain
+    /// </summary>
+    IDomain Parent { get; }
+    
+    /// <summary>
+    /// 添加一个新的子域
+    /// <para>子Domain必然会被父Domain管理，共享生命周期</para>
+    /// </summary>
+    /// <param name="domain"></param>
+    void AddChild(IDomain domain);
+    
+    /// <summary>
+    /// 移除一个子Domain 
+    /// </summary>
+    /// <param name="domain"></param>
+    void RemoveChild(IDomain domain);
     
     /// <summary>
     /// 注册系统。

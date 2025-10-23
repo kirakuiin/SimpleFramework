@@ -7,7 +7,7 @@ namespace SimpleFramework;
 /// </summary>
 public abstract class AbstractSystem : ISystem
 {
-    public IDomain Domain { get; private set; } = default!;
+    public IDomain Domain { get; private set; } = null!;
 
     public void SetDomain(IDomain domain)
     {
