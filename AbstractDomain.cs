@@ -17,7 +17,16 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     
     private readonly List<WeakReference<IDomain>> _children = new();
     
+    /// <summary>
+    /// 获取对象，如果对象不存在则创建
+    /// </summary>
     public static T Instance => _domain ??= BuildDomain();
+    
+    /// <summary>
+    /// 获取对象，如果对象不存在则返回null
+    /// </summary>
+    /// <returns></returns>
+    public static T GetInstance() => _domain;
     
     private static T BuildDomain()
     {
@@ -55,23 +64,65 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     public void SetParent(IDomain parent)
     {
-        if (parent == null || ReferenceEquals(Parent, parent)) return;
-        
-        if (_parent?.TryGetTarget(out var prevParent) == true)
+        if (ReferenceEquals(Parent, parent))
         {
-            prevParent.RemoveChild(this);
+            return;
         }
-        _parent = new WeakReference<IDomain>(parent);
+        if (_CheckCycle(parent))
+        {
+            var exception = new ArgumentException("Detect cycle reference!");
+            Log.Error("ArgumentError!", exception);
+            throw exception;
+        }
+
+        var oldParent = Parent;
+
+        _parent = parent is null ? null : new WeakReference<IDomain>(parent);
+
+        // 只有在真正改变父域且新父域不是旧父域时才调用 RemoveChild
+        // RemoveChild 会检查到子域的父域已经不是自己，从而避免递归
+        if (oldParent != null && !ReferenceEquals(oldParent, parent))
+        {
+            oldParent.RemoveChild(this);
+        }
+    }
+
+    /// <summary>
+    /// 检查参数是否有效
+    /// </summary>
+    /// <param name="domain"></param>
+    /// <returns></returns>
+    private bool _CheckCycle(IDomain domain)
+    {
+        if (domain is null) return false;
+        if (ReferenceEquals(this, domain)) return true;
+
+        // 检查当前域是否已经是目标域的父级或祖先
+        var current = domain.Parent;
+        while (current != null)
+        {
+            if (ReferenceEquals(this, current))
+                return true;
+            current = current.Parent;
+        }
+
+        return false;
     }
 
     public void AddChild(IDomain child)
     {
-        RemoveChild(child);
-        _children.Add(new WeakReference<IDomain>(child));
-        if (!ReferenceEquals(child.Parent, this))
+        child.SetParent(this);
+        
+        // 防止重复添加
+        for (var i = _children.Count - 1; i >= 0; i--)
         {
-            child.SetParent(this);
+            if (_children[i].TryGetTarget(out var existingChild) && ReferenceEquals(existingChild, child))
+            {
+                return;
+            }
         }
+        
+        _children.Add(new WeakReference<IDomain>(child));
     }
 
     public void RemoveChild(IDomain child)
@@ -83,6 +134,12 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         {
             if (!_children[i].TryGetTarget(out var existingChild) || !ReferenceEquals(existingChild, child)) continue;
             _children.RemoveAt(i);
+
+            // 只有当子域的父域确实是当前域时才清空，避免递归调用
+            if (ReferenceEquals(existingChild.Parent, this))
+            {
+                existingChild.SetParent(null);
+            }
             break;
         }
     }

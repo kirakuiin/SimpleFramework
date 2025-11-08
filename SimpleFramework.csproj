@@ -39,4 +39,8 @@
       <None Remove="Pattern\**" />
     </ItemGroup>
 
+    <ItemGroup>
+      <ProjectReference Include="Utility\Utility.csproj" />
+    </ItemGroup>
+
 </Project>

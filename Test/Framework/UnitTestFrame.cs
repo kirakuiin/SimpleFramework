@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using NUnit.Framework;
 using SimpleFramework;
 
@@ -29,6 +31,8 @@ public class TestFramework
     public void TearDown()
     {
         _aDomain.UnInitialize();
+        BDomain.Instance.UnInitialize();
+        DDomain.Instance.UnInitialize();
     }
     
     [Test]
@@ -97,6 +101,220 @@ public class TestFramework
         
         Assert.AreEqual(AnoVal, BDomain.Instance.GetUtility<Utility>().Value);
     }
+    
+    [Test]
+    public void TestSetParentLifeCycle()
+    {
+        DDomain.Instance.SetParent(PDomain.Instance);
+        PDomain.Instance.RegisterUtility(new Utility(IntVal));
+        
+        D1Domain.Instance.SetParent(DDomain.Instance);
+        D2Domain.Instance.SetParent(DDomain.Instance);
+        DDomain.Instance.RegisterModel(new Model("hello world"));
+        
+        DDomain.Instance.UnInitialize();
+        
+        Assert.IsNotNull(PDomain.GetInstance());
+        Assert.IsNull(DDomain.GetInstance());
+        Assert.IsNotNull(D1Domain.GetInstance());
+        Assert.IsNotNull(D2Domain.GetInstance());
+    }
+
+    [Test]
+    public void TestAddChildLifeCycle()
+    {
+        PDomain.Instance.AddChild(DDomain.Instance);
+        PDomain.Instance.RegisterUtility(new Utility(IntVal));
+
+        DDomain.Instance.AddChild(D1Domain.Instance);
+        DDomain.Instance.AddChild(D2Domain.Instance);
+        DDomain.Instance.RegisterModel(new Model("hello world"));
+
+        Assert.AreEqual(IntVal, DDomain.Instance.GetUtility<Utility>().Value);
+        Assert.AreEqual(IntVal, D1Domain.Instance.GetUtility<Utility>().Value);
+        Assert.AreEqual("hello world", D2Domain.Instance.GetModel<Model>().Value.Value);
+
+        PDomain.Instance.UnInitialize();
+
+        Assert.IsNull(PDomain.GetInstance());
+        Assert.IsNull(DDomain.GetInstance());
+        Assert.IsNull(D1Domain.GetInstance());
+        Assert.IsNull(D2Domain.GetInstance());
+    }
+
+    #region AbstractDomain 核心功能测试
+
+    [Test]
+    public void TestSetParentWithNull()
+    {
+        // 测试设置父域为 null
+        BDomain.Instance.SetParent(ADomain.Instance);
+        Assert.IsNotNull(BDomain.Instance.Parent);
+
+        BDomain.Instance.SetParent(null);
+        Assert.IsNull(BDomain.Instance.Parent);
+    }
+
+    [Test]
+    public void TestSetParentSameParent()
+    {
+        // 测试设置相同的父域不应该有任何副作用
+        BDomain.Instance.SetParent(ADomain.Instance);
+        var parentBefore = BDomain.Instance.Parent;
+
+        BDomain.Instance.SetParent(ADomain.Instance);
+        var parentAfter = BDomain.Instance.Parent;
+
+        Assert.AreEqual(parentBefore, parentAfter);
+        Assert.AreSame(ADomain.Instance, parentAfter);
+    }
+
+    [Test]
+    public void TestCycleReferenceDetection()
+    {
+        // 测试循环依赖检测
+        Assert.Throws<ArgumentException>(() =>
+        {
+            ADomain.Instance.SetParent(BDomain.Instance);
+            BDomain.Instance.SetParent(ADomain.Instance);
+        });
+
+    }
+
+    [Test]
+    public void TestDeepCycleReferenceDetection()
+    {
+        // 测试深层循环依赖检测 A -> B -> C -> A
+        Assert.Throws<ArgumentException>(() =>
+        {
+            ADomain.Instance.SetParent(BDomain.Instance);
+            BDomain.Instance.SetParent(DDomain.Instance);
+            DDomain.Instance.SetParent(ADomain.Instance);
+        });
+
+    }
+
+    [Test]
+    public void TestParentChildRelationship()
+    {
+        // 测试父子关系的双向维护
+        BDomain.Instance.SetParent(ADomain.Instance);
+
+        Assert.AreSame(ADomain.Instance, BDomain.Instance.Parent);
+
+        // 清理
+        BDomain.Instance.SetParent(null);
+        Assert.IsNull(BDomain.Instance.Parent);
+    }
+
+    [Test]
+    public void TestRemoveChild()
+    {
+        // 测试移除子域
+        BDomain.Instance.AddChild(ADomain.Instance);
+        Assert.AreSame(BDomain.Instance, ADomain.Instance.Parent);
+
+        BDomain.Instance.RemoveChild(ADomain.Instance);
+        Assert.IsNull(ADomain.Instance.Parent);
+    }
+
+    [Test]
+    public void TestSetParentRemoveChildOptimization()
+    {
+        // 测试 SetParent 和 RemoveChild 的优化，避免递归调用
+        BDomain.Instance.SetParent(ADomain.Instance);
+        Assert.AreSame(ADomain.Instance, BDomain.Instance.Parent);
+
+        // 当设置新父域时，应该自动从旧父域移除
+        BDomain.Instance.SetParent(DDomain.Instance);
+        Assert.AreSame(DDomain.Instance, BDomain.Instance.Parent);
+
+        // 验证旧的父子关系已经断开
+        Assert.AreNotSame(ADomain.Instance, BDomain.Instance.Parent);
+
+        // 设置为 null 时应该清除父子关系
+        BDomain.Instance.SetParent(null);
+        Assert.IsNull(BDomain.Instance.Parent);
+    }
+
+    [Test]
+    public void TestAddChildDuplicate()
+    {
+        // 测试重复添加子域不会导致异常
+        ADomain.Instance.AddChild(BDomain.Instance);
+        ADomain.Instance.AddChild(BDomain.Instance); // 重复添加不应该出错
+
+        // 验证父子关系仍然正确
+        Assert.AreSame(ADomain.Instance, BDomain.Instance.Parent);
+    }
+
+    [Test]
+    public void TestUninitializeWithChildren()
+    {
+        // 测试带子域的反初始化
+        ADomain.Instance.AddChild(BDomain.Instance);
+        BDomain.Instance.AddChild(DDomain.Instance);
+
+        ADomain.Instance.UnInitialize();
+
+        Assert.IsNull(ADomain.GetInstance());
+        Assert.IsNull(BDomain.GetInstance());
+        Assert.IsNull(DDomain.GetInstance());
+    }
+
+    [Test]
+    public void TestGetInstanceAfterUninitialize()
+    {
+        // 测试反初始化后获取实例
+        var instanceBefore = ADomain.GetInstance();
+        Assert.IsNotNull(instanceBefore);
+
+        ADomain.Instance.UnInitialize();
+        var instanceAfter = ADomain.GetInstance();
+        Assert.IsNull(instanceAfter);
+
+        // 重新创建实例
+        var newInstance = ADomain.Instance;
+        Assert.IsNotNull(newInstance);
+        Assert.AreNotSame(instanceBefore, newInstance);
+    }
+
+    [Test]
+    public void TestComponentInheritance()
+    {
+        // 测试组件继承（子域访问父域的组件）
+        ADomain.Instance.RegisterUtility(new Utility(IntVal));
+        BDomain.Instance.SetParent(ADomain.Instance);
+
+        // BDomain 应该能访问 ADomain 的 Utility
+        var utility = BDomain.Instance.GetUtility<Utility>();
+        Assert.IsNotNull(utility);
+        Assert.AreEqual(IntVal, utility.Value);
+
+        // BDomain 覆盖父域的 Utility
+        BDomain.Instance.RegisterUtility(new Utility(AnoVal));
+        var overriddenUtility = BDomain.Instance.GetUtility<Utility>();
+        Assert.AreEqual(AnoVal, overriddenUtility.Value);
+
+        // ADomain 的 Utility 不应该受影响
+        var originalUtility = ADomain.Instance.GetUtility<Utility>();
+        Assert.AreEqual(IntVal, originalUtility.Value);
+    }
+
+    [Test]
+    public void TestToString()
+    {
+        // 测试 ToString 方法
+        ADomain.Instance.RegisterModel(new Model(StrVal));
+        ADomain.Instance.RegisterSystem(new System());
+        ADomain.Instance.RegisterUtility(new Utility(IntVal));
+
+        var result = ADomain.Instance.ToString();
+        Assert.IsNotNull(result);
+        Assert.IsTrue(result.Length > 0);
+    }
+
+    #endregion
 }
 
 #region DomainDefine
@@ -114,6 +332,38 @@ public class BDomain : AbstractDomain<BDomain>
     {
     }
 }
+
+public class PDomain : AbstractDomain<PDomain>
+{
+    protected override void Init()
+    {
+    }
+}
+
+
+public class DDomain : AbstractDomain<DDomain>
+{
+    protected override void Init()
+    {
+    }
+}
+
+
+public class D1Domain : AbstractDomain<D1Domain>
+{
+    protected override void Init()
+    {
+    }
+}
+
+
+public class D2Domain : AbstractDomain<D2Domain>
+{
+    protected override void Init()
+    {
+    }
+}
+
 
 public class Control : IController
 {
