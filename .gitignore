@@ -1,8 +1,23 @@
+# Build outputs
 bin/
 obj/
 /packages/
+
+# IDE specific files
 riderModule.iml
 /_ReSharper.Caches/
 *.DotSettings.user
 *.DotSettings
 /ReSharperSettings.xml
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Visual Studio
+*.user
+*.suo
+*.cache
+*.dll
+*.exe
+*.pdb
