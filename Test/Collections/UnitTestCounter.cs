@@ -97,4 +97,10 @@ public class TestCounter
         
         Assert.AreEqual(0, _counter.Count);
     }
+    
+    [Test]
+    public void TestNull()
+    {
+        Assert.AreNotEqual(null, _counter);
+    }
 }

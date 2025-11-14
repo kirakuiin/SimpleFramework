@@ -49,6 +49,16 @@ public static class NetworkUtil
         }
         throw new ArgumentException("Invalid ip address");
     }
+
+    /// <summary>
+    /// 是否为有效的端口
+    /// </summary>
+    /// <param name="port"></param>
+    /// <returns></returns>
+    public static bool IsValidPort(int port)
+    {
+        return port is >= 1 and <= 65535;
+    }
 }
 
 
