@@ -1,4 +1,5 @@
 ﻿#if GODOT
+
 namespace SimpleFramework.GDExt;
 
 public static class UnRegisterAbleExtensions
@@ -20,6 +21,11 @@ public static class GdConst
     /// 服务端的ID
     /// </summary>
     public const long ServerId = 1;
+
+    /// <summary>
+    /// 默认的超时时间(ms)
+    /// </summary>
+    public const int Timeout = 5000;
 }
 
 public static class Channel
@@ -39,4 +45,5 @@ public static class Channel
     /// </summary>
     public const int Data = 3;
 }
+
 #endif

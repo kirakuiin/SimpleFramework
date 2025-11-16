@@ -1,24 +1,303 @@
 ﻿namespace SimpleFramework.Patterns;
 
 /// <summary>
-/// 代表FSM中的一个状态
+/// 常用事件常量定义
 /// </summary>
-public interface IState
+public static class StateEvents
 {
-    /// <summary>
-    /// 进入状态时执行的操作
-    /// </summary>
-    void Enter();
+    public const string EventFinished = "finished";
 
     /// <summary>
-    /// 退出状态机执行的操作
+    /// ANY状态常量，用于添加从任意状态的转换
     /// </summary>
-    void Exit();
+    public static readonly State? AnyState = null;
 }
 
 /// <summary>
-/// 简单的有限状态机实现
+/// 事件处理器委托
 /// </summary>
-public class FiniteStateMachine
+/// <param name="args">事件参数</param>
+/// <returns>是否消费了该事件</returns>
+public delegate bool StateEventHandler(object? args = null);
+
+/// <summary>
+/// 状态基类，对应LimboState
+/// </summary>
+public abstract class State
 {
+    private string _name = "";
+    private readonly Dictionary<string, StateEventHandler> _eventHandlers = new();
+
+    /// <summary>
+    /// 状态名称
+    /// </summary>
+    public string Name => _name;
+
+    /// <summary>
+    /// 父状态机引用
+    /// </summary>
+    public StateMachine? StateMachine { get; private set; }
+
+    /// <summary>
+    /// 设置状态名称，返回自身支持链式调用
+    /// </summary>
+    public State Named(string name)
+    {
+        _name = name;
+        return this;
+    }
+
+    /// <summary>
+    /// 初始化状态，只调用一次
+    /// </summary>
+    public virtual void Setup()
+    {
+    }
+
+    /// <summary>
+    /// 进入状态时调用
+    /// </summary>
+    public virtual void Enter()
+    {
+        _onEnterCallback?.Invoke();
+    }
+
+    /// <summary>
+    /// 每帧更新时调用
+    /// </summary>
+    /// <param name="delta">帧间隔时间</param>
+    public virtual void Update(float delta)
+    {
+        _onUpdateCallback?.Invoke(delta);
+    }
+
+    /// <summary>
+    /// 退出状态时调用
+    /// </summary>
+    public virtual void Exit()
+    {
+        _onExitCallback?.Invoke();
+    }
+
+    /// <summary>
+    /// 分发事件
+    /// </summary>
+    /// <param name="eventName">事件名称</param>
+    /// <param name="args">事件参数</param>
+    public void Dispatch(string eventName, object? args = null)
+    {
+        StateMachine?.Dispatch(eventName, args);
+    }
+
+    /// <summary>
+    /// 添加事件处理器
+    /// </summary>
+    /// <param name="eventName">事件名称</param>
+    /// <param name="handler">事件处理器</param>
+    public void AddEventHandler(string eventName, StateEventHandler handler)
+    {
+        if (string.IsNullOrEmpty(eventName))
+            throw new ArgumentException("Event name cannot be null or empty");
+
+        ArgumentNullException.ThrowIfNull(handler);
+
+        // 如果已存在同名事件处理器，发出警告但不阻止覆盖
+        if (_eventHandlers.ContainsKey(eventName))
+        {
+            PatternLogger.Warning($"Duplicate event handler for {eventName}");
+        }
+
+        _eventHandlers[eventName] = handler;
+    }
+
+    /// <summary>
+    /// 处理事件
+    /// </summary>
+    /// <param name="eventName">事件名称</param>
+    /// <param name="args">事件参数</param>
+    /// <returns>是否处理了事件</returns>
+    public bool HandleEvent(string eventName, object? args = null)
+    {
+        // 先检查事件处理器
+        return _eventHandlers.TryGetValue(eventName, out var handler) && handler(args);
+    }
+
+    private Action? _onEnterCallback;
+    private Action<float>? _onUpdateCallback;
+    private Action? _onExitCallback;
+
+    /// <summary>
+    /// 设置进入回调，支持链式调用
+    /// </summary>
+    public State CallOnEnter(Action callback)
+    {
+        _onEnterCallback = callback;
+        return this;
+    }
+
+    /// <summary>
+    /// 设置更新回调，支持链式调用
+    /// </summary>
+    public State CallOnUpdate(Action<float> callback)
+    {
+        _onUpdateCallback = callback;
+        return this;
+    }
+
+    /// <summary>
+    /// 设置退出回调，支持链式调用
+    /// </summary>
+    public State CallOnExit(Action callback)
+    {
+        _onExitCallback = callback;
+        return this;
+    }
+
+    /// <summary>
+    /// 内部设置状态机
+    /// </summary>
+    internal void SetStateMachine(StateMachine stateMachine)
+    {
+        StateMachine = stateMachine;
+    }
+}
+
+/// <summary>
+/// 状态转换定义
+/// </summary>
+public class Transition(State? fromState, State toState, string eventName)
+{
+    public State? FromState { get; } = fromState;
+    public State ToState { get; } = toState;
+    public string EventName { get; } = eventName;
+}
+
+/// <summary>
+/// 一个基于事件和转换的简单状态机
+/// </summary>
+public class StateMachine
+{
+    private readonly List<State> _states = new();
+    private readonly List<Transition> _transitions = new();
+    private State? _currentState;
+    private State? _initialState;
+    private bool _isActive;
+
+    /// <summary>
+    /// 当前活动状态
+    /// </summary>
+    public State? CurrentState => _currentState;
+
+    /// <summary>
+    /// 是否活跃
+    /// </summary>
+    public bool IsActive => _isActive;
+
+    /// <summary>
+    /// 初始状态
+    /// </summary>
+    public State? InitialState
+    {
+        get => _initialState;
+        set => _initialState = value;
+    }
+
+    /// <summary>
+    /// 添加状态
+    /// </summary>
+    /// <param name="state">状态</param>
+    public void AddState(State state)
+    {
+        if (_states.Contains(state))
+            return; // 防止重复添加同一个状态
+
+        _states.Add(state);
+        state.SetStateMachine(this);
+        state.Setup();
+    }
+
+    /// <summary>
+    /// 添加转换
+    /// </summary>
+    /// <param name="fromState">源状态，使用StateEvents.AnyState表示任意状态</param>
+    /// <param name="toState">目标状态</param>
+    /// <param name="eventName">事件名称</param>
+    public void AddTransition(State? fromState, State toState, string eventName)
+    {
+        ArgumentNullException.ThrowIfNull(toState);
+
+        if (string.IsNullOrEmpty(eventName))
+            throw new ArgumentException("Event name cannot be null or empty");
+
+        _transitions.Add(new Transition(fromState, toState, eventName));
+    }
+
+    /// <summary>
+    /// 设置活跃状态
+    /// </summary>
+    /// <param name="active">是否活跃</param>
+    public void SetActive(bool active)
+    {
+        if (active == _isActive) return;
+
+        _isActive = active;
+
+        if (active)
+        {
+            if (_initialState != null)
+            {
+                ChangeToState(_initialState);
+            }
+        }
+        else
+        {
+            _currentState?.Exit();
+            _currentState = null;
+        }
+    }
+
+    /// <summary>
+    /// 分发事件
+    /// </summary>
+    /// <param name="eventName">事件名称</param>
+    /// <param name="args">事件参数</param>
+    public void Dispatch(string eventName, object? args = null)
+    {
+        if (!_isActive || _currentState == null) return;
+
+        if (_states.Any(state => state.HandleEvent(eventName, args)))
+        {
+            return;
+        }
+
+        // 检查转换
+        var matchingTransitions = _transitions
+            .Where(t => t.EventName == eventName &&
+                       (t.FromState == StateEvents.AnyState || t.FromState == _currentState))
+            .ToList();
+
+        if (matchingTransitions.Count > 0)
+        {
+            ChangeToState(matchingTransitions[0].ToState);
+        }
+    }
+
+    /// <summary>
+    /// 更新状态机
+    /// </summary>
+    /// <param name="delta">帧间隔时间</param>
+    public void Update(float delta)
+    {
+        if (_isActive && _currentState != null)
+        {
+            _currentState.Update(delta);
+        }
+    }
+
+    private void ChangeToState(State newState)
+    {
+        _currentState?.Exit();
+        _currentState = newState;
+        _currentState.Enter();
+    }
 }

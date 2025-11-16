@@ -79,6 +79,11 @@ public static class NetLog
         Logger.Info(message);
     }
     
+    public static void Warning(string message)
+    {
+        Logger.Warning(message);
+    }
+    
     public static void Error(string message, Exception? exception = null)
     {
         Logger.Error(message, exception);

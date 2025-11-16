@@ -21,3 +21,6 @@ riderModule.iml
 *.dll
 *.exe
 *.pdb
+
+# Godot
+*.cs.uid
