@@ -21,9 +21,9 @@ public static class StateEvents
 public delegate bool StateEventHandler(object? args = null);
 
 /// <summary>
-/// 状态基类，对应LimboState
+/// 状态基类
 /// </summary>
-public abstract class State
+public class State
 {
     private string _name = "";
     private readonly Dictionary<string, StateEventHandler> _eventHandlers = new();
@@ -31,7 +31,7 @@ public abstract class State
     /// <summary>
     /// 状态名称
     /// </summary>
-    public string Name => _name;
+    public string Name => string.IsNullOrEmpty(_name) ? GetType().Name : _name;
 
     /// <summary>
     /// 父状态机引用
@@ -52,6 +52,7 @@ public abstract class State
     /// </summary>
     public virtual void Setup()
     {
+        _onSetupCallback?.Invoke();
     }
 
     /// <summary>
@@ -122,9 +123,19 @@ public abstract class State
         return _eventHandlers.TryGetValue(eventName, out var handler) && handler(args);
     }
 
+    private Action? _onSetupCallback;
     private Action? _onEnterCallback;
     private Action<float>? _onUpdateCallback;
     private Action? _onExitCallback;
+    
+    /// <summary>
+    /// 设置初始化回调，支持链式调用
+    /// </summary>
+    public State CallOnSetup(Action callback)
+    {
+        _onSetupCallback = callback;
+        return this;
+    }
 
     /// <summary>
     /// 设置进入回调，支持链式调用
@@ -263,6 +274,7 @@ public class StateMachine
     /// <param name="args">事件参数</param>
     public void Dispatch(string eventName, object? args = null)
     {
+        PatternLogger.Info($"状态事件: {eventName}");
         if (!_isActive || _currentState == null) return;
 
         if (_states.Any(state => state.HandleEvent(eventName, args)))
@@ -296,8 +308,11 @@ public class StateMachine
 
     private void ChangeToState(State newState)
     {
+        var previousState = _currentState;
         _currentState?.Exit();
         _currentState = newState;
         _currentState.Enter();
+        
+        PatternLogger.Info($"状态转移: [{previousState?.Name}]=>[{_currentState.Name}]");
     }
 }

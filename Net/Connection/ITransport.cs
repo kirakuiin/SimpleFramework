@@ -11,7 +11,7 @@ public interface ITransport: IUtility
     /// <param name="port">端口</param>
     /// <param name="maxConnections">最大连接人数</param>
     /// <returns>创建结果</returns>
-    TransportReason StartServer(int port, int maxConnections);
+    Task<TransportReason> StartServer(int port, int maxConnections);
     
     /// <summary>
     /// 停止服务器
@@ -22,8 +22,9 @@ public interface ITransport: IUtility
     /// 踢出某个客户端
     /// </summary>
     /// <param name="clientId">客户端id</param>
+    /// <param name="reason">踢出原因</param>
     /// <returns></returns>
-    void Kick(long clientId);
+    void Kick(long clientId, TransportReason reason);
 
     /// <summary>
     /// 启动客户端
@@ -72,6 +73,12 @@ public interface ITransport: IUtility
     long ServerId { get; }
     
     /// <summary>
+    /// 服务端创建后触发
+    /// <remarks>仅服务端可触发</remarks>
+    /// </summary>
+    event Action<TransportReason> ServerCreated;
+    
+    /// <summary>
     /// 当有新的对等体加入时触发, 参数为对等体的id
     /// <remarks>每当有一个新的客户端加入时，它会依次收到所有之前加入的客户端的id</remarks>
     /// </summary>
@@ -84,22 +91,16 @@ public interface ITransport: IUtility
     event Action<long> PeerDisconnected;
 
     /// <summary>
-    /// 成功连接到服务端时触发
+    /// 连接服务端后触发
     /// <remarks>仅客户端触发</remarks>
     /// </summary>
-    event Action ConnectedToServer;
+    event Action<TransportReason> ConnectionDone;
     
     /// <summary>
     /// 服务端断开时触发
     /// <remarks>仅自身为客户端且非自身主动断开时触发</remarks>
     /// </summary>
     event Action<TransportReason> ServerDisconnected;
-
-    /// <summary>
-    /// 连接服务端失败时触发
-    /// <remarks>仅客户端触发</remarks>
-    /// </summary>
-    event Action<TransportReason> ConnectionFailed;
 
     /// <summary>
     /// 收到远端的数据
@@ -120,4 +121,6 @@ public enum TransportReason
     CantConnect,  // 无法连接
     ServerClosed,  // 服务端关闭
     ServerRejected,  // 服务端拒绝
+    AuthenticationFailed,  // 认证失败
+    ReachMaxConnections,  // 连接已满
 }

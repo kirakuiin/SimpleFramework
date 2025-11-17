@@ -108,6 +108,9 @@ public class EventBus
 {
     private readonly EventContainer _container = new();
     
+    /// <summary>
+    /// 全局事件
+    /// </summary>
     public static readonly EventBus Global = new();
 
     /// <summary>
@@ -131,6 +134,12 @@ public class EventBus
     /// <returns>如果注册过返回<c>true</c></returns>
     public bool Contains<T>() => _container.GetEvent<Event<T>>() != null;
 
+    /// <summary>
+    /// 注册事件
+    /// </summary>
+    /// <param name="onEvent"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <returns></returns>
     public IUnRegister Register<T>(Action<T> onEvent)
     {
         if (!Contains<T>())
@@ -141,6 +150,11 @@ public class EventBus
         return _container.GetEvent<Event<T>>().Register(onEvent);
     }
 
+    /// <summary>
+    /// 取消注册
+    /// </summary>
+    /// <param name="onEvent"></param>
+    /// <typeparam name="T"></typeparam>
     public void UnRegister<T>(Action<T> onEvent)
     {
         _container.GetEvent<Event<T>>()?.UnRegister(onEvent);

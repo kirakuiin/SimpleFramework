@@ -2,6 +2,7 @@
 using NUnit.Framework;
 using SimpleFramework.Patterns;
 using System;
+using SimpleFramework.Utility;
 
 namespace Test.Patterns;
 
@@ -15,7 +16,6 @@ public class TestStateMachine
         public int ExitCount { get; private set; }
         public float LastDelta { get; private set; }
         public string? LastEvent { get; private set; }
-        public object? LastEventArgs { get; private set; }
 
         public TestState(string name)
         {
@@ -139,7 +139,7 @@ public class TestStateMachine
 
         stateMachine.AddState(state);
         stateMachine.InitialState = state;
-                // 不激活状态机
+        // 不激活状态机
 
         stateMachine.Update(0.016f);
         stateMachine.Update(0.032f);
@@ -314,20 +314,23 @@ public class TestStateMachine
     [Test]
     public void TestSimpleState()
     {
+        var setupCalled = false;
         var enterCalled = false;
         var updateCalled = false;
         var exitCalled = false;
 
         var stateMachine = new StateMachine();
         var simpleState = new TestState("Simple");
-        simpleState.CallOnEnter(() => enterCalled = true)
-                    .CallOnUpdate(delta => updateCalled = true)
-                    .CallOnExit(() => exitCalled = true);
+        simpleState.CallOnSetup(() => setupCalled = true)
+            .CallOnEnter(() => enterCalled = true)
+            .CallOnUpdate(delta => updateCalled = true)
+            .CallOnExit(() => exitCalled = true);
 
         stateMachine.AddState(simpleState);
         stateMachine.InitialState = simpleState;
         stateMachine.SetActive(true);
 
+        Assert.IsTrue(setupCalled);
         Assert.IsTrue(enterCalled);
         Assert.IsFalse(updateCalled);
         Assert.IsFalse(exitCalled);
@@ -375,7 +378,7 @@ public class TestStateMachine
         stateMachine.AddTransition(StateEvents.AnyState, hurtState, "take_damage");
 
         stateMachine.InitialState = idleState;
-                stateMachine.SetActive(true);
+        stateMachine.SetActive(true);
 
         // 初始状态
         Assert.AreEqual(idleState, stateMachine.CurrentState);

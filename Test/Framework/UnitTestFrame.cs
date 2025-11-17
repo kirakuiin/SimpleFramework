@@ -1,7 +1,7 @@
 using System;
-using System.Reflection;
 using NUnit.Framework;
 using SimpleFramework;
+using SimpleFramework.FrameworkImpl;
 
 namespace Test.Framework;
 
@@ -140,6 +140,31 @@ public class TestFramework
         Assert.IsNull(DDomain.GetInstance());
         Assert.IsNull(D1Domain.GetInstance());
         Assert.IsNull(D2Domain.GetInstance());
+    }
+
+    [Test]
+    public void TestGlobalEvent()
+    {
+        var receiver = new GlobalEventReceiver();
+        receiver.RegisterEvent();
+        var receiver2 = new GlobalEventReceiver();
+        receiver2.RegisterEvent();
+
+        Assert.AreEqual(0, receiver.Value);
+        Assert.AreEqual(0, receiver2.Value);
+        
+        var value = 3;
+        EventBus.Global.Send(value);
+        
+        Assert.AreEqual(value, receiver.Value);
+        Assert.AreEqual(value, receiver2.Value);
+        
+        receiver.UnRegisterEvent();
+        
+        value = 4;
+        EventBus.Global.Send(value);
+        Assert.AreNotEqual(value, receiver.Value);
+        Assert.AreEqual(value, receiver2.Value);
     }
 
     #region AbstractDomain 核心功能测试
@@ -477,4 +502,16 @@ public class Query : AbstractQuery<string>
         return this.GetModel<Model>().Value.Value;
     }
 }
+
+
+public class GlobalEventReceiver : IOnGlobalEvent<int>
+{
+    public int Value { get; private set; }
+    
+    public void OnEvent(int @event)
+    {
+        Value = @event;
+    }
+}
+
 #endregion
