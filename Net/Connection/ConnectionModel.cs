@@ -4,6 +4,15 @@ namespace SimpleFramework.Net.Connection;
 
 /// <summary>
 /// 一个网络连接管理模型，负责管理网络连接中的各个状态
+/// <para>
+/// 客户端事件: <see cref="ClientConnectEvent"/>, <see cref="ClientReconnectEvent"/>, <see cref="ServerDisconnectedEvent"/>
+/// </para>
+/// <para>
+/// 服务端事件: <see cref="ServerCreateEvent"/>
+/// </para>
+/// <para>
+/// 通用事件: <see cref="PeerConnectedEvent"/>, <see cref="PeerDisconnectedEvent"/>
+/// </para>
 /// <remarks>此model依赖<see cref="ITransport"/>, 因此<see cref="ITransport"/>必须先于此对象初始化</remarks>
 /// </summary>
 public class ConnectionModel: AbstractModel
