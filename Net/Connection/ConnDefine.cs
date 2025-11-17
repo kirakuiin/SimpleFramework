@@ -25,9 +25,9 @@ public static class ConnDefine
     public const int ReconnectTimes = 3;
     
     /// <summary>
-    /// 连接超时时间
+    /// 连接超时时间(ms)
     /// </summary>
-    public const int Timeout = 500;
+    public const int Timeout = 5000;
 }
 
 
@@ -82,17 +82,63 @@ public readonly struct ClientConfig(string addr, int port, int timeout=ConnDefin
 
 /// <summary>
 /// 服务端创建事件
+/// <remarks>仅服务端</remarks>
 /// </summary>
-public struct ServerCreateEvent(TransportReason reason)
+public readonly struct ServerCreateEvent(TransportReason reason)
 {
-    public TransportReason Reason = reason;
+    public TransportReason Reason => reason;
 }
 
 
 /// <summary>
 /// 客户端连接事件
+/// <remarks>仅客户端</remarks>
 /// </summary>
-public struct ClientConnectEvent(TransportReason reason)
+public readonly struct ClientConnectEvent(TransportReason reason)
 {
-    public TransportReason Reason = reason;
+    public TransportReason Reason => reason;
+}
+
+
+/// <summary>
+/// 客户端重连事件
+/// <remarks>仅客户端</remarks>
+/// </summary>
+/// <param name="remainTime">剩余尝试次数</param>
+public readonly struct ClientReconnectEvent(int remainTime)
+{
+    /// <summary>
+    /// 剩余尝试次数
+    /// </summary>
+    public int RemainTryTime => remainTime;
+}
+
+
+/// <summary>
+/// 服务端断开事件
+/// <remarks>仅客户端</remarks>
+/// </summary>
+public readonly struct ServerDisconnectedEvent(TransportReason reason)
+{
+    public TransportReason Reason => reason;
+}
+
+
+/// <summary>
+/// 远端连接事件
+/// </summary>
+/// <param name="peerId"></param>
+public readonly struct PeerConnectedEvent(long peerId)
+{
+    public long PeerId => peerId;
+}
+
+
+/// <summary>
+/// 远端断开事件
+/// </summary>
+/// <param name="peerId"></param>
+public readonly struct PeerDisconnectedEvent(long peerId)
+{
+    public long PeerId => peerId;
 }

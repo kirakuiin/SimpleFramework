@@ -97,7 +97,7 @@ public partial class MultiplayerTransport : Node, ITransport
         }
     }
 
-    public Task<TransportReason> StartServer(int port, int maxConnections)
+    public Task<TransportReason> StartServer(int port)
     {
         if (Multiplayer.HasMultiplayerPeer())
         {
@@ -106,9 +106,9 @@ public partial class MultiplayerTransport : Node, ITransport
             return Task.FromResult(TransportReason.AlreadyCreate);
         }
         
-        NetLog.Info($"创建服务端 port:{port}, maxConn:{maxConnections}");
+        NetLog.Info($"创建服务端 port:{port}");
         var peer = new ENetMultiplayerPeer();
-        var error = peer.CreateServer(port, maxConnections);
+        var error = peer.CreateServer(port);
 
         switch (error)
         {

@@ -44,11 +44,15 @@ internal class StartHostingState(ConnectionModel model) : ConnState(model)
 {
     public override void Enter()
     {
-        var config = Model.ServerConfig;
         Model.Transport.ServerCreated += OnServerCreated;
+    }
+
+    public override void Update(float delta)
+    {
+        var config = Model.ServerConfig;
         try
         {
-            Model.Transport.StartServer(config.Port, config.MaxPlayer);
+            Model.Transport.StartServer(config.Port);
         }
         catch (Exception e)
         {
@@ -85,11 +89,13 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
     private void OnPeerConnected(long clientId)
     {
         Model.ConnectionIds.Add(clientId);
+        Model.SendEvent(new PeerConnectedEvent(clientId));
     }
 
     private void OnPeerDisconnected(long clientId)
     {
         Model.ConnectionIds.Remove(clientId);
+        Model.SendEvent(new PeerDisconnectedEvent(clientId));
     }
 
     public override void Exit()
@@ -104,8 +110,12 @@ internal class ConnectingState(ConnectionModel model) : ConnState(model)
 {
     public override void Enter()
     {
-        var config = Model.ClientConfig;
         Model.Transport.ConnectionDone += OnConnectionDone;
+    }
+
+    public override void Update(float delta)
+    {
+        var config = Model.ClientConfig;
         try
         {
             Model.Transport.StartClient(config.Addr, config.Port, config.Timeout);
@@ -141,9 +151,11 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
 
     private void OnServerDisconnected(TransportReason reason)
     {
+        model.SendEvent(new ServerDisconnectedEvent(reason));
         switch (reason)
         {
             case TransportReason.ServerRejected:
+            case TransportReason.ServerClosed:
                 Dispatch(ConnEvent.Stop);
                 break;
             default:
@@ -159,11 +171,13 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
     private void OnPeerConnected(long clientId)
     {
         Model.ConnectionIds.Add(clientId);
+        Model.SendEvent(new PeerConnectedEvent(clientId));
     }
 
     private void OnPeerDisconnected(long clientId)
     {
         Model.ConnectionIds.Remove(clientId);
+        Model.SendEvent(new PeerDisconnectedEvent(clientId));
     }
 
     public override void Exit()
@@ -184,6 +198,10 @@ internal class ReconnectingState(ConnectionModel model) : ConnState(model)
         _remainRetryCnt = Model.ClientConfig.ReconnectTimes;
         Model.Transport.ConnectionDone += OnConnectionDone;
         Model.ConnectionIds.Clear();
+    }
+
+    public override void Update(float delta)
+    {
         Reconnect();
     }
 
@@ -191,6 +209,7 @@ internal class ReconnectingState(ConnectionModel model) : ConnState(model)
     {
         try
         {
+            Model.SendEvent(new ClientReconnectEvent(_remainRetryCnt));
             _remainRetryCnt -= 1;
             var config = Model.ClientConfig;
             Model.Transport.StartClient(config.Addr, config.Port, config.Timeout);
@@ -206,6 +225,7 @@ internal class ReconnectingState(ConnectionModel model) : ConnState(model)
     {
         if (reason == TransportReason.Ok)
         {
+            Model.SendEvent(new ClientConnectEvent(reason));
             Dispatch(ConnEvent.Ok);
         }
         else if (_remainRetryCnt > 0)
@@ -214,6 +234,7 @@ internal class ReconnectingState(ConnectionModel model) : ConnState(model)
         }
         else
         {
+            Model.SendEvent(new ClientConnectEvent(reason));
             Dispatch(ConnEvent.Stop);
         }
     }
@@ -222,6 +243,4 @@ internal class ReconnectingState(ConnectionModel model) : ConnState(model)
     {
         Model.Transport.ConnectionDone -= OnConnectionDone;
     }
-    
-    
 }

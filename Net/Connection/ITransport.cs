@@ -9,9 +9,8 @@ public interface ITransport: IUtility
     /// 启动服务器
     /// </summary>
     /// <param name="port">端口</param>
-    /// <param name="maxConnections">最大连接人数</param>
     /// <returns>创建结果</returns>
-    Task<TransportReason> StartServer(int port, int maxConnections);
+    Task<TransportReason> StartServer(int port);
     
     /// <summary>
     /// 停止服务器

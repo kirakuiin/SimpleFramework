@@ -214,6 +214,11 @@ public class StateMachine
     }
 
     /// <summary>
+    /// 当切换状态时是否立即触发一次Update
+    /// </summary>
+    public bool TriggerUpdateWhenStateChange { set; get; } = false;
+
+    /// <summary>
     /// 添加状态
     /// </summary>
     /// <param name="state">状态</param>
@@ -314,5 +319,11 @@ public class StateMachine
         _currentState.Enter();
         
         PatternLogger.Info($"状态转移: [{previousState?.Name}]=>[{_currentState.Name}]");
+        
+        if (TriggerUpdateWhenStateChange)
+        {
+            _currentState.Update(0);
+        }
+        
     }
 }

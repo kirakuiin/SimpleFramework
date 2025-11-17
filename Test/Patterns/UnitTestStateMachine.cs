@@ -456,4 +456,23 @@ public class TestStateMachine
 
         Assert.IsTrue(callbackCalled);
     }
+
+    [Test]
+    public void TestTriggerOnce()
+    {
+        var stateMachine = new StateMachine
+        {
+            TriggerUpdateWhenStateChange = true
+        };
+        var state = new TestState("Test");
+        var callbackDelta = 1.0f;
+
+        state.CallOnUpdate(delta => callbackDelta = delta);
+
+        stateMachine.AddState(state);
+        stateMachine.InitialState = state;
+        stateMachine.SetActive(true);
+
+        Assert.AreEqual(0, callbackDelta);
+    }
 }

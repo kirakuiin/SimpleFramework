@@ -11,7 +11,7 @@ public class ConnectionModel: AbstractModel
     /// <summary>
     /// 网络状态机
     /// </summary>
-    private readonly StateMachine _stateMachine = new();
+    private readonly StateMachine _stateMachine = new() {TriggerUpdateWhenStateChange = true};
     
     /// <summary>
     /// 服务端启动配置
@@ -87,7 +87,7 @@ public class ConnectionModel: AbstractModel
     /// <summary>
     /// 获得所有已连接的id(不包含自己)
     /// </summary>
-    public IReadOnlySet<long> GetAllConnectionIds() => ConnectionIds;
+    public IReadOnlySet<long> GetAllPeerIds() => ConnectionIds;
 
     /// <summary>
     /// 获得当前网络内的所有id
@@ -123,7 +123,7 @@ public class ConnectionModel: AbstractModel
     /// <summary>
     /// 当前已连接的peer数量
     /// </summary>
-    public int Count => GetAllConnectionIds().Count;
+    public int Count => GetAllPeerIds().Count;
 
     /// <summary>
     /// 启动服务器
@@ -153,6 +153,27 @@ public class ConnectionModel: AbstractModel
         ClientConfig = config;
         Payload = payload;
         _stateMachine.Dispatch(ConnEvent.StartClient);
+    }
+    
+    /// <summary>
+    /// 启动一个到服务端的连接, 不带有负载信息
+    /// </summary>
+    /// <param name="config">配置信息</param>
+    public void StartClient(ClientConfig config)
+    {
+        ClientConfig = config;
+        Payload = null;
+        _stateMachine.Dispatch(ConnEvent.StartClient);
+    }
+
+    /// <summary>
+    /// 踢出指定id的客户端
+    /// </summary>
+    /// <param name="clientId"></param>
+    /// <param name="reason"></param>
+    public void Kick(long clientId, TransportReason reason = TransportReason.ServerRejected)
+    {
+        Transport.Kick(clientId, reason);
     }
     
     /// <summary>
