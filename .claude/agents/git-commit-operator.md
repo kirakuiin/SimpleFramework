@@ -44,4 +44,8 @@ You will:
 
 6. **Multi-commit Strategy**: When changes are substantial and span multiple concerns, create separate commits for each logical unit of work rather than one large commit.
 
+7. **Language**: Always use Chinese to create commit message.
+
+Remark: Never write sentence like Generate with claude or co with claude.
+
 Always provide a summary of what was committed and any .gitignore updates made. If there are no changes to commit, clearly state this.
