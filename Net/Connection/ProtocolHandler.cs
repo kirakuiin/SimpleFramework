@@ -6,13 +6,15 @@ namespace SimpleFramework.Net.Connection;
 
 /// <summary>
 /// 用来注册网络协议的处理函数
+/// <remarks>通过传入不同的guardValue, 可以让用同一个网络通道，用同样的协议id的两个不同实例互不影响</remarks>
+/// <param name="guardValue">标记</param>
 /// </summary>
-public class ProtocolHandler : IUtility
+public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
 {
     /// <summary>
     /// 用来在数据包前后做标记
     /// </summary>
-    private const ushort GuardValue = 0xCafe;
+    private ushort GuardValue => guardValue;
     
     /// <summary>
     /// 存储所有协议的类型
@@ -48,7 +50,7 @@ public class ProtocolHandler : IUtility
                 return;
             }
 
-            if (_handlers[attr.MainId].ContainsKey(attr.SubId))
+            if (_handlers[attr.MainId][attr.SubId] != null)
             {
                 NetLog.Warning($"协议 [{type.Name}][{attr.MainId}:{attr.SubId}] 处理函数已被注册，将被覆盖");
             }
@@ -60,6 +62,26 @@ public class ProtocolHandler : IUtility
         {
             NetLog.Error("注册处理器时发生错误", ex);
         }
+    }
+
+    /// <summary>
+    /// 取消注册某个协议的处理函数
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    public void UnRegisterHandler<T>() where T : struct
+    {
+        var type = typeof(T);
+
+        var attr = type.GetCustomAttribute<ProtocolAttribute>();
+        if (attr == null)
+        {
+            NetLog.Warning($"{type.Name}对象未实现{nameof(ProtocolAttribute)}特性");
+            return;
+        }
+
+        if (!_handlers[attr.MainId].ContainsKey(attr.SubId)) return;
+        _handlers[attr.MainId][attr.SubId] = null;
+        NetLog.Info($"[{type.Name}][{attr.MainId}:{attr.SubId}] 的 handler已被清除");
     }
 
     /// <summary>
@@ -84,7 +106,8 @@ public class ProtocolHandler : IUtility
                 // 检查是否已注册
                 if (_protocols[attr.MainId].ContainsKey(attr.SubId))
                 {
-                    NetLog.Warning($"协议 [{type.Name}][{attr.MainId}:{attr.SubId}] 已被注册，将被覆盖");
+                    NetLog.Warning($"协议 [{attr.MainId}:{attr.SubId}] 已被注册，将被覆盖, {_protocols[attr.MainId][attr.SubId]
+                        .Name} => {type.Name}");
                 }
 
                 // 注册到字典中
@@ -190,21 +213,6 @@ public class ProtocolHandler : IUtility
         handler.Invoke(SerializeTool.Deserialize(bytes, type));
         return true;
     }
-}
-
-
-[AttributeUsage(AttributeTargets.Struct)]
-public class ProtocolAttribute(ushort mainId, ushort subId) : Attribute
-{
-    /// <summary>
-    /// 主协议号
-    /// </summary>
-    public ushort MainId {get;} = mainId;
-    
-    /// <summary>
-    /// 子协议号
-    /// </summary>
-    public ushort SubId {get;} = subId;
 }
 
 

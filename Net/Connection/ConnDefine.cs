@@ -28,6 +28,11 @@ public static class ConnDefine
     /// 连接超时时间(ms)
     /// </summary>
     public const int Timeout = 5000;
+
+    /// <summary>
+    /// guard value
+    /// </summary>
+    public const ushort ConnGuard = 0xc001;
 }
 
 
@@ -144,4 +149,37 @@ public readonly struct PeerConnectedEvent(long peerId)
 public readonly struct PeerDisconnectedEvent(long peerId)
 {
     public long PeerId => peerId;
+}
+
+
+/// <summary>
+/// 子协议编号
+/// </summary>
+public static class ConnProtocol
+{
+    public const ushort CRequestApprove = 1;
+    public const ushort SResponseApprove = 2;
+}
+
+
+/// <summary>
+/// 客户端申请加入
+/// </summary>
+/// <param name="payload"></param>
+[Protocol(MainProtocol.Connection, ConnProtocol.CRequestApprove)]
+public struct RequestApproveProtocol(long clientId, string payload)
+{
+    public long ClientId = clientId;
+    
+    public string Payload = payload;
+}
+
+/// <summary>
+/// 服务端回复请求
+/// </summary>
+/// <param name="reason"></param>
+[Protocol(MainProtocol.Connection, ConnProtocol.SResponseApprove)]
+public struct ResponseApproveProtocol(TransportReason reason)
+{
+    public TransportReason Reason = reason;
 }

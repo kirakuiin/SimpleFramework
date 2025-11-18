@@ -35,12 +35,12 @@ public class ConnectionModel: AbstractModel
     /// <summary>
     /// 客户端连接时发送的额外信息
     /// </summary>
-    internal object? Payload = null;
+    internal string Payload = "";
 
     /// <summary>
     /// 认证函数
     /// </summary>
-    internal Func<object, Task<bool>>? AuthenticationFunc;
+    internal Func<string, Task<bool>>? AuthenticationFunc;
 
     /// <summary>
     /// 当前所有连接的id
@@ -51,6 +51,11 @@ public class ConnectionModel: AbstractModel
     /// 获取网络底层transport
     /// </summary>
     internal ITransport Transport => this.GetUtility<ITransport>();
+
+    /// <summary>
+    /// 协议处理器
+    /// </summary>
+    internal readonly ProtocolHandler ProtocolHandler = new (ConnDefine.ConnGuard);
     
     protected override void OnInitialize()
     {
@@ -58,6 +63,7 @@ public class ConnectionModel: AbstractModel
         {
             throw new NullReferenceException("ITransport 组件尚未初始化!");
         }
+        ProtocolHandler.RegisterExecutingProtocol();
         InitStateMachine();
     }
 
@@ -155,8 +161,8 @@ public class ConnectionModel: AbstractModel
     /// 启动一个到服务端的连接
     /// </summary>
     /// <param name="config">配置信息</param>
-    /// <param name="payload">额外发送给服务端的负载信息</param>
-    public void StartClient(ClientConfig config, object? payload=null)
+    /// <param name="payload">额外发送给服务端的负载信息字符串，可以使用json来压缩</param>
+    public void StartClient(ClientConfig config, string payload="")
     {
         ClientConfig = config;
         Payload = payload;
@@ -176,21 +182,13 @@ public class ConnectionModel: AbstractModel
     /// <summary>
     /// 注册一个认证函数
     /// <para>当需要实现一些服务端认证来验证加如的客户端时需要注册此函数。</para>
-    /// <para>客户端的数据包通过<see cref="StartClient{T}"/>里的Payload来传递</para>
+    /// <para>客户端的数据包通过<see cref="StartClient"/>里的Payload来传递</para>
     /// <para>当认证未通过时。客户端会收到<see cref="TransportReason.AuthenticationFailed"/></para>
     /// </summary>
     /// <param name="func">异步的认证函数, 返回true代表通过, 否则不通过</param>
-    /// <typeparam name="T">客户端数据包的类型</typeparam>
-    public void RegisterAuthenticationFuncAsync<T>(Func<T, Task<bool>>? func) where T : struct 
+    public void RegisterAuthenticationFuncAsync(Func<string, Task<bool>>? func)
     {
-        if (func is null)
-        {
-            AuthenticationFunc = null;
-        }
-        else
-        {
-            AuthenticationFunc = value => func((T)value);
-        };
+        AuthenticationFunc = func ?? null;
     }
 }
 

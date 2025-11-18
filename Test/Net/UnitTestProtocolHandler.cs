@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using SimpleFramework.Net;
 using SimpleFramework.Net.Connection;
 using SimpleFramework.Utility;
 
@@ -116,6 +117,14 @@ public struct TestProtocol3
     public double LargeValue;
     public decimal DecimalValue;
 }
+
+[Protocol(3, 11)]
+public struct TestRequest(long id, string name)
+{
+    public readonly long Id = id;
+    public readonly string Name = name;
+}
+
 
 /// <summary>
 /// 不带ProtocolAttribute的结构体，用于测试错误处理
@@ -478,6 +487,24 @@ public class TestProtocolHandlerHandling
         Assert.That(packResult, Is.True);
         Assert.That(handleResult, Is.False); // HandleData返回true，但不会有处理函数被调用
     }
+    
+    [Test]
+    public void TestHandleUnregisterProtocol()
+    {
+        // Arrange
+        var testProtocol = new TestProtocol1 { Id = 1, Name = "Unregistered" };
+        var packResult = _handler.PackData(testProtocol, out var data);
+
+        _handler.RegisterHandler<TestProtocol1>(protocol => protocol.Id = 1);
+        _handler.UnRegisterHandler<TestProtocol1>();
+
+        // Act
+        var handleResult = _handler.HandleData(data);
+
+        // Assert
+        Assert.That(packResult, Is.True);
+        Assert.That(handleResult, Is.False); // HandleData返回true，但不会有处理函数被调用
+    }
 
     [Test]
     public void TestHandleEmptyData()
@@ -678,6 +705,19 @@ public class TestProtocolHandlerIntegration
         Assert.That(attribute2, Is.Not.Null);
         Assert.That(attribute2.MainId, Is.EqualTo(1));
         Assert.That(attribute2.SubId, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void TestCustom()
+    {
+        var data = new TestRequest(1231231231, "123");
+        _handler.RegisterHandler<TestRequest>(proto =>
+        {
+            Console.WriteLine(proto.Id);
+            Console.WriteLine(proto.Name);
+        });
+        _handler.PackData(data, out var bytes);
+        _handler.HandleData(bytes);
     }
 }
 
