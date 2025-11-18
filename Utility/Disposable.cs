@@ -49,7 +49,7 @@ public class DisposableGroup : Disposable
 
         foreach (var element in _container)
         {
-            element.Dispose();
+            element?.Dispose();
         }
         
         _container.Clear();
