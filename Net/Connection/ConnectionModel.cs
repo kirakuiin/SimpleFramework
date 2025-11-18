@@ -156,22 +156,10 @@ public class ConnectionModel: AbstractModel
     /// </summary>
     /// <param name="config">配置信息</param>
     /// <param name="payload">额外发送给服务端的负载信息</param>
-    /// <typeparam name="T">负载信息类型</typeparam>
-    public void StartClient<T>(ClientConfig config, T? payload=null) where T : struct
+    public void StartClient(ClientConfig config, object? payload=null)
     {
         ClientConfig = config;
         Payload = payload;
-        _stateMachine.Dispatch(ConnEvent.StartClient);
-    }
-    
-    /// <summary>
-    /// 启动一个到服务端的连接, 不带有负载信息
-    /// </summary>
-    /// <param name="config">配置信息</param>
-    public void StartClient(ClientConfig config)
-    {
-        ClientConfig = config;
-        Payload = null;
         _stateMachine.Dispatch(ConnEvent.StartClient);
     }
 

@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SimpleFramework.Utility;
 
@@ -52,6 +53,11 @@ public static class SerializeTool
     /// <returns></returns>
     public static T Deserialize<T>(byte[] bytes)
     {
-        return JsonSerializer.Deserialize<T>(Encoding.UTF8.GetString(bytes), Options);
+        return JsonSerializer.Deserialize<T>(Encoding.UTF8.GetString(bytes), options:Options);
+    }
+
+    public static object Deserialize(byte[] bytes, Type type)
+    {
+        return JsonSerializer.Deserialize(Encoding.UTF8.GetString(bytes), returnType:type, options:Options);
     }
 }

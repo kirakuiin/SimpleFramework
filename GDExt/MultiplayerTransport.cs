@@ -112,7 +112,7 @@ public partial class MultiplayerTransport : Node, ITransport
 
         switch (error)
         {
-            case Error.Ok:
+            case Godot.Error.Ok:
                 Multiplayer.MultiplayerPeer = peer;
                 ServerCreated?.Invoke(TransportReason.Ok);
                 return Task.FromResult(TransportReason.Ok);

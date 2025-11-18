@@ -96,6 +96,9 @@ public readonly struct ServerCreateEvent(TransportReason reason)
 /// </summary>
 public readonly struct ClientConnectEvent(TransportReason reason)
 {
+    /// <summary>
+    /// 网络层的连接结果
+    /// </summary>
     public TransportReason Reason => reason;
 }
 

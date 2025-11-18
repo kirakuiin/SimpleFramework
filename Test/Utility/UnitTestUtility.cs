@@ -30,6 +30,18 @@ public class TestSerializeTool
         Assert.AreEqual(msg.Name, finalRes.Name);
         Assert.IsTrue(finalRes.IsTrue);
     }
+    
+    [Test]
+    public void TestRuntimeSerialize()
+    {
+        var msg = new Message{Value = 1, Name = "Test", IsTrue = true};
+        var result = SerializeTool.SerializeBytes(msg);
+        
+        var finalRes = (Message)SerializeTool.Deserialize(result, typeof(Message));
+        Assert.AreEqual(msg.Value, finalRes.Value);
+        Assert.AreEqual(msg.Name, finalRes.Name);
+        Assert.IsTrue(finalRes.IsTrue);
+    }
 }
 
 public struct Message
