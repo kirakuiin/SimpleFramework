@@ -159,6 +159,7 @@ public static class ConnProtocol
 {
     public const ushort CRequestApprove = 1;
     public const ushort SResponseApprove = 2;
+    public const ushort SPeerConnect = 3;
 }
 
 
@@ -182,4 +183,16 @@ public struct RequestApproveProtocol(long clientId, string payload)
 public struct ResponseApproveProtocol(TransportReason reason)
 {
     public TransportReason Reason = reason;
+}
+
+
+/// <summary>
+/// peer加入连接
+/// </summary>
+/// <param name="clientId"></param>
+[Protocol(MainProtocol.Connection, ConnProtocol.SPeerConnect)]
+[Serializable]
+public struct PeerConnectProtocol(long clientId)
+{
+    public long ClientId = clientId;
 }

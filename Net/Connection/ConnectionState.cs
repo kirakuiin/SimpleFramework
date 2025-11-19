@@ -76,8 +76,14 @@ internal class StartHostingState(ConnectionModel model) : ConnState(model)
 
 internal class HostingState(ConnectionModel model) : ConnState(model)
 {
+    /// <summary>
+    /// 实际的建立连接的peer id set
+    /// </summary>
+    private readonly HashSet<long> _connectionIds = [];
+    
     public override void Enter()
     {
+        _connectionIds.Clear();
         Model.Transport.DataReceived += OnDataReceived;
         Model.Transport.PeerConnected += OnPeerConnected;
         Model.Transport.PeerDisconnected += OnPeerDisconnected;
@@ -91,14 +97,16 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
     
     private void OnPeerConnected(long clientId)
     {
-        Model.ConnectionIds.Add(clientId);
-        Model.SendEvent(new PeerConnectedEvent(clientId));
+        _connectionIds.Add(clientId);
     }
 
     private void OnPeerDisconnected(long clientId)
     {
-        Model.ConnectionIds.Remove(clientId);
-        Model.SendEvent(new PeerDisconnectedEvent(clientId));
+        _connectionIds.Remove(clientId);
+        if (Model.ConnectionIds.Remove(clientId))
+        {
+            Model.SendEvent(new PeerDisconnectedEvent(clientId));
+        }
     }
 
     private async void OnRequestApprove(RequestApproveProtocol protocol)
@@ -107,7 +115,7 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
         var clientId = protocol.ClientId;
         
         // 人数满了
-        if (Model.Count + 1 > Model.ServerConfig.MaxPlayer)
+        if (_connectionIds.Count >= Model.ServerConfig.MaxPlayer)
         {
             ResponseApprove(clientId, TransportReason.ReachMaxConnections);
             return;
@@ -134,12 +142,15 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
 
     private void ResponseApprove(long clientId, TransportReason reason)
     {
-        NetLog.Info($"服务端{(reason == TransportReason.Ok ? "批准" : "拒绝")}来自 client:{clientId} 连接, reason: {reason}");
+        var isApprove = reason == TransportReason.Ok;
+        NetLog.Info($"服务端{(isApprove ? "批准" : "拒绝")}来自 client:{clientId} 连接, reason: {reason}");
         if (Model.ProtocolHandler.PackData(new ResponseApproveProtocol(reason), out var data))
         {
-            if (Model.ConnectionIds.Contains(clientId))
+            if (!_connectionIds.Contains(clientId)) return;
+            Model.Transport.SendData(clientId, data);
+            if (isApprove)
             {
-                Model.Transport.SendData(clientId, data);
+                SendPeerConnect(clientId); 
             }
         }
         else
@@ -148,8 +159,29 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
         }
     }
 
+    private void SendPeerConnect(long joinId)
+    {
+        Model.ConnectionIds.Add(joinId);
+        
+        foreach (var clientId in Model.GetAllPeerIds())
+        {
+            if (clientId == joinId) continue;
+            Model.ProtocolHandler.PackData(new PeerConnectProtocol(joinId), out var bytes);
+            Model.Transport.SendData(clientId, bytes);
+        }
+        
+        foreach (var alreadyId in Model.GetAllIds().Except([joinId]).Union([Model.ServerId]))
+        {
+            Model.ProtocolHandler.PackData(new PeerConnectProtocol(alreadyId), out var bytes);
+            Model.Transport.SendData(joinId, bytes);
+        }
+        
+        Model.SendEvent(new PeerConnectedEvent(joinId));
+    }
+
     public override void Exit()
     {
+        _connectionIds.Clear();
         Model.Transport.DataReceived -= OnDataReceived;
         Model.Transport.PeerConnected -= OnPeerConnected;
         Model.Transport.PeerDisconnected -= OnPeerDisconnected;
@@ -200,12 +232,12 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
         _isApproved = false;
         Model.Transport.ServerDisconnected += OnServerDisconnected;
         Model.Transport.DataReceived += OnDataReceived;
-        Model.Transport.PeerConnected += OnPeerConnected;
         Model.Transport.PeerDisconnected += OnPeerDisconnected;
+        Model.ProtocolHandler.RegisterHandler<PeerConnectProtocol>(OnPeerConnected);
         Model.ProtocolHandler.RegisterHandler<ResponseApproveProtocol>(OnResponseApprove);
     }
 
-    public override async void Update(float delta)
+    public override void Update(float delta)
     {
         var data = new RequestApproveProtocol(Model.ClientId, Model.Payload);
         NetLog.Info($"发送request到服务端 from: {data.ClientId}");
@@ -255,16 +287,18 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
         Model.ProtocolHandler.HandleData(data);
     }
     
-    private void OnPeerConnected(long clientId)
+    private void OnPeerConnected(PeerConnectProtocol protocol)
     {
-        Model.ConnectionIds.Add(clientId);
-        Model.SendEvent(new PeerConnectedEvent(clientId));
+        Model.ConnectionIds.Add(protocol.ClientId);
+        Model.SendEvent(new PeerConnectedEvent(protocol.ClientId));
     }
 
     private void OnPeerDisconnected(long clientId)
     {
-        Model.ConnectionIds.Remove(clientId);
-        Model.SendEvent(new PeerDisconnectedEvent(clientId));
+        if (Model.ConnectionIds.Remove(clientId))
+        {
+            Model.SendEvent(new PeerDisconnectedEvent(clientId));
+        }
     }
 
     private void OnResponseApprove(ResponseApproveProtocol protocol)
@@ -286,9 +320,9 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
         _isApproved = false;
         Model.Transport.ServerDisconnected -= OnServerDisconnected;
         Model.Transport.DataReceived -= OnDataReceived;
-        Model.Transport.PeerConnected -= OnPeerConnected;
         Model.Transport.PeerDisconnected -= OnPeerDisconnected;
         Model.ProtocolHandler.UnRegisterHandler<ResponseApproveProtocol>();
+        Model.ProtocolHandler.UnRegisterHandler<PeerConnectProtocol>();
     }
 }
 

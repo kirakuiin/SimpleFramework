@@ -110,7 +110,7 @@ public class ConnectionModel: AbstractModel
     /// <returns></returns>
     public IEnumerable<long> GetAllIds()
     {
-        return ConnectionIds.Union([ClientId]);
+        return IsConnected() ? ConnectionIds.Union([ClientId]) : ConnectionIds;
     }
 
     /// <summary>
@@ -138,7 +138,12 @@ public class ConnectionModel: AbstractModel
     /// <summary>
     /// 当前已连接的peer数量
     /// </summary>
-    public int Count => GetAllPeerIds().Count;
+    public int PeerCount => GetAllPeerIds().Count;
+
+    /// <summary>
+    /// 当前所有peer数量
+    /// </summary>
+    public int AllCount => GetAllIds().Count();
 
     /// <summary>
     /// 启动服务器
