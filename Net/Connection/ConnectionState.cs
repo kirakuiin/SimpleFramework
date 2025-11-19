@@ -1,4 +1,5 @@
-﻿using SimpleFramework.Patterns;
+﻿using System.Diagnostics;
+using SimpleFramework.Patterns;
 using SimpleFramework.Utility;
 
 namespace SimpleFramework.Net.Connection;
@@ -14,6 +15,11 @@ internal abstract class ConnState(ConnectionModel model) : State
     /// 连接Model
     /// </summary>
     protected readonly ConnectionModel Model = model;
+    
+    protected virtual void OnDataReceived(byte[] data)
+    {
+        Model.ProtocolHandler.HandleData(data);
+    }
 }
 
 
@@ -64,8 +70,8 @@ internal class StartHostingState(ConnectionModel model) : ConnState(model)
 
     private void OnServerCreated(TransportReason reason)
     {
-        Model.SendEvent(new ServerCreateEvent(reason));
         Dispatch(reason == TransportReason.Ok ? ConnEvent.Ok: ConnEvent.Stop);
+        Model.SendEvent(new ServerCreateEvent(reason));
     }
 
     public override void Exit()
@@ -90,10 +96,6 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
         Model.ProtocolHandler.RegisterHandler<RequestApproveProtocol>(OnRequestApprove);
     }
 
-    private void OnDataReceived(byte[] data)
-    {
-        Model.ProtocolHandler.HandleData(data);
-    }
     
     private void OnPeerConnected(long clientId)
     {
@@ -144,18 +146,10 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
     {
         var isApprove = reason == TransportReason.Ok;
         NetLog.Info($"服务端{(isApprove ? "批准" : "拒绝")}来自 client:{clientId} 连接, reason: {reason}");
-        if (Model.ProtocolHandler.PackData(new ResponseApproveProtocol(reason), out var data))
+        if (!_connectionIds.Contains(clientId)) return;
+        if (Model.SendData(clientId, new ResponseApproveProtocol(reason)) && isApprove)
         {
-            if (!_connectionIds.Contains(clientId)) return;
-            Model.Transport.SendData(clientId, data);
-            if (isApprove)
-            {
-                SendPeerConnect(clientId); 
-            }
-        }
-        else
-        {
-            NetLog.Warning("服务端无法压缩数据包");
+            SendPeerConnect(clientId); 
         }
     }
 
@@ -166,14 +160,12 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
         foreach (var clientId in Model.GetAllPeerIds())
         {
             if (clientId == joinId) continue;
-            Model.ProtocolHandler.PackData(new PeerConnectProtocol(joinId), out var bytes);
-            Model.Transport.SendData(clientId, bytes);
+            Model.SendData(clientId, new PeerConnectProtocol(joinId));
         }
         
         foreach (var alreadyId in Model.GetAllIds().Except([joinId]).Union([Model.ServerId]))
         {
-            Model.ProtocolHandler.PackData(new PeerConnectProtocol(alreadyId), out var bytes);
-            Model.Transport.SendData(joinId, bytes);
+            Model.SendData(joinId, new PeerConnectProtocol(alreadyId));
         }
         
         Model.SendEvent(new PeerConnectedEvent(joinId));
@@ -191,17 +183,34 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
 
 internal class ConnectingState(ConnectionModel model) : ConnState(model)
 {
+    protected bool IsReceiveApprove;  // 是否收到服务端的认证回复
+    private bool _isApproved;  // 服务端是否同意连接
+    private long _enterTick;  // 进入状态时的tick
+    
     public override void Enter()
     {
+        IsReceiveApprove = false;
+        _isApproved = false;
+        _enterTick = DateTime.UtcNow.Ticks;
+        
         Model.Transport.ConnectionDone += OnConnectionDone;
+        Model.Transport.ServerDisconnected += OnServerDisconnected;
+        Model.Transport.DataReceived += OnDataReceived;
+        Model.ProtocolHandler.RegisterHandler<ResponseApproveProtocol>(OnResponseApprove);
     }
 
     public override void Update(float delta)
     {
-        var config = Model.ClientConfig;
+        ConnectToServer();
+    }
+
+    protected virtual void ConnectToServer()
+    {
         try
         {
+            var config = Model.ClientConfig;
             Model.Transport.StartClient(config.Addr, config.Port, config.Timeout);
+            StartTimeoutTimer();
         }
         catch (Exception e)
         {
@@ -210,64 +219,88 @@ internal class ConnectingState(ConnectionModel model) : ConnState(model)
         }
     }
 
-    private void OnConnectionDone(TransportReason reason)
+    protected virtual void OnConnectionDone(TransportReason reason)
     {
-        Dispatch(reason == TransportReason.Ok ? ConnEvent.Ok: ConnEvent.Stop);
-    }
-    
-    public override void Exit()
-    {
-        Model.Transport.ConnectionDone -= OnConnectionDone;
-    }
-}
-
-internal class ConnectedState(ConnectionModel model) : ConnState(model)
-{
-    private bool _isReceiveApprove = false;
-    private bool _isApproved = false;
-    
-    public override void Enter()
-    {
-        _isReceiveApprove = false;
-        _isApproved = false;
-        Model.Transport.ServerDisconnected += OnServerDisconnected;
-        Model.Transport.DataReceived += OnDataReceived;
-        Model.Transport.PeerDisconnected += OnPeerDisconnected;
-        Model.ProtocolHandler.RegisterHandler<PeerConnectProtocol>(OnPeerConnected);
-        Model.ProtocolHandler.RegisterHandler<ResponseApproveProtocol>(OnResponseApprove);
-    }
-
-    public override void Update(float delta)
-    {
-        var data = new RequestApproveProtocol(Model.ClientId, Model.Payload);
-        NetLog.Info($"发送request到服务端 from: {data.ClientId}");
-        if (Model.ProtocolHandler.PackData(data, out var bytes))
+        if (reason == TransportReason.Ok)
         {
-            
-            Model.Transport.SendData(Model.ServerId, bytes);
+            StartRequest();
         }
         else
         {
-            NetLog.Warning("客户端无法压缩数据包");
             Dispatch(ConnEvent.Stop);
         }
-        
-        StartTimeoutTimer();
     }
 
-    private async Task StartTimeoutTimer()
+    protected void StartRequest()
     {
-        await TaskTool.WaitUntil(() => _isReceiveApprove, Model.ClientConfig.Timeout);
-        if (StateMachine?.CurrentState == this && !_isApproved)
+        IsReceiveApprove = false;
+        _isApproved = false;
+        var data = new RequestApproveProtocol(Model.ClientId, Model.Payload);
+        NetLog.Info($"发送request到服务端 from: {data.ClientId}");
+        if (!Model.SendData(Model.ServerId, data))
+        {
+            Dispatch(ConnEvent.Stop);
+        }
+    }
+    
+    protected bool IsTimerExpired(long tick) => tick != _enterTick;
+
+    protected long CurTick => _enterTick;
+    
+    protected virtual async Task StartTimeoutTimer()
+    {
+        var timeTick = CurTick;
+        await TaskTool.WaitUntil(() => IsReceiveApprove, Model.ClientConfig.Timeout);
+        if (!IsTimerExpired(timeTick) && !_isApproved)
         {
             Dispatch(ConnEvent.Stop);
             Model.SendEvent(new ClientConnectEvent(TransportReason.Timeout));
         }
     }
+    
+    private void OnServerDisconnected(TransportReason reason)
+    {
+        Dispatch(ConnEvent.Stop);
+        Model.SendEvent(new ServerDisconnectedEvent(reason));
+    }
+    
+    private void OnResponseApprove(ResponseApproveProtocol protocol)
+    {
+        var reason = protocol.Reason;
+        _isApproved = reason == TransportReason.Ok;
+        IsReceiveApprove = true;
+        NetLog.Info($"连接{(_isApproved ? "成功": "失败")}, reason: {reason}");
+        Dispatch(_isApproved ? ConnEvent.Ok : ConnEvent.Stop);
+        Model.SendEvent(new ClientConnectEvent(reason));
+    }
+    
+    public override void Exit()
+    {
+        IsReceiveApprove = false;
+        _isApproved = false;
+        _enterTick = 0;
+        
+        Model.Transport.ConnectionDone -= OnConnectionDone;
+        Model.Transport.ServerDisconnected -= OnServerDisconnected;
+        Model.Transport.DataReceived -= OnDataReceived;
+        Model.ProtocolHandler.UnRegisterHandler<ResponseApproveProtocol>();
+    }
+}
+
+internal class ConnectedState(ConnectionModel model) : ConnState(model)
+{
+    
+    public override void Enter()
+    {
+        Model.Transport.ServerDisconnected += OnServerDisconnected;
+        Model.Transport.DataReceived += OnDataReceived;
+        Model.Transport.PeerDisconnected += OnPeerDisconnected;
+        Model.ProtocolHandler.RegisterHandler<PeerConnectProtocol>(OnPeerConnected);
+    }
 
     private void OnServerDisconnected(TransportReason reason)
     {
-        Model.SendEvent(new ServerDisconnectedEvent(reason));
+        NetLog.Info($"服务端断开 ：{reason}");
         switch (reason)
         {
             case TransportReason.ServerRejected:
@@ -280,11 +313,7 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
                 Dispatch(ConnEvent.Retry);
                 break;
         }
-    }
-    
-    private void OnDataReceived(byte[] data)
-    {
-        Model.ProtocolHandler.HandleData(data);
+        Model.SendEvent(new ServerDisconnectedEvent(reason));
     }
     
     private void OnPeerConnected(PeerConnectProtocol protocol)
@@ -301,82 +330,68 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
         }
     }
 
-    private void OnResponseApprove(ResponseApproveProtocol protocol)
-    {
-        var reason = protocol.Reason;
-        _isApproved = reason == TransportReason.Ok;
-        _isReceiveApprove = true;
-        NetLog.Info($"连接{(_isApproved ? "成功": "失败")}, reason: {reason}");
-        if (!_isApproved)
-        {
-            Dispatch(ConnEvent.Stop);
-        }
-        Model.SendEvent(new ClientConnectEvent(reason));
-    }
-
     public override void Exit()
     {
-        _isReceiveApprove = false;
-        _isApproved = false;
         Model.Transport.ServerDisconnected -= OnServerDisconnected;
         Model.Transport.DataReceived -= OnDataReceived;
         Model.Transport.PeerDisconnected -= OnPeerDisconnected;
-        Model.ProtocolHandler.UnRegisterHandler<ResponseApproveProtocol>();
         Model.ProtocolHandler.UnRegisterHandler<PeerConnectProtocol>();
     }
 }
 
-internal class ReconnectingState(ConnectionModel model) : ConnState(model)
+internal class ReconnectingState(ConnectionModel model) : ConnectingState(model)
 {
     private int _remainRetryCnt;
     
     public override void Enter()
     {
+        base.Enter();
         _remainRetryCnt = Model.ClientConfig.ReconnectTimes;
-        Model.Transport.ConnectionDone += OnConnectionDone;
         Model.ConnectionIds.Clear();
     }
 
-    public override void Update(float delta)
+    private void Retry()
     {
-        Reconnect();
-    }
-
-    private void Reconnect()
-    {
-        try
+        if (_remainRetryCnt > 0)
         {
-            Model.SendEvent(new ClientReconnectEvent(_remainRetryCnt));
-            _remainRetryCnt -= 1;
-            var config = Model.ClientConfig;
-            Model.Transport.StartClient(config.Addr, config.Port, config.Timeout);
-        }
-        catch (Exception e)
-        {
-            NetLog.Error(e.ToString());
-            Dispatch(ConnEvent.Stop);
-        }
-    }
-
-    private void OnConnectionDone(TransportReason reason)
-    {
-        if (reason == TransportReason.Ok)
-        {
-            Dispatch(ConnEvent.Ok);
-        }
-        else if (_remainRetryCnt > 0)
-        {
-            Reconnect();
+            ConnectToServer();
         }
         else
         {
-            Model.SendEvent(new ClientConnectEvent(reason));
             Dispatch(ConnEvent.Stop);
+            Model.SendEvent(new ClientConnectEvent(TransportReason.ReconnectFailed));
+        }
+    }
+
+    protected override void ConnectToServer()
+    {
+        NetLog.Info($"重连中... 剩余{_remainRetryCnt}次");
+        Model.SendEvent(new ClientReconnectEvent(_remainRetryCnt));
+        _remainRetryCnt -= 1;
+        Model.Transport.StopClient();
+        base.ConnectToServer();
+    }
+
+    protected override void OnConnectionDone(TransportReason reason)
+    {
+        if (reason == TransportReason.Ok)
+        {
+            StartRequest();
+        }
+        else
+        {
+            Retry();
         }
     }
     
-    public override void Exit()
+    protected override async Task StartTimeoutTimer()
     {
-        Model.Transport.ConnectionDone -= OnConnectionDone;
+        var timeTick = CurTick;
+        await TaskTool.WaitUntil(() => IsReceiveApprove, Model.ClientConfig.Timeout);
+        // 仅在服务端未回复状态的状态下重连
+        if (!IsTimerExpired(timeTick) && !IsReceiveApprove)
+        {
+            Retry();
+        }
     }
 }

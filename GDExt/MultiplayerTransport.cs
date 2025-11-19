@@ -6,6 +6,7 @@ using Godot;
 using SimpleFramework.Net;
 using SimpleFramework.Net.Connection;
 using System.Threading.Tasks;
+using Environment = System.Environment;
 
 namespace SimpleFramework.GDExt;
 
@@ -92,8 +93,8 @@ public partial class MultiplayerTransport : Node, ITransport
         NetLog.Info("与服务端断开连接");
         if (Multiplayer.HasMultiplayerPeer())
         {
-            ServerDisconnected?.Invoke(TransportReason.Failed);
             StopClient();
+            ServerDisconnected?.Invoke(TransportReason.Failed);
         }
     }
 

@@ -56,6 +56,25 @@ public class ConnectionModel: AbstractModel
     /// 协议处理器
     /// </summary>
     internal readonly ProtocolHandler ProtocolHandler = new (ConnDefine.ConnGuard);
+
+    /// <summary>
+    /// 发送数据
+    /// </summary>
+    /// <param name="clientId"></param>
+    /// <param name="data"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <returns></returns>
+    internal bool SendData<T>(long clientId, T data) where T : struct
+    {
+        if (ProtocolHandler.PackData(data, out var bytes))
+        {
+            Transport.SendData(clientId, bytes);
+            return true;
+        }
+        NetLog.Warning($"协议数据发送失败: {nameof(T)}");
+        return false;
+    }
+    
     
     protected override void OnInitialize()
     {

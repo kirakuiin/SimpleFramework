@@ -122,4 +122,5 @@ public enum TransportReason
     ServerRejected,  // 服务端拒绝
     AuthenticationFailed,  // 认证失败
     ReachMaxConnections,  // 连接已满
+    ReconnectFailed,  // 重连失败
 }
