@@ -210,6 +210,7 @@ public class FileHandler : IHandler
         if (_disposed) return;
         if (disposing)
         {
+            _writer.Flush();
             _writer.Dispose();
         }
         _disposed = true;

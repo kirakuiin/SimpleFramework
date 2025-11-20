@@ -21,6 +21,7 @@
       <ProjectReference Include="..\Net\Net.csproj" />
       <ProjectReference Include="..\Patterns\Patterns.csproj" />
       <ProjectReference Include="..\SimpleFramework.csproj" />
+      <ProjectReference Include="..\Toolkit\Toolkit.csproj" />
       <ProjectReference Include="..\Utility\Utility.csproj" />
     </ItemGroup>
 

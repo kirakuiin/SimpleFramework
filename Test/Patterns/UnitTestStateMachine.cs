@@ -2,6 +2,7 @@
 using NUnit.Framework;
 using SimpleFramework.Patterns;
 using System;
+using System.Runtime.Intrinsics.X86;
 using SimpleFramework.Utility;
 
 namespace Test.Patterns;
@@ -474,5 +475,195 @@ public class TestStateMachine
         stateMachine.SetActive(true);
 
         Assert.AreEqual(0, callbackDelta);
+    }
+
+    [Test]
+    public void TestConsume()
+    {
+        var stateMachine = new StateMachine();
+        var s1 = new State().Named("state1");
+        var s2 = new State().Named("state2");
+        
+        s2.AddEventHandler("consume_event", args => true);
+        stateMachine.AddState(s1);
+        stateMachine.AddState(s2);
+        stateMachine.InitialState = s1;
+        stateMachine.SetActive(true);
+        
+        stateMachine.AddTransition(s1, s2, StateEvents.EventFinished);
+        stateMachine.AddTransition(s2, s1, "consume_event");
+        
+        Assert.IsTrue(stateMachine.Dispatch(StateEvents.EventFinished));
+        Assert.IsFalse(stateMachine.Dispatch(StateEvents.EventFinished));
+        Assert.IsTrue(stateMachine.Dispatch("consume_event"));
+        Assert.AreEqual(stateMachine.CurrentState, s2);
+    }
+
+    [Test]
+    public void TestNestedStateMachineBasics()
+    {
+        // 创建父状态机和子状态
+        var parentStateMachine = new StateMachine();
+        var parentState = new TestState("Parent");
+        var childState1 = new TestState("Child1");
+        var childState2 = new TestState("Child2");
+
+        // 添加父状态到主状态机
+        parentStateMachine.AddState(parentState);
+        parentStateMachine.InitialState = parentState;
+
+        // 验证初始状态
+        Assert.AreEqual(1, parentState.Depth); // 根状态深度为1
+        Assert.IsNull(parentState.ChildrenStateMachine); // 初始没有子状态机
+
+        // 添加子状态
+        parentState.AddState(childState1, true);
+        parentState.AddState(childState2);
+        
+        parentStateMachine.SetActive(true);
+
+        // 验证子状态机创建和状态添加
+        Assert.IsNotNull(parentState.ChildrenStateMachine);
+        Assert.IsTrue(parentState.ChildrenStateMachine.IsActive); // 父状态激活时子状态机也激活
+        // 验证子状态数量 - 通过检查初始状态设置是否成功
+        Assert.AreEqual(childState1, parentState.ChildrenStateMachine.CurrentState);
+
+        // 验证深度计算
+        Assert.AreEqual(1, parentState.Depth); // 父状态深度
+        Assert.AreEqual(2, childState1.Depth); // 子状态深度
+        Assert.AreEqual(2, childState2.Depth); // 子状态深度
+
+        // 验证父子关系 - 通过Depth间接验证
+        Assert.IsTrue(childState1.Depth > parentState.Depth);
+        Assert.IsTrue(childState2.Depth > parentState.Depth);
+
+        // 验证Update级联
+        parentStateMachine.Update(0.016f);
+        Assert.AreEqual(1, parentState.UpdateCount); // 父状态被更新
+        Assert.AreEqual(1, childState1.UpdateCount); // 子状态也被更新（当前子状态）
+        Assert.AreEqual(0, childState2.UpdateCount); // 非当前子状态不被更新
+
+        // 验证Enter/Exit时的子状态机激活
+        parentStateMachine.SetActive(false);
+        Assert.IsFalse(parentState.ChildrenStateMachine.IsActive); // 父状态停用时子状态机也停用
+    }
+
+    [Test]
+    public void TestNestedStateMachineEventPropagation()
+    {
+        // 创建嵌套状态机结构
+        var stateMachine = new StateMachine();
+        var parentState = new TestState("Parent");
+        var childState1 = new TestState("Child1");
+        var childState2 = new TestState("Child2");
+
+        stateMachine.AddState(parentState);
+        stateMachine.InitialState = parentState;
+
+        parentState.AddState(childState1, true);
+        parentState.AddState(childState2);
+        
+        stateMachine.SetActive(true);
+
+        var parentHandledEvent = false;
+        var childHandledEvent = false;
+
+        // 父状态事件处理器
+        parentState.AddEventHandler("test_event", args => {
+            parentHandledEvent = true;
+            return false; // 不消耗事件，允许传播
+        });
+        parentState.AddEventHandler("test_event2", args => {
+            parentHandledEvent = true;
+            return false; // 不消耗事件，允许传播
+        });
+
+        // 子状态事件处理器
+        childState1.AddEventHandler("test_event", args => {
+            childHandledEvent = true;
+            return true; // 消耗事件，阻止传播
+        });
+
+        // 分发事件 - 应被子状态处理并消耗
+        childState1.Dispatch("test_event");
+
+        Assert.IsTrue(childHandledEvent); // 子状态处理了事件
+        Assert.IsFalse(parentHandledEvent); // 父状态未处理事件（被子状态消耗）
+
+        // 重置标志
+        parentHandledEvent = false;
+        childHandledEvent = false;
+
+        // 创建新的子状态来测试向上传播（避免清理事件处理器）
+        var childState3 = new TestState("Child3");
+        childState3.AddEventHandler("test_event2", args => false);
+        parentState.AddState(childState3);
+
+        // 重新分发事件 - 应传播到父状态（childState3不处理该事件）
+        childState3.Dispatch("test_event2");
+        Assert.IsTrue(parentHandledEvent); // 父状态处理了事件
+    }
+
+    [Test]
+    public void TestComplexNestedStateMachine()
+    {
+        // 创建三层嵌套状态机
+        var stateMachine = new StateMachine();
+        var rootState = new TestState("Root");
+        var parentState = new TestState("Parent");
+        var childState1 = new TestState("Child1");
+        var childState2 = new TestState("Child2");
+        var grandChildState = new TestState("GrandChild");
+
+        stateMachine.AddState(rootState);
+        stateMachine.InitialState = rootState;
+
+        // 第二层嵌套
+        rootState.AddState(parentState, true);
+
+        // 第三层嵌套
+        parentState.AddState(childState1, true);
+        parentState.AddState(childState2);
+
+        // 第四层嵌套
+        childState1.AddState(grandChildState, true);
+        
+        stateMachine.SetActive(true);
+
+        // 验证深度计算
+        Assert.AreEqual(1, rootState.Depth);
+        Assert.AreEqual(2, parentState.Depth);
+        Assert.AreEqual(3, childState1.Depth);
+        Assert.AreEqual(3, childState2.Depth);
+        Assert.AreEqual(4, grandChildState.Depth);
+
+        // 验证级联Update
+        stateMachine.Update(0.1f);
+
+        Assert.AreEqual(1, rootState.UpdateCount);
+        Assert.AreEqual(1, parentState.UpdateCount);
+        Assert.AreEqual(1, childState1.UpdateCount);
+        Assert.AreEqual(0, childState2.UpdateCount); // 非当前状态
+        Assert.AreEqual(1, grandChildState.UpdateCount);
+
+        // 验证深层事件传播
+        var eventHandled = false;
+        rootState.AddEventHandler("deep_event", args => {
+            eventHandled = true;
+            return true;
+        });
+
+        // 从最深层分发事件，应该向上传播到根状态
+        grandChildState.Dispatch("deep_event");
+        Assert.IsTrue(eventHandled);
+
+        // 验证嵌套状态转换不影响父状态
+        parentState.ChildrenStateMachine.AddTransition(childState1, childState2, "switch_child");
+        parentState.ChildrenStateMachine.Dispatch("switch_child");
+
+        // 父状态机状态不应改变
+        Assert.AreEqual(rootState, stateMachine.CurrentState);
+        Assert.AreEqual(parentState, rootState.ChildrenStateMachine.CurrentState);
+        Assert.AreEqual(childState2, parentState.ChildrenStateMachine.CurrentState); // 只有子状态改变
     }
 }

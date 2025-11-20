@@ -27,6 +27,7 @@ public class State
 {
     private string _name = "";
     private readonly Dictionary<string, StateEventHandler> _eventHandlers = new();
+    private WeakReference<State>? _parentStateRef;
 
     /// <summary>
     /// 状态名称
@@ -34,9 +35,19 @@ public class State
     public string Name => string.IsNullOrEmpty(_name) ? GetType().Name : _name;
 
     /// <summary>
-    /// 父状态机引用
+    /// 状态机引用
     /// </summary>
     public StateMachine? StateMachine { get; private set; }
+    
+    /// <summary>
+    /// 如果有子状态，那么这个代表子状态使用的状态机
+    /// </summary>
+    public StateMachine? ChildrenStateMachine { get; private set; }
+    
+    /// <summary>
+    /// 父状态
+    /// </summary>
+    private State? ParentState => _parentStateRef != null && _parentStateRef.TryGetTarget(out var state) ? state : null;
 
     /// <summary>
     /// 设置状态名称，返回自身支持链式调用
@@ -72,6 +83,24 @@ public class State
         _onUpdateCallback?.Invoke(delta);
     }
 
+    internal void EnterState()
+    {
+        Enter();
+        ChildrenStateMachine?.SetActive(true);
+    }
+
+    internal void ExitState()
+    {
+        Exit();
+        ChildrenStateMachine?.SetActive(false);
+    }
+
+    internal void UpdateState(float delta)
+    {
+        Update(delta);
+        ChildrenStateMachine?.Update(delta);
+    }
+
     /// <summary>
     /// 退出状态时调用
     /// </summary>
@@ -81,13 +110,46 @@ public class State
     }
 
     /// <summary>
-    /// 分发事件
+    /// 分发事件, 如果事件未被处理会传递到父状态
     /// </summary>
     /// <param name="eventName">事件名称</param>
     /// <param name="args">事件参数</param>
     public void Dispatch(string eventName, object? args = null)
     {
-        StateMachine?.Dispatch(eventName, args);
+        if (StateMachine is null) return;
+        var isConsume = StateMachine.Dispatch(eventName, args);
+        if (!isConsume)
+        {
+            ParentState?.Dispatch(eventName, args);
+        }
+    }
+    
+    /// <summary>
+    /// 获得状态的深度，对于非子状态来说，深度是1, 嵌套越深，深度越大
+    /// </summary>
+    public int Depth
+    {
+        get
+        {
+            if (ParentState is null) return 1;
+            return ParentState.Depth + 1;
+        }
+    }
+
+    /// <summary>
+    /// 添加子状态
+    /// </summary>
+    /// <param name="subState"></param>
+    /// <param name="isInitState">是否为初始状态</param>
+    public void AddState(State subState, bool isInitState=false)
+    {
+        ChildrenStateMachine ??= new StateMachine();
+        subState._parentStateRef = new WeakReference<State>(this);
+        ChildrenStateMachine.AddState(subState);
+        if (isInitState)
+        {
+            ChildrenStateMachine.InitialState = subState;
+        }
     }
 
     /// <summary>
@@ -267,7 +329,7 @@ public class StateMachine
         }
         else
         {
-            _currentState?.Exit();
+            _currentState?.ExitState();
             _currentState = null;
         }
     }
@@ -277,26 +339,30 @@ public class StateMachine
     /// </summary>
     /// <param name="eventName">事件名称</param>
     /// <param name="args">事件参数</param>
-    public void Dispatch(string eventName, object? args = null)
+    /// <returns>事件是否被消耗</returns>
+    public bool Dispatch(string eventName, object? args = null)
     {
         PatternLogger.Info($"状态事件: {eventName}");
-        if (!_isActive || _currentState == null) return;
+        if (!_isActive || _currentState == null) return false;
 
-        if (_states.Any(state => state.HandleEvent(eventName, args)))
+        if (_currentState.HandleEvent(eventName, args))
         {
-            return;
+            return true;
+        }
+        if (_states.Except([_currentState]).Any(state => state.HandleEvent(eventName, args)))
+        {
+            return true;
         }
 
         // 检查转换
         var matchingTransitions = _transitions
             .Where(t => t.EventName == eventName &&
-                       (t.FromState == StateEvents.AnyState || t.FromState == _currentState))
+                        (t.FromState == StateEvents.AnyState || t.FromState == _currentState))
             .ToList();
 
-        if (matchingTransitions.Count > 0)
-        {
-            ChangeToState(matchingTransitions[0].ToState);
-        }
+        if (matchingTransitions.Count <= 0) return false;
+        ChangeToState(matchingTransitions[0].ToState);
+        return true;
     }
 
     /// <summary>
@@ -307,22 +373,22 @@ public class StateMachine
     {
         if (_isActive && _currentState != null)
         {
-            _currentState.Update(delta);
+            _currentState.UpdateState(delta);
         }
     }
 
     private void ChangeToState(State newState)
     {
         var previousState = _currentState;
-        _currentState?.Exit();
+        _currentState?.ExitState();
         _currentState = newState;
-        _currentState.Enter();
+        _currentState.EnterState();
         
         PatternLogger.Info($"状态转移: [{previousState?.Name}]=>[{_currentState.Name}]");
         
         if (TriggerUpdateWhenStateChange)
         {
-            _currentState.Update(0);
+            _currentState.UpdateState(0);
         }
         
     }
