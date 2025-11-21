@@ -12,6 +12,20 @@ public static class ModelReadableExtensions
     /// <returns><see cref="IModel"/></returns>
     public static T GetModel<T>(this IModelAccessible self) where T : class, IModel =>
         self.Domain.GetModel<T>();
+    
+    /// <summary>
+    /// 如果依赖的组件不存在则抛出
+    /// </summary>
+    /// <param name="self"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <exception cref="NullReferenceException"></exception>
+    public static void ThrowIfNull<T>(this IModelAccessible self) where T : class, IModel
+    {
+        if (self.GetModel<T>() == null)
+        {
+            throw new NullReferenceException($"依赖的组件不存在 {nameof(T)}");
+        }
+    }
 }
 
 public static class SystemReadableExtensions
@@ -36,6 +50,20 @@ public static class UtilityReadableExtensions
     /// <returns><see cref="IUtility"/></returns>
     public static T GetUtility<T>(this IUtilityAccessible self) where T : class, IUtility =>
         self.Domain.GetUtility<T>();
+
+    /// <summary>
+    /// 如果依赖的组件不存在则抛出
+    /// </summary>
+    /// <param name="self"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <exception cref="NullReferenceException"></exception>
+    public static void ThrowIfNull<T>(this IUtilityAccessible self) where T : class, IUtility
+    {
+        if (self.GetUtility<T>() == null)
+        {
+            throw new NullReferenceException($"依赖的组件不存在 {nameof(T)}");
+        }
+    }
 }
 
 public static class RegisterAbleExtensions

@@ -203,10 +203,12 @@ public interface IQuery<out TResult> : IDomainConfigurable,
 /// <summary>
 /// 代表一个支持取消注册的实体。
 /// </summary>
-public interface IUnRegister
+public interface IUnRegister : IDisposable
 {
     /// <summary>
     /// 取消注册。
     /// </summary>
     void UnRegister();
+    
+    void IDisposable.Dispose() => UnRegister();
 }
