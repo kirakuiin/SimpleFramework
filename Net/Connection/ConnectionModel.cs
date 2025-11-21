@@ -13,7 +13,7 @@ namespace SimpleFramework.Net.Connection;
 /// <para>
 /// 通用事件: <see cref="PeerConnectedEvent"/>, <see cref="PeerDisconnectedEvent"/>
 /// </para>
-/// <remarks>此model依赖<see cref="ITransport"/>, 因此<see cref="ITransport"/>必须先于此对象初始化</remarks>
+/// <remarks>此model依赖<see cref="ITransport"/>,<see cref="ProtocolHandler"/>, 因此这些必须先于此对象初始化</remarks>
 /// </summary>
 public class ConnectionModel: AbstractModel
 {
@@ -51,11 +51,16 @@ public class ConnectionModel: AbstractModel
     /// 获取网络底层transport
     /// </summary>
     internal ITransport Transport => this.GetUtility<ITransport>();
+    
+    /// <summary>
+    /// 获取网络底层的transfer
+    /// </summary>
+    internal ITransfer Transfer => this.GetUtility<ITransfer>();
 
     /// <summary>
     /// 协议处理器
     /// </summary>
-    internal readonly ProtocolHandler ProtocolHandler = new (ConnDefine.ConnGuard);
+    internal readonly ProtocolHandler ProtocolHandler = new (NetDefine.ConnGuard);
 
     /// <summary>
     /// 发送数据
@@ -68,20 +73,23 @@ public class ConnectionModel: AbstractModel
     {
         if (ProtocolHandler.PackData(data, out var bytes))
         {
-            Transport.SendData(clientId, bytes);
+            Transfer.SendData(clientId, bytes);
             return true;
         }
         NetLog.Warning($"协议数据发送失败: {nameof(T)}");
         return false;
     }
-    
-    
+
+    protected override void OnUninitialize()
+    {
+        _stateMachine.Dispatch(ConnEvent.Stop);
+        AuthenticationFunc = null;
+    }
+
     protected override void OnInitialize()
     {
-        if (Transport is null)
-        {
-            throw new NullReferenceException("ITransport 组件尚未初始化!");
-        }
+        this.ThrowIfNull<ITransport>();
+        this.ThrowIfNull<ITransfer>();
         ProtocolHandler.RegisterExecutingProtocol();
         InitStateMachine();
     }

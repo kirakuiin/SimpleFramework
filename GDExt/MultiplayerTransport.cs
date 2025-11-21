@@ -13,7 +13,7 @@ namespace SimpleFramework.GDExt;
 /// <summary>
 /// Godot中实现<see cref="ITransport"/>接口的对象
 /// </summary>
-public partial class MultiplayerTransport : Node, ITransport
+public partial class MultiplayerTransport : Node, ITransport, ITransfer
 {
     /// <summary>
     /// 客户端连接的状态

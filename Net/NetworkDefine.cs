@@ -63,6 +63,16 @@ public static class NetworkUtil
 
 
 /// <summary>
+/// 网络常量定义 
+/// </summary>
+public static class NetDefine
+{
+    public const ushort ConnGuard = 0xc001;
+
+    public const ushort SyncGuard = 0xc002;
+}
+
+/// <summary>
 /// 网络模块的logger
 /// </summary>
 public static class NetLog

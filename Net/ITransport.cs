@@ -1,4 +1,22 @@
-﻿namespace SimpleFramework.Net.Connection;
+﻿namespace SimpleFramework.Net;
+
+/// <summary>
+/// 传输时常见问题的定义
+/// </summary>
+public enum TransportReason
+{
+    Ok = 0,  // 成功
+    Failed = 1,  // 通用失败
+    Timeout,  // 超时
+    AlreadyCreate, // 已经创建
+    CantConnect,  // 无法连接
+    ServerClosed,  // 服务端关闭
+    ServerRejected,  // 服务端拒绝
+    AuthenticationFailed,  // 认证失败
+    ReachMaxConnections,  // 连接已满
+    ReconnectFailed,  // 重连失败
+}
+
 
 /// <summary>
 /// 代表了一个实现了底层网络连接功能的对象
@@ -39,13 +57,6 @@ public interface ITransport: IUtility
     /// </summary>
     /// <returns></returns>
     void StopClient();
-    
-    /// <summary>
-    /// 向指定的客户端发送字节数据
-    /// </summary>
-    /// <param name="clientId">远端客户端id</param>
-    /// <param name="data">字节流数据</param>
-    void SendData(long clientId, byte[] data);
 
     /// <summary>
     /// 是否处于连接中
@@ -100,27 +111,23 @@ public interface ITransport: IUtility
     /// <remarks>仅自身为客户端且非自身主动断开时触发</remarks>
     /// </summary>
     event Action<TransportReason> ServerDisconnected;
+}
+
+
+/// <summary>
+/// 底层数据传输工具
+/// </summary>
+public interface ITransfer: IUtility
+{
+    /// <summary>
+    /// 向指定的客户端发送字节数据
+    /// </summary>
+    /// <param name="clientId">远端客户端id</param>
+    /// <param name="data">字节流数据</param>
+    void SendData(long clientId, byte[] data);
 
     /// <summary>
     /// 收到远端的数据
     /// </summary>
     event Action<byte[]> DataReceived;
-}
-
-
-/// <summary>
-/// 传输时常见问题的定义
-/// </summary>
-public enum TransportReason
-{
-    Ok = 0,  // 成功
-    Failed = 1,  // 通用失败
-    Timeout,  // 超时
-    AlreadyCreate, // 已经创建
-    CantConnect,  // 无法连接
-    ServerClosed,  // 服务端关闭
-    ServerRejected,  // 服务端拒绝
-    AuthenticationFailed,  // 认证失败
-    ReachMaxConnections,  // 连接已满
-    ReconnectFailed,  // 重连失败
 }

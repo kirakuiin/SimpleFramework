@@ -137,7 +137,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
 
     /// <summary>
     /// 将带有<see cref="ProtocolAttribute"/>特性的结构体对象打包
-    /// <para>数据包的结构为 [mainId][subId][data_len][0xcafe][data_byte][0xcafe]
+    /// <para>数据包的结构为 [guard][mainId][subId][data_len][data_byte][guard]
     /// </para>
     /// </summary>
     /// <param name="message">结构体对象</param>
@@ -156,11 +156,11 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
         }
         using var ms = new MemoryStream();
         using var bw = new BinaryWriter(ms);
+        bw.Write(GuardValue);
         bw.Write(attribute.MainId);
         bw.Write(attribute.SubId);
         var data = SerializeTool.SerializeBytes(message);
         bw.Write(data.Length);
-        bw.Write(GuardValue);
         bw.Write(data);
         bw.Write(GuardValue);
         output = ms.ToArray();
@@ -182,16 +182,14 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
         byte[] bytes;
         try
         {
+            var beforeGuard = br.ReadUInt16();
+            if (beforeGuard != GuardValue) return false;
             mainId = br.ReadUInt16();
             subId = br.ReadUInt16();
             var length = br.ReadInt32();
-            var beforeGuard = br.ReadUInt16();
             bytes = br.ReadBytes(length);
             var afterGuard = br.ReadUInt16();
-            if (beforeGuard != GuardValue || afterGuard != GuardValue)
-            {
-                return false;
-            }
+            if (afterGuard != GuardValue) return false;
         }
         catch (EndOfStreamException)
         {

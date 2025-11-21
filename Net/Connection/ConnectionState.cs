@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using SimpleFramework.Patterns;
+﻿using SimpleFramework.Patterns;
 using SimpleFramework.Utility;
 
 namespace SimpleFramework.Net.Connection;
@@ -90,7 +89,7 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
     public override void Enter()
     {
         _connectionIds.Clear();
-        Model.Transport.DataReceived += OnDataReceived;
+        Model.Transfer.DataReceived += OnDataReceived;
         Model.Transport.PeerConnected += OnPeerConnected;
         Model.Transport.PeerDisconnected += OnPeerDisconnected;
         Model.ProtocolHandler.RegisterHandler<RequestApproveProtocol>(OnRequestApprove);
@@ -174,7 +173,7 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
     public override void Exit()
     {
         _connectionIds.Clear();
-        Model.Transport.DataReceived -= OnDataReceived;
+        Model.Transfer.DataReceived -= OnDataReceived;
         Model.Transport.PeerConnected -= OnPeerConnected;
         Model.Transport.PeerDisconnected -= OnPeerDisconnected;
         Model.ProtocolHandler.UnRegisterHandler<RequestApproveProtocol>();
@@ -195,8 +194,8 @@ internal class ConnectingState(ConnectionModel model) : ConnState(model)
         
         Model.Transport.ConnectionDone += OnConnectionDone;
         Model.Transport.ServerDisconnected += OnServerDisconnected;
-        Model.Transport.DataReceived += OnDataReceived;
         Model.ProtocolHandler.RegisterHandler<ResponseApproveProtocol>(OnResponseApprove);
+        Model.Transfer.DataReceived += OnDataReceived;
     }
 
     public override void Update(float delta)
@@ -282,8 +281,8 @@ internal class ConnectingState(ConnectionModel model) : ConnState(model)
         
         Model.Transport.ConnectionDone -= OnConnectionDone;
         Model.Transport.ServerDisconnected -= OnServerDisconnected;
-        Model.Transport.DataReceived -= OnDataReceived;
         Model.ProtocolHandler.UnRegisterHandler<ResponseApproveProtocol>();
+        Model.Transfer.DataReceived -= OnDataReceived;
     }
 }
 
@@ -292,8 +291,8 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
     
     public override void Enter()
     {
+        Model.Transfer.DataReceived += OnDataReceived;
         Model.Transport.ServerDisconnected += OnServerDisconnected;
-        Model.Transport.DataReceived += OnDataReceived;
         Model.Transport.PeerDisconnected += OnPeerDisconnected;
         Model.ProtocolHandler.RegisterHandler<PeerConnectProtocol>(OnPeerConnected);
     }
@@ -332,8 +331,8 @@ internal class ConnectedState(ConnectionModel model) : ConnState(model)
 
     public override void Exit()
     {
+        Model.Transfer.DataReceived -= OnDataReceived;
         Model.Transport.ServerDisconnected -= OnServerDisconnected;
-        Model.Transport.DataReceived -= OnDataReceived;
         Model.Transport.PeerDisconnected -= OnPeerDisconnected;
         Model.ProtocolHandler.UnRegisterHandler<PeerConnectProtocol>();
     }
