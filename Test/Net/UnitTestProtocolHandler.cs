@@ -45,10 +45,10 @@ public static class ProtocolHandlerTestHelper
 
         try
         {
+            beforeGuard = br.ReadUInt16();
             mainId = br.ReadUInt16();
             subId = br.ReadUInt16();
             dataLength = br.ReadInt32();
-            beforeGuard = br.ReadUInt16();
 
             if (data.Length < 12 + dataLength)
                 return false;
@@ -297,10 +297,10 @@ public class TestProtocolHandlerPacking
         // 验证数据包结构
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
+        var guard1 = br.ReadUInt16();
         var mainId = br.ReadUInt16();
         var subId = br.ReadUInt16();
         var length = br.ReadInt32();
-        var guard1 = br.ReadUInt16();
 
         Assert.That(mainId, Is.EqualTo(1));
         Assert.That(subId, Is.EqualTo(1));
@@ -329,6 +329,7 @@ public class TestProtocolHandlerPacking
         // 验证协议ID
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
+        br.ReadUInt16();
         var mainId = br.ReadUInt16();
         var subId = br.ReadUInt16();
 
@@ -357,6 +358,7 @@ public class TestProtocolHandlerPacking
         // 验证协议ID
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
+        br.ReadUInt16();
         var mainId = br.ReadUInt16();
         var subId = br.ReadUInt16();
 
@@ -392,10 +394,10 @@ public class TestProtocolHandlerPacking
 
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
+        var beforeGuard = br.ReadUInt16();
         br.ReadUInt16(); // mainId
         br.ReadUInt16(); // subId
         var length = br.ReadInt32();
-        var beforeGuard = br.ReadUInt16();
         br.ReadBytes(length); // data
         var afterGuard = br.ReadUInt16();
 
