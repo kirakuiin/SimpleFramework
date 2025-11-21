@@ -28,11 +28,6 @@ public static class ConnDefine
     /// 连接超时时间(ms)
     /// </summary>
     public const int Timeout = 5000;
-
-    /// <summary>
-    /// guard value
-    /// </summary>
-    public const ushort ConnGuard = 0xc001;
 }
 
 
