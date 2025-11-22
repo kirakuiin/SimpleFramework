@@ -17,7 +17,7 @@ public static class FileTool
     /// <typeparam name="T"></typeparam>
     public static void SaveAsJson<T>(T obj, string filePath)
     {
-        var result = SerializeTool.Serialize(obj, DefaultOptions);
+        var result = SerializeUtil.Serialize(obj, DefaultOptions);
         try
         {
             using var fs = new FileStream(filePath, FileMode.Create);
@@ -49,7 +49,7 @@ public static class FileTool
         {
             using var fs = new FileStream(filePath, FileMode.Open);
             using var sr = new StreamReader(fs);
-            obj = SerializeTool.Deserialize<T>(sr.ReadToEnd(), DefaultOptions);
+            obj = SerializeUtil.Deserialize<T>(sr.ReadToEnd(), DefaultOptions);
             return true;
         }
         catch (Exception e)
@@ -69,7 +69,7 @@ public static class FileTool
     {
         try
         {
-            var bytes = SerializeTool.SerializeBytes(obj);
+            var bytes = SerializeUtil.SerializeBytes(obj);
             using var fs = new FileStream(filePath, FileMode.Create);
             fs.Write(bytes, 0, bytes.Length);
         }
@@ -102,7 +102,7 @@ public static class FileTool
             using var ms = new MemoryStream();
             fs.CopyTo(ms);
             var bytes = ms.ToArray();
-            obj = SerializeTool.Deserialize<T>(bytes);
+            obj = SerializeUtil.Deserialize<T>(bytes);
             return true;
         }
         catch (Exception e)

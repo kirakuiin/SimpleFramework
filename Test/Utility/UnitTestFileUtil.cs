@@ -9,7 +9,7 @@ namespace Test.Utility;
 /// FileTool 工具类的单元测试
 /// </summary>
 [TestFixture]
-public class TestFileTool
+public class TestFileUtil
 {
     private string _testDirPath;
     private TestData _testData;
@@ -52,8 +52,8 @@ public class TestFileTool
         string testFile = Path.Combine(_testDirPath, "test.json");
 
         // Act
-        FileTool.SaveAsJson(_testData, testFile);
-        bool loadResult = FileTool.LoadFromJson(testFile, out TestData loadedData);
+        FileUtil.SaveAsJson(_testData, testFile);
+        bool loadResult = FileUtil.LoadFromJson(testFile, out TestData loadedData);
 
         // Assert
         Assert.IsTrue(loadResult);
@@ -72,8 +72,8 @@ public class TestFileTool
         string testFile = Path.Combine(_testDirPath, "test.bin");
 
         // Act
-        FileTool.SaveAsBinary(_testData, testFile);
-        bool loadResult = FileTool.LoadFromBinary(testFile, out TestData loadedData);
+        FileUtil.SaveAsBinary(_testData, testFile);
+        bool loadResult = FileUtil.LoadFromBinary(testFile, out TestData loadedData);
 
         // Assert
         Assert.IsTrue(loadResult);
@@ -92,8 +92,8 @@ public class TestFileTool
         string nonExistentFile = Path.Combine(_testDirPath, "nonexistent.json");
 
         // Act
-        bool jsonResult = FileTool.LoadFromJson(nonExistentFile, out TestData jsonData);
-        bool binaryResult = FileTool.LoadFromBinary(nonExistentFile, out TestData binaryData);
+        bool jsonResult = FileUtil.LoadFromJson(nonExistentFile, out TestData jsonData);
+        bool binaryResult = FileUtil.LoadFromBinary(nonExistentFile, out TestData binaryData);
 
         // Assert
         Assert.IsFalse(jsonResult);
@@ -127,11 +127,11 @@ public class TestFileTool
         string binaryFile = Path.Combine(_testDirPath, "complex.bin");
 
         // Act
-        FileTool.SaveAsJson(complexData, jsonFile);
-        bool jsonLoaded = FileTool.LoadFromJson(jsonFile, out ComplexTestData loadedFromJson);
+        FileUtil.SaveAsJson(complexData, jsonFile);
+        bool jsonLoaded = FileUtil.LoadFromJson(jsonFile, out ComplexTestData loadedFromJson);
 
-        FileTool.SaveAsBinary(complexData, binaryFile);
-        bool binaryLoaded = FileTool.LoadFromBinary(binaryFile, out ComplexTestData loadedFromBinary);
+        FileUtil.SaveAsBinary(complexData, binaryFile);
+        bool binaryLoaded = FileUtil.LoadFromBinary(binaryFile, out ComplexTestData loadedFromBinary);
 
         // Assert
         Assert.IsTrue(jsonLoaded);
@@ -158,9 +158,9 @@ public class TestFileTool
         var newData = new TestData { Id = 999, Name = "NewData", IsActive = true, Score = 100.0 };
 
         // Act
-        FileTool.SaveAsJson(originalData, testFile);
-        FileTool.SaveAsJson(newData, testFile); // 覆盖写入
-        bool loadResult = FileTool.LoadFromJson(testFile, out TestData loadedData);
+        FileUtil.SaveAsJson(originalData, testFile);
+        FileUtil.SaveAsJson(newData, testFile); // 覆盖写入
+        bool loadResult = FileUtil.LoadFromJson(testFile, out TestData loadedData);
 
         // Assert
         Assert.IsTrue(loadResult);

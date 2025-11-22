@@ -8,7 +8,7 @@ using SimpleFramework.Utility;
 namespace Test.Utility;
 
 [TestFixture]
-public class TestTaskTool
+public class TestTaskUtil
 {
     [Test]
     public async Task TestWaitUntilPredicateBecomesTrue()
@@ -24,7 +24,7 @@ public class TestTaskTool
         });
 
         // 等待谓词变为true
-        await TaskTool.WaitUntil(() => predicateTriggered, 5000, 50);
+        await TaskUtil.WaitUntil(() => predicateTriggered, 5000, 50);
 
         var elapsed = DateTime.Now - startTime;
 
@@ -39,7 +39,7 @@ public class TestTaskTool
         var startTime = DateTime.Now;
 
         // 谓词已经为true，应该立即返回
-        await TaskTool.WaitUntil(() => true, 5000, 100);
+        await TaskUtil.WaitUntil(() => true, 5000, 100);
 
         var elapsed = DateTime.Now - startTime;
 
@@ -60,7 +60,7 @@ public class TestTaskTool
             counter = 10;
         });
 
-        await TaskTool.WaitUntil(() => counter == 10, 5000, 50);
+        await TaskUtil.WaitUntil(() => counter == 10, 5000, 50);
 
         var elapsed = DateTime.Now - startTime;
 
@@ -82,7 +82,7 @@ public class TestTaskTool
         });
 
         // 使用较长的检查间隔
-        await TaskTool.WaitUntil(() => predicateTriggered, 5000, 150);
+        await TaskUtil.WaitUntil(() => predicateTriggered, 5000, 150);
 
         var elapsed = DateTime.Now - startTime;
 
@@ -108,7 +108,7 @@ public class TestTaskTool
         });
 
         // 等待所有元素被设置
-        await TaskTool.WaitUntil(() => setCount == 5, 5000, 50);
+        await TaskUtil.WaitUntil(() => setCount == 5, 5000, 50);
 
         // 验证所有数字都被正确设置
         for (int i = 0; i < 5; i++)
@@ -124,7 +124,7 @@ public class TestTaskTool
 
         // 谓词在前几次会抛出异常，之后返回true
         Assert.ThrowsAsync<InvalidOperationException>(
-        () => TaskTool.WaitUntil(() =>
+        () => TaskUtil.WaitUntil(() =>
         {
             attempts++;
             if (attempts < 3)
@@ -143,7 +143,7 @@ public class TestTaskTool
         var startTime = DateTime.Now;
 
         // 创建一个永远不会为真的谓词，使用短超时
-        await TaskTool.WaitUntil(() => false, 200, 50);
+        await TaskUtil.WaitUntil(() => false, 200, 50);
 
         var elapsed = DateTime.Now - startTime;
 
@@ -166,12 +166,12 @@ public class TestTaskTool
         });
 
         // 第一次等待
-        await TaskTool.WaitUntil(() => state1, 5000, 30);
+        await TaskUtil.WaitUntil(() => state1, 5000, 30);
         Assert.IsTrue(state1);
         Assert.IsFalse(state2);
 
         // 第二次等待
-        await TaskTool.WaitUntil(() => state2, 5000, 30);
+        await TaskUtil.WaitUntil(() => state2, 5000, 30);
         Assert.IsTrue(state1);
         Assert.IsTrue(state2);
     }
@@ -187,7 +187,7 @@ public class TestTaskTool
         {
             tasks.Add(Task.Run(async () =>
             {
-                await TaskTool.WaitUntil(() => counter >= 3, 5000, 50);
+                await TaskUtil.WaitUntil(() => counter >= 3, 5000, 50);
             }));
         }
 

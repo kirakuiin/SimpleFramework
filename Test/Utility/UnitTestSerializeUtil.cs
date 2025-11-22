@@ -4,15 +4,15 @@ using SimpleFramework.Utility;
 namespace Test.Utility;
 
 [TestFixture]
-public class TestSerializeTool
+public class TestSerializeUtil
 {
     [Test]
     public void TestStrSerialize()
     {
         var msg = new Message{Value = 1, Name = "Test", IsTrue = false};
         
-        var result = SerializeTool.Serialize(msg);
-        var finalRes = SerializeTool.Deserialize<Message>(result);
+        var result = SerializeUtil.Serialize(msg);
+        var finalRes = SerializeUtil.Deserialize<Message>(result);
         
         Assert.AreEqual(msg.Value, finalRes.Value);
         Assert.AreEqual(msg.Name, finalRes.Name);
@@ -23,9 +23,9 @@ public class TestSerializeTool
     public void TestBinarySerialize()
     {
         var msg = new Message{Value = 1, Name = "Test", IsTrue = true};
-        var result = SerializeTool.SerializeBytes(msg);
+        var result = SerializeUtil.SerializeBytes(msg);
         
-        var finalRes = SerializeTool.Deserialize<Message>(result);
+        var finalRes = SerializeUtil.Deserialize<Message>(result);
         Assert.AreEqual(msg.Value, finalRes.Value);
         Assert.AreEqual(msg.Name, finalRes.Name);
         Assert.IsTrue(finalRes.IsTrue);
@@ -35,9 +35,9 @@ public class TestSerializeTool
     public void TestRuntimeSerialize()
     {
         var msg = new Message{Value = 1, Name = "Test", IsTrue = true};
-        var result = SerializeTool.SerializeBytes(msg);
+        var result = SerializeUtil.SerializeBytes(msg);
         
-        var finalRes = (Message)SerializeTool.Deserialize(result, typeof(Message));
+        var finalRes = (Message)SerializeUtil.Deserialize(result, typeof(Message));
         Assert.AreEqual(msg.Value, finalRes.Value);
         Assert.AreEqual(msg.Name, finalRes.Name);
         Assert.IsTrue(finalRes.IsTrue);
