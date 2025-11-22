@@ -6,7 +6,7 @@ namespace SimpleFramework.Utility;
 /// <summary>
 /// 序列化工具。
 /// </summary>
-public class SerializeTool
+public class SerializeUtil
 {
     private static JsonSerializerOptions DefaultOptions => new() {IncludeFields = true};
     

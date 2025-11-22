@@ -2,18 +2,20 @@
 
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using Godot;
 using SimpleFramework.Net;
 using SimpleFramework.Net.Connection;
 using System.Threading.Tasks;
+using SimpleFramework.Utility;
 using Environment = System.Environment;
 
 namespace SimpleFramework.GDExt;
 
 /// <summary>
-/// Godot中实现<see cref="ITransport"/>接口的对象
+/// Godot中实现<see cref="ITransport"/>, <see cref="ITransfer"/>, <see cref="INetStatus"/>接口的对象
 /// </summary>
-public partial class MultiplayerTransport : Node, ITransport, ITransfer
+public partial class MultiplayerTransport : Node, ITransport, ITransfer, INetStatus
 {
     /// <summary>
     /// 客户端连接的状态
@@ -37,6 +39,8 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer
     private const int AwaitInterval = 100;
     
     private EConnState _connState = EConnState.Idle;
+    
+    private readonly ConcurrentDictionary<(long, long), int> _pings = new();
 
     public override void _Ready()
     {
@@ -47,6 +51,7 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer
         Multiplayer.ConnectionFailed += OnConnectionFail;
         Multiplayer.ServerDisconnected += OnServerDisconnected;
         Multiplayer.MultiplayerPeer = null;
+        _pings.Clear();
         NetLog.Info("Transport初始化完毕");
     }
 
@@ -59,6 +64,7 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer
         Multiplayer.ConnectionFailed -= OnConnectionFail;
         Multiplayer.ServerDisconnected -= OnServerDisconnected;
         Multiplayer.MultiplayerPeer?.Close();
+        _pings.Clear();
         NetLog.Info("Transport释放完毕");
     }
 
@@ -113,7 +119,7 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer
 
         switch (error)
         {
-            case Godot.Error.Ok:
+            case Error.Ok:
                 Multiplayer.MultiplayerPeer = peer;
                 ServerCreated?.Invoke(TransportReason.Ok);
                 return Task.FromResult(TransportReason.Ok);
@@ -239,6 +245,39 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer
         DataReceived?.Invoke(data);
     }
 
+    public async Task<int> GetLatency(long clientId)
+    {
+        if (!IsConnected() || clientId == ClientId) return 0;
+        var curTime = TimeUtil.GetUtcMilliseconds();
+        var key = (clientId, curTime);
+        _pings[key] = 0;
+        RpcId(clientId, nameof(_SendPingRpc), curTime);
+        await TaskUtil.WaitUntil(() => _pings[key] > 0, NetDefine.PingTimeout);
+        var latency = Math.Min(NetDefine.PingTimeout, _pings[key]);
+        _pings.TryRemove(key, out _);
+        LatencyUpdated?.Invoke(clientId, latency);
+        return latency;
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferChannel = Channel.System)]
+    private void _SendPingRpc(long sendTime)
+    {
+        var senderId = Multiplayer.GetRemoteSenderId();
+        RpcId(senderId, nameof(_SendPingBackRpc), sendTime);
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferChannel = Channel.System)]
+    private void _SendPingBackRpc(long beginTime)
+    {
+        var senderId = (long)Multiplayer.GetRemoteSenderId();
+        var span = TimeUtil.GetUtcTimeSpanByNow(beginTime);
+        var key = (senderId, beginTime);
+        if (_pings.ContainsKey(key))
+        {
+            _pings[key] = (int)(span.TotalMilliseconds/2);
+        }
+    }
+
     public bool IsConnected()
     {
         return Multiplayer.HasMultiplayerPeer() && Multiplayer.MultiplayerPeer.GetConnectionStatus() ==
@@ -260,6 +299,7 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer
     public event Action<TransportReason>? ConnectionDone;
     public event Action<TransportReason>? ServerDisconnected;
     public event Action<byte[]>? DataReceived;
+    public event Action<long, int>? LatencyUpdated;
 }
 
 #endif

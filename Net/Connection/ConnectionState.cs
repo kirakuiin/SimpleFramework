@@ -249,7 +249,7 @@ internal class ConnectingState(ConnectionModel model) : ConnState(model)
     protected virtual async Task StartTimeoutTimer()
     {
         var timeTick = CurTick;
-        await TaskTool.WaitUntil(() => IsReceiveApprove, Model.ClientConfig.Timeout);
+        await TaskUtil.WaitUntil(() => IsReceiveApprove, Model.ClientConfig.Timeout);
         if (!IsTimerExpired(timeTick) && !_isApproved)
         {
             Dispatch(ConnEvent.Stop);
@@ -386,7 +386,7 @@ internal class ReconnectingState(ConnectionModel model) : ConnectingState(model)
     protected override async Task StartTimeoutTimer()
     {
         var timeTick = CurTick;
-        await TaskTool.WaitUntil(() => IsReceiveApprove, Model.ClientConfig.Timeout);
+        await TaskUtil.WaitUntil(() => IsReceiveApprove, Model.ClientConfig.Timeout);
         // 仅在服务端未回复状态的状态下重连
         if (!IsTimerExpired(timeTick) && !IsReceiveApprove)
         {

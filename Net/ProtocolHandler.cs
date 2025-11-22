@@ -2,7 +2,7 @@
 using SimpleFramework.Collections;
 using SimpleFramework.Utility;
 
-namespace SimpleFramework.Net.Connection;
+namespace SimpleFramework.Net;
 
 /// <summary>
 /// 用来注册网络协议的处理函数
@@ -31,7 +31,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
     /// </summary>
     /// <param name="handler"></param>
     /// <typeparam name="T"></typeparam>
-    public void RegisterHandler<T>(Action<T> handler) where T : struct
+    public void RegisterHandler<T>(Action<T> handler)
     {
         try
         {
@@ -68,7 +68,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
     /// 取消注册某个协议的处理函数
     /// </summary>
     /// <typeparam name="T"></typeparam>
-    public void UnRegisterHandler<T>() where T : struct
+    public void UnRegisterHandler<T>()
     {
         var type = typeof(T);
 
@@ -144,7 +144,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
     /// <param name="output">输出的byte数组</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>是否成功</returns>
-    public bool PackData<T>(T message, out byte[] output) where T : struct
+    public bool PackData<T>(T message, out byte[] output)
     {
         var type = typeof(T);
         var attribute = type.GetCustomAttribute<ProtocolAttribute>();
@@ -159,7 +159,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
         bw.Write(GuardValue);
         bw.Write(attribute.MainId);
         bw.Write(attribute.SubId);
-        var data = SerializeTool.SerializeBytes(message);
+        var data = SerializeUtil.SerializeBytes(message);
         bw.Write(data.Length);
         bw.Write(data);
         bw.Write(GuardValue);
@@ -208,7 +208,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
             return false;
         }
         var type = _protocols[mainId][subId];
-        handler.Invoke(SerializeTool.Deserialize(bytes, type));
+        handler.Invoke(SerializeUtil.Deserialize(bytes, type));
         return true;
     }
 }

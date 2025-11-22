@@ -1,6 +1,6 @@
 ﻿namespace SimpleFramework.Utility;
 
-public static class TaskTool
+public static class TaskUtil
 {
     /// <summary>
     /// 等待谓词为真时返回

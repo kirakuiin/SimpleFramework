@@ -131,3 +131,22 @@ public interface ITransfer: IUtility
     /// </summary>
     event Action<byte[]> DataReceived;
 }
+
+
+/// <summary>
+/// 获取网络状态
+/// </summary>
+public interface INetStatus : IUtility
+{
+    /// <summary>
+    /// 获取到指定peer的延迟
+    /// </summary>
+    /// <param name="clientId"></param>
+    /// <returns>延迟(ms)</returns>
+    Task<int> GetLatency(long clientId);
+    
+    /// <summary>
+    /// 延迟更新时触发(clientId, latency(ms))
+    /// </summary>
+    event Action<long, int> LatencyUpdated;
+}

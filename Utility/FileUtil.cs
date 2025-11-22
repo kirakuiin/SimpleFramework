@@ -5,7 +5,7 @@ namespace SimpleFramework.Utility;
 /// <summary>
 /// 文件读写工具, 提供了常用的文件读写接口
 /// </summary>
-public static class FileTool
+public static class FileUtil
 {
     private static readonly JsonSerializerOptions DefaultOptions = new () { WriteIndented = true, IncludeFields = true };
     

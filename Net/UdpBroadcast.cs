@@ -68,7 +68,7 @@ public class BroadcastSender<T> : Disposable where T : struct
     public int Broadcast(T message)
     {
         if (IsDisposed) throw new ObjectDisposedException(nameof(BroadcastSender<T>));
-        var data = SerializeTool.SerializeBytes(message);
+        var data = SerializeUtil.SerializeBytes(message);
         return _udpSender.Send(data, data.Length, _endPoint);
     }
 
@@ -333,7 +333,7 @@ public class BroadcastListener<T> : Disposable where T : struct
     private async Task ProcessNextMessage(BroadcastTaskInfo taskInfo)
     {
         var package = await _receiver.ReceiveAsync(taskInfo.CancellationSource.Token);
-        var message = SerializeTool.Deserialize<T>(package.Buffer);
+        var message = SerializeUtil.Deserialize<T>(package.Buffer);
         OnReceivedBroadcast?.Invoke(package.RemoteEndPoint.Address, message);
     }
 

@@ -9,8 +9,7 @@ public static class TimeUtil
     /// <returns></returns>
     public static int ToMs(int seconds)
     {
-        var span = new TimeSpan(0, 0, seconds);
-        return (int)span.TotalMilliseconds;
+        return seconds * 1000;
     }
 
     /// <summary>

@@ -70,6 +70,8 @@ public static class NetDefine
     public const ushort ConnGuard = 0xc001;
 
     public const ushort SyncGuard = 0xc002;
+    
+    public const int PingTimeout = 999;  // ping超时时间
 }
 
 /// <summary>
@@ -118,7 +120,7 @@ public static class MainProtocol
 /// </summary>
 /// <param name="mainId">主协议id</param>
 /// <param name="subId">子协议id</param>
-[AttributeUsage(AttributeTargets.Struct)]
+[AttributeUsage(AttributeTargets.Class|AttributeTargets.Struct)]
 public class ProtocolAttribute(ushort mainId, ushort subId) : Attribute
 {
     /// <summary>
