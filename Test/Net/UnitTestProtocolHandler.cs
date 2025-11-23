@@ -27,17 +27,16 @@ public static class ProtocolHandlerTestHelper
     }
 
     /// <summary>
-    /// 验证数据包格式的辅助方法
+    /// 验证数据包格式的辅助方法 - 基于类型哈希的新格式
     /// </summary>
-    public static bool ValidatePacketFormat(byte[] data, out ushort mainId, out ushort subId, out int dataLength, out ushort beforeGuard, out ushort afterGuard)
+    public static bool ValidatePacketFormat(byte[] data, out ulong typeHash, out int dataLength, out ushort beforeGuard, out ushort afterGuard)
     {
-        mainId = 0;
-        subId = 0;
+        typeHash = 0;
         dataLength = 0;
         beforeGuard = 0;
         afterGuard = 0;
 
-        if (data == null || data.Length < 12) // 最小包大小检查
+        if (data == null || data.Length < 16) // 最小包大小检查：2+8+4+2 = 16 bytes
             return false;
 
         using var ms = new MemoryStream(data);
@@ -46,11 +45,10 @@ public static class ProtocolHandlerTestHelper
         try
         {
             beforeGuard = br.ReadUInt16();
-            mainId = br.ReadUInt16();
-            subId = br.ReadUInt16();
+            typeHash = br.ReadUInt64();  // 读取类型哈希 (8 bytes)
             dataLength = br.ReadInt32();
 
-            if (data.Length < 12 + dataLength)
+            if (data.Length < 16 + dataLength)
                 return false;
 
             br.ReadBytes(dataLength);
@@ -62,6 +60,20 @@ public static class ProtocolHandlerTestHelper
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 验证数据包并返回类型哈希的十六进制字符串表示
+    /// </summary>
+    public static bool ValidatePacketFormatWithTypeHash(byte[] data, out string typeHashHex, out int dataLength, out ushort beforeGuard, out ushort afterGuard)
+    {
+        if (ValidatePacketFormat(data, out var typeHash, out dataLength, out beforeGuard, out afterGuard))
+        {
+            typeHashHex = $"0x{typeHash:X16}";
+            return true;
+        }
+        typeHashHex = null;
+        return false;
     }
 
     /// <summary>
@@ -80,7 +92,7 @@ public static class ProtocolHandlerTestHelper
 /// <summary>
 /// 用于测试重复协议的冲突协议
 /// </summary>
-[Protocol(1, 1)] // 与TestProtocol1相同ID
+[Protocol] // 与TestProtocol1相同ID
 public struct DuplicateProtocol
 {
     public string Message;
@@ -89,7 +101,7 @@ public struct DuplicateProtocol
 /// <summary>
 /// 测试用的简单协议结构体
 /// </summary>
-[Protocol(1, 1)]
+[Protocol]
 public struct TestProtocol1
 {
     public int Id;
@@ -99,7 +111,7 @@ public struct TestProtocol1
 /// <summary>
 /// 测试用的复杂数据协议结构体
 /// </summary>
-[Protocol(1, 2)]
+[Protocol]
 public struct TestProtocol2
 {
     public bool Flag;
@@ -110,7 +122,7 @@ public struct TestProtocol2
 /// <summary>
 /// 测试用的边界值协议结构体
 /// </summary>
-[Protocol(2, 1)]
+[Protocol]
 public struct TestProtocol3
 {
     public byte SmallValue;
@@ -118,7 +130,7 @@ public struct TestProtocol3
     public decimal DecimalValue;
 }
 
-[Protocol(3, 11)]
+[Protocol]
 public struct TestRequest(long id, string name)
 {
     public readonly long Id = id;
@@ -285,6 +297,7 @@ public class TestProtocolHandlerPacking
     {
         // Arrange
         var testProtocol = new TestProtocol1 { Id = 42, Name = "Basic Test" };
+        var expectedTypeHash = MiscUtil.TypeHash<TestProtocol1>();
 
         // Act
         var result = _handler.PackData(testProtocol, out var data);
@@ -292,20 +305,20 @@ public class TestProtocolHandlerPacking
         // Assert
         Assert.That(result, Is.True);
         Assert.That(data, Is.Not.Null);
-        Assert.That(data.Length, Is.GreaterThan(10)); // 至少包含协议头和数据
+        Assert.That(data.Length, Is.GreaterThan(16)); // 至少包含协议头和数据：2+8+4+2=16
 
         // 验证数据包结构
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
         var guard1 = br.ReadUInt16();
-        var mainId = br.ReadUInt16();
-        var subId = br.ReadUInt16();
+        var typeHash = br.ReadUInt64();  // 读取类型哈希
         var length = br.ReadInt32();
 
-        Assert.That(mainId, Is.EqualTo(1));
-        Assert.That(subId, Is.EqualTo(1));
-        Assert.That(length, Is.GreaterThan(0));
         Assert.That(guard1, Is.EqualTo(0xCafe));
+        Assert.That(typeHash, Is.EqualTo(expectedTypeHash));
+        Assert.That(length, Is.GreaterThan(0));
+
+        Console.WriteLine($"TestProtocol1 TypeHash: 0x{typeHash:X16}");
     }
 
     [Test]
@@ -318,6 +331,7 @@ public class TestProtocolHandlerPacking
             Value = 3.14159f,
             Timestamp = DateTime.Now.Ticks
         };
+        var expectedTypeHash = MiscUtil.TypeHash<TestProtocol2>();
 
         // Act
         var result = _handler.PackData(testProtocol, out var data);
@@ -326,15 +340,14 @@ public class TestProtocolHandlerPacking
         Assert.That(result, Is.True);
         Assert.That(data, Is.Not.Null);
 
-        // 验证协议ID
+        // 验证类型哈希
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
-        br.ReadUInt16();
-        var mainId = br.ReadUInt16();
-        var subId = br.ReadUInt16();
+        br.ReadUInt16(); // 跳过守卫值
+        var typeHash = br.ReadUInt64(); // 读取类型哈希
 
-        Assert.That(mainId, Is.EqualTo(1));
-        Assert.That(subId, Is.EqualTo(2));
+        Assert.That(typeHash, Is.EqualTo(expectedTypeHash));
+        Console.WriteLine($"TestProtocol2 TypeHash: 0x{typeHash:X16}");
     }
 
     [Test]
@@ -347,6 +360,7 @@ public class TestProtocolHandlerPacking
             LargeValue = double.MaxValue,
             DecimalValue = decimal.MinValue
         };
+        var expectedTypeHash = MiscUtil.TypeHash<TestProtocol3>();
 
         // Act
         var result = _handler.PackData(testProtocol, out var data);
@@ -355,15 +369,14 @@ public class TestProtocolHandlerPacking
         Assert.That(result, Is.True);
         Assert.That(data, Is.Not.Null);
 
-        // 验证协议ID
+        // 验证类型哈希
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
-        br.ReadUInt16();
-        var mainId = br.ReadUInt16();
-        var subId = br.ReadUInt16();
+        br.ReadUInt16(); // 跳过守卫值
+        var typeHash = br.ReadUInt64(); // 读取类型哈希
 
-        Assert.That(mainId, Is.EqualTo(2));
-        Assert.That(subId, Is.EqualTo(1));
+        Assert.That(typeHash, Is.EqualTo(expectedTypeHash));
+        Console.WriteLine($"TestProtocol3 TypeHash: 0x{typeHash:X16}");
     }
 
     [Test]
@@ -395,8 +408,7 @@ public class TestProtocolHandlerPacking
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
         var beforeGuard = br.ReadUInt16();
-        br.ReadUInt16(); // mainId
-        br.ReadUInt16(); // subId
+        br.ReadUInt64(); // typeHash (8 bytes)
         var length = br.ReadInt32();
         br.ReadBytes(length); // data
         var afterGuard = br.ReadUInt16();
@@ -449,8 +461,9 @@ public class TestProtocolHandlerHandling
         var testProtocol = new TestProtocol1 { Id = 1, Name = "Invalid Guard" };
         var packResult = _handler.PackData(testProtocol, out var data);
 
-        // 修改守卫值使其无效
-        data[8] = 0x00; // 修改第一个守卫值
+        // 修改守卫值使其无效 - 修改前守卫值（前2字节）
+        data[0] = 0x00;
+        data[1] = 0x00;
 
         // Act
         var handleResult = _handler.HandleData(data);
@@ -464,7 +477,7 @@ public class TestProtocolHandlerHandling
     public void TestHandleIncompleteData()
     {
         // Arrange
-        var incompleteData = new byte[] { 1, 0, 1, 0 }; // 只有mainId和subId，缺少长度和守卫值
+        var incompleteData = new byte[] { 0xFE, 0xCA }; // 只有前守卫值，缺少类型哈希、长度和后守卫值
 
         // Act
         var handleResult = _handler.HandleData(incompleteData);
@@ -692,21 +705,72 @@ public class TestProtocolHandlerIntegration
     [Test]
     public void TestProtocolAttributeUsage()
     {
-        // 测试ProtocolAttribute的正确使用
+        // 测试ProtocolAttribute的正确使用 - 现在只检查是否存在属性
         var testProtocolType = typeof(TestProtocol1);
         var attribute = testProtocolType.GetCustomAttribute<ProtocolAttribute>();
 
-        Assert.That(attribute, Is.Not.Null);
-        Assert.That(attribute.MainId, Is.EqualTo(1));
-        Assert.That(attribute.SubId, Is.EqualTo(1));
+        Assert.That(attribute, Is.Not.Null, "TestProtocol1 应该有 ProtocolAttribute");
 
         // 测试另一个协议
         var testProtocol2Type = typeof(TestProtocol2);
         var attribute2 = testProtocol2Type.GetCustomAttribute<ProtocolAttribute>();
 
-        Assert.That(attribute2, Is.Not.Null);
-        Assert.That(attribute2.MainId, Is.EqualTo(1));
-        Assert.That(attribute2.SubId, Is.EqualTo(2));
+        Assert.That(attribute2, Is.Not.Null, "TestProtocol2 应该有 ProtocolAttribute");
+
+        // 测试更多协议类型
+        var testProtocol3Type = typeof(TestProtocol3);
+        var attribute3 = testProtocol3Type.GetCustomAttribute<ProtocolAttribute>();
+        Assert.That(attribute3, Is.Not.Null, "TestProtocol3 应该有 ProtocolAttribute");
+
+        var testRequestType = typeof(TestRequest);
+        var attribute4 = testRequestType.GetCustomAttribute<ProtocolAttribute>();
+        Assert.That(attribute4, Is.Not.Null, "TestRequest 应该有 ProtocolAttribute");
+
+        // 测试重复协议类型 - 它们应该都有 ProtocolAttribute
+        var duplicateProtocolType = typeof(DuplicateProtocol);
+        var duplicateAttribute = duplicateProtocolType.GetCustomAttribute<ProtocolAttribute>();
+        Assert.That(duplicateAttribute, Is.Not.Null, "DuplicateProtocol 应该有 ProtocolAttribute");
+    }
+
+    [Test]
+    public void TestTypeHashUniqueness()
+    {
+        // 测试不同协议类型的哈希值应该是唯一的
+        var hash1 = MiscUtil.TypeHash<TestProtocol1>();
+        var hash2 = MiscUtil.TypeHash<TestProtocol2>();
+        var hash3 = MiscUtil.TypeHash<TestProtocol3>();
+        var hash4 = MiscUtil.TypeHash<TestRequest>();
+        var hash5 = MiscUtil.TypeHash<DuplicateProtocol>();
+
+        Console.WriteLine($"TestProtocol1 Hash: 0x{hash1:X16}");
+        Console.WriteLine($"TestProtocol2 Hash: 0x{hash2:X16}");
+        Console.WriteLine($"TestProtocol3 Hash: 0x{hash3:X16}");
+        Console.WriteLine($"TestRequest Hash: 0x{hash4:X16}");
+        Console.WriteLine($"DuplicateProtocol Hash: 0x{hash5:X16}");
+
+        // 所有哈希值都不应为零
+        Assert.That(hash1, Is.Not.EqualTo(0UL), "TestProtocol1 哈希值不应为零");
+        Assert.That(hash2, Is.Not.EqualTo(0UL), "TestProtocol2 哈希值不应为零");
+        Assert.That(hash3, Is.Not.EqualTo(0UL), "TestProtocol3 哈希值不应为零");
+        Assert.That(hash4, Is.Not.EqualTo(0UL), "TestRequest 哈希值不应为零");
+        Assert.That(hash5, Is.Not.EqualTo(0UL), "DuplicateProtocol 哈希值不应为零");
+
+        // 所有哈希值应该互不相同
+        var hashes = new[] { hash1, hash2, hash3, hash4, hash5 };
+        var distinctHashes = hashes.Distinct().ToArray();
+        Assert.That(distinctHashes.Length, Is.EqualTo(hashes.Length), "所有协议类型的哈希值应该互不相同");
+    }
+
+    [Test]
+    public void TestTypeHashConsistency()
+    {
+        // 测试相同类型的哈希值应该一致
+        var hash1 = MiscUtil.TypeHash<TestProtocol1>();
+        var hash2 = MiscUtil.TypeHash<TestProtocol1>();
+        var hash3 = MiscUtil.TypeHash<TestProtocol1>();
+
+        Assert.That(hash2, Is.EqualTo(hash1), "相同类型的不同调用应返回相同哈希值");
+        Assert.That(hash3, Is.EqualTo(hash1), "相同类型的不同调用应返回相同哈希值");
     }
 
     [Test]
@@ -720,6 +784,124 @@ public class TestProtocolHandlerIntegration
         });
         _handler.PackData(data, out var bytes);
         _handler.HandleData(bytes);
+    }
+
+    [Test]
+    public void TestGetAllRegisteredProtocols()
+    {
+        // Arrange & Act
+        var protocols = _handler.GetAllRegisteredProtocols();
+
+        // Assert
+        Assert.That(protocols, Is.Not.Null, "协议列表不应为null");
+
+        // 验证已注册的协议类型
+        var protocol1 = protocols.FirstOrDefault(p => p.TypeName.Contains("TestProtocol1"));
+        var protocol2 = protocols.FirstOrDefault(p => p.TypeName.Contains("TestProtocol2"));
+        var protocol3 = protocols.FirstOrDefault(p => p.TypeName.Contains("TestProtocol3"));
+
+        Assert.That(protocol1.TypeName, Is.Not.Null, "应包含 TestProtocol1");
+        Assert.That(protocol2.TypeName, Is.Not.Null, "应包含 TestProtocol2");
+        Assert.That(protocol3.TypeName, Is.Not.Null, "应包含 TestProtocol3");
+
+        // 验证哈希值不为零
+        Assert.That(protocol1.Hash, Is.Not.EqualTo(0UL), "TestProtocol1 哈希值不应为零");
+        Assert.That(protocol2.Hash, Is.Not.EqualTo(0UL), "TestProtocol2 哈希值不应为零");
+        Assert.That(protocol3.Hash, Is.Not.EqualTo(0UL), "TestProtocol3 哈希值不应为零");
+
+        // 验证程序集名称
+        Assert.That(protocol1.AssemblyName, Does.Contain("Test"), "程序集名称应包含 Test");
+
+        Console.WriteLine($"总协议数: {protocols.Count}");
+        foreach (var protocol in protocols)
+        {
+            Console.WriteLine($"{protocol}");
+        }
+    }
+
+    [Test]
+    public void TestGetProtocolInfoWithRegisteredType()
+    {
+        // Arrange
+        _handler.RegisterHandler<TestProtocol1>(p => { });
+
+        // Act
+        var info = _handler.GetProtocolInfo<TestProtocol1>();
+
+        // Assert
+        Assert.That(info.HasValue, Is.True, "已注册的协议应返回信息");
+
+        var protocolInfo = info.Value;
+        Assert.That(protocolInfo.TypeName, Does.Contain("TestProtocol1"));
+        Assert.That(protocolInfo.HasHandler, Is.True, "已注册处理函数的协议 HasHandler 应为 true");
+        Assert.That(protocolInfo.Hash, Is.Not.EqualTo(0UL));
+
+        Console.WriteLine($"TestProtocol1 Info: {protocolInfo}");
+    }
+
+    [Test]
+    public void TestGetProtocolInfoWithUnregisteredHandler()
+    {
+        // Arrange - 不注册处理函数
+
+        // Act
+        var info = _handler.GetProtocolInfo<TestProtocol1>();
+
+        // Assert
+        Assert.That(info.HasValue, Is.True, "已注册协议类型应返回信息");
+
+        var protocolInfo = info.Value;
+        Assert.That(protocolInfo.TypeName, Does.Contain("TestProtocol1"));
+        Assert.That(protocolInfo.HasHandler, Is.False, "未注册处理函数的协议 HasHandler 应为 false");
+
+        Console.WriteLine($"TestProtocol1 Info (无处理函数): {protocolInfo}");
+    }
+
+    [Test]
+    public void TestGetProtocolInfoWithUnregisteredType()
+    {
+        // Arrange - 使用未注册的类型
+
+        // Act
+        var info = _handler.GetProtocolInfo<InvalidProtocol>();
+
+        // Assert
+        Assert.That(info.HasValue, Is.False, "未注册的协议类型应返回 null");
+    }
+
+    [Test]
+    public void TestPrintDebugInfo()
+    {
+        // Arrange
+        _handler.RegisterHandler<TestProtocol1>(p => { });
+        _handler.RegisterHandler<TestProtocol2>(p => { });
+        // TestProtocol3 不注册处理函数
+
+        // Act & Assert - 确保不会抛出异常
+        Assert.DoesNotThrow(() => _handler.PrintDebugInfo(), "PrintDebugInfo 不应抛出异常");
+
+        Console.WriteLine("=== PrintDebugInfo 测试输出 ===");
+        _handler.PrintDebugInfo();
+        Console.WriteLine("=== 输出结束 ===");
+    }
+
+    [Test]
+    public void TestDebugInfoAfterClear()
+    {
+        // Arrange - 先注册协议
+        _handler.RegisterHandler<TestProtocol1>(p => { });
+        var protocolsBefore = _handler.GetAllRegisteredProtocols();
+
+        // Act - 清理所有注册信息
+        _handler.Clear();
+
+        // Assert
+        var protocolsAfter = _handler.GetAllRegisteredProtocols();
+        Assert.That(protocolsBefore.Count, Is.GreaterThan(0), "清理前应有协议");
+        Assert.That(protocolsAfter.Count, Is.EqualTo(0), "清理后不应有任何协议");
+
+        var info = _handler.GetProtocolInfo<TestProtocol1>();
+        Assert.That(info.HasValue, Is.False, "清理后查询协议应返回 null");
     }
 }
 
@@ -756,10 +938,11 @@ public class TestProtocolHandlerBoundaryAndPerformance
         Assert.That(data.Length, Is.GreaterThan(0), "打包后的数据长度应大于0");
 
         // 验证数据包格式
-        var isValidFormat = ProtocolHandlerTestHelper.ValidatePacketFormat(data, out var mainId, out var subId, out var dataLength, out var beforeGuard, out var afterGuard);
+        var isValidFormat = ProtocolHandlerTestHelper.ValidatePacketFormat(data, out var typeHash, out var dataLength, out var beforeGuard, out var afterGuard);
         Assert.That(isValidFormat, Is.True, "数据包格式应该有效");
-        Assert.That(mainId, Is.EqualTo(1), "主协议ID应该正确");
-        Assert.That(subId, Is.EqualTo(1), "子协议ID应该正确");
+
+        var expectedTypeHash = MiscUtil.TypeHash<TestProtocol1>();
+        Assert.That(typeHash, Is.EqualTo(expectedTypeHash), $"类型哈希应该正确，期望:0x{expectedTypeHash:X16}，实际:0x{typeHash:X16}");
         Assert.That(beforeGuard, Is.EqualTo(0xCafe), "前守卫值应该正确");
         Assert.That(afterGuard, Is.EqualTo(0xCafe), "后守卫值应该正确");
     }
@@ -850,12 +1033,11 @@ public class TestProtocolHandlerBoundaryAndPerformance
         var packResult = _handler.PackData(testData, out var data);
         Assert.That(packResult, Is.True, "数据打包应该成功");
 
-        // 修改守卫值
-        if (data.Length >= 12)
+        // 修改前守卫值
+        if (data.Length >= 2)
         {
-            // 修改第一个守卫值
-            data[8] = 0x00;
-            data[9] = 0x00;
+            data[0] = 0x00;
+            data[1] = 0x00;
         }
 
         // Act
