@@ -1,8 +1,15 @@
 ﻿using System.Reflection;
-using SimpleFramework.Collections;
 using SimpleFramework.Utility;
 
 namespace SimpleFramework.Net;
+
+
+/// <summary>
+/// 被此属性标记的结构体视作一个网络协议结构体
+/// </summary>
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
+public class ProtocolAttribute : Attribute;
+
 
 /// <summary>
 /// 用来注册网络协议的处理函数
@@ -17,14 +24,14 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
     private ushort GuardValue => guardValue;
     
     /// <summary>
-    /// 存储所有协议的类型
+    /// 存储所有协议的类型 - 基于类型哈希
     /// </summary>
-    private DefaultDict<ushort, Dictionary<ushort, Type>> _protocols = new(() => new Dictionary<ushort, Type>());
+    private Dictionary<ulong, Type> _protocols = new();
 
     /// <summary>
-    /// 包含处理函数
+    /// 包含处理函数 - 基于类型哈希
     /// </summary>
-    private DefaultDict<ushort, DefaultDict<ushort, Action<object>?>> _handlers = new(() => new DefaultDict<ushort, Action<object>?>(() => null));
+    private Dictionary<ulong, Action<object>?> _handlers = new();
 
     /// <summary>
     /// 注册协议的处理函数
@@ -36,27 +43,23 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
         try
         {
             var type = typeof(T);
+            var typeHash = MiscUtil.TypeHash<T>();
 
-            var attr = type.GetCustomAttribute<ProtocolAttribute>();
-            if (attr == null)
+            // 检查协议类型是否已注册
+            if (!_protocols.ContainsKey(typeHash))
             {
-                NetLog.Warning($"{type.Name}对象未实现{nameof(ProtocolAttribute)}特性");
+                NetLog.Warning($"协议 [{type.Name}][Hash:0x{typeHash:X16}]的类型信息尚未注册，请先调用{nameof(RegisterProtocol)}");
                 return;
             }
 
-            if (!_protocols[attr.MainId].ContainsKey(attr.SubId))
+            // 检查处理函数是否已存在
+            if (_handlers.ContainsKey(typeHash) && _handlers[typeHash] != null)
             {
-                NetLog.Warning($"协议 [{type.Name}][{attr.MainId}:{attr.SubId}]的类型信息尚未注册，请先调用{nameof(RegisterProtocol)}");
-                return;
+                NetLog.Warning($"协议 [{type.Name}][Hash:0x{typeHash:X16}] 处理函数已被注册，将被覆盖");
             }
 
-            if (_handlers[attr.MainId][attr.SubId] != null)
-            {
-                NetLog.Warning($"协议 [{type.Name}][{attr.MainId}:{attr.SubId}] 处理函数已被注册，将被覆盖");
-            }
-
-            _handlers[attr.MainId][attr.SubId] = data => handler((T)data);
-            NetLog.Info($"注册处理函数 [{type.Name}][{attr.MainId}:{attr.SubId}]");
+            _handlers[typeHash] = data => handler((T)data);
+            NetLog.Info($"注册处理函数 [{type.Name}][Hash:0x{typeHash:X16}]");
         }
         catch (Exception ex)
         {
@@ -71,17 +74,11 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
     public void UnRegisterHandler<T>()
     {
         var type = typeof(T);
+        var typeHash = MiscUtil.TypeHash<T>();
 
-        var attr = type.GetCustomAttribute<ProtocolAttribute>();
-        if (attr == null)
-        {
-            NetLog.Warning($"{type.Name}对象未实现{nameof(ProtocolAttribute)}特性");
-            return;
-        }
-
-        if (!_handlers[attr.MainId].ContainsKey(attr.SubId)) return;
-        _handlers[attr.MainId][attr.SubId] = null;
-        NetLog.Info($"[{type.Name}][{attr.MainId}:{attr.SubId}] 的 handler已被清除");
+        if (!_handlers.ContainsKey(typeHash)) return;
+        _handlers[typeHash] = null;
+        NetLog.Info($"[{type.Name}][Hash:0x{typeHash:X16}] 的 handler已被清除");
     }
 
     /// <summary>
@@ -94,25 +91,36 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
         {
             var types = assembly.GetTypes();
 
+            // 查找所有协议类型（带有 ProtocolAttribute 的值类型）
             var protocolTypes = types.Where(type =>
                 type is { IsValueType: true, IsEnum: false } &&
                 type.GetCustomAttribute<ProtocolAttribute>() != null);
 
-            // 3. 遍历并注册每个协议类型
+            // 遍历并注册每个协议类型
             foreach (var type in protocolTypes)
             {
-                var attr = type.GetCustomAttribute<ProtocolAttribute>();
+                var typeHash = MiscUtil.TypeHash(type);
 
-                // 检查是否已注册
-                if (_protocols[attr.MainId].ContainsKey(attr.SubId))
+                // 检查哈希冲突
+                if (_protocols.ContainsKey(typeHash))
                 {
-                    NetLog.Warning($"协议 [{attr.MainId}:{attr.SubId}] 已被注册，将被覆盖, {_protocols[attr.MainId][attr.SubId]
-                        .Name} => {type.Name}");
+                    var existingType = _protocols[typeHash];
+                    if (existingType != type)
+                    {
+                        NetLog.Error($"严重错误：类型哈希冲突！哈希值: 0x{typeHash:X16}");
+                        NetLog.Error($"现有类型: {existingType.FullName}");
+                        NetLog.Error($"新类型: {type.FullName}");
+                        continue;
+                    }
+                    else
+                    {
+                        NetLog.Warning($"协议 [{type.Name}][Hash:0x{typeHash:X16}] 已被注册，将被覆盖");
+                    }
                 }
 
                 // 注册到字典中
-                _protocols[attr.MainId][attr.SubId] = type;
-                NetLog.Info($"注册协议 [{type.Name}][{attr.MainId}:{attr.SubId}]");
+                _protocols[typeHash] = type;
+                NetLog.Info($"注册协议 [{type.Name}][Hash:0x{typeHash:X16}]");
             }
         }
         catch (ReflectionTypeLoadException ex)
@@ -137,7 +145,7 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
 
     /// <summary>
     /// 将带有<see cref="ProtocolAttribute"/>特性的结构体对象打包
-    /// <para>数据包的结构为 [guard][mainId][subId][data_len][data_byte][guard]
+    /// <para>数据包的结构为 [guard][typeHash(8bytes)][data_len][data_byte][guard]
     /// </para>
     /// </summary>
     /// <param name="message">结构体对象</param>
@@ -150,19 +158,23 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
         var attribute = type.GetCustomAttribute<ProtocolAttribute>();
         if (attribute == null)
         {
-            NetLog.Warning($"{type}的对象并未无特性{nameof(ProtocolAttribute)}");
+            NetLog.Warning($"{type}的对象并未实现{nameof(ProtocolAttribute)}特性");
             output = [];
             return false;
         }
+
+        var typeHash = MiscUtil.TypeHash<T>();
+
         using var ms = new MemoryStream();
         using var bw = new BinaryWriter(ms);
-        bw.Write(GuardValue);
-        bw.Write(attribute.MainId);
-        bw.Write(attribute.SubId);
+
+        bw.Write(GuardValue);                    // 前守卫值 (2 bytes)
+        bw.Write(typeHash);                      // 类型哈希 (8 bytes)
         var data = SerializeUtil.SerializeBytes(message);
-        bw.Write(data.Length);
-        bw.Write(data);
-        bw.Write(GuardValue);
+        bw.Write(data.Length);                   // 数据长度 (4 bytes)
+        bw.Write(data);                          // 实际数据
+        bw.Write(GuardValue);                    // 后守卫值 (2 bytes)
+
         output = ms.ToArray();
         return true;
     }
@@ -177,39 +189,169 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
     {
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
-        ushort mainId;
-        ushort subId;
+        ulong typeHash;
         byte[] bytes;
         try
         {
             var beforeGuard = br.ReadUInt16();
-            if (beforeGuard != GuardValue) return false;
-            mainId = br.ReadUInt16();
-            subId = br.ReadUInt16();
-            var length = br.ReadInt32();
-            bytes = br.ReadBytes(length);
+            if (beforeGuard != GuardValue)
+            {
+                NetLog.Warning("数据包前守卫值不匹配");
+                return false;
+            }
+
+            typeHash = br.ReadUInt64();             // 读取类型哈希 (8 bytes)
+            var length = br.ReadInt32();            // 读取数据长度 (4 bytes)
+            bytes = br.ReadBytes(length);           // 读取实际数据
             var afterGuard = br.ReadUInt16();
-            if (afterGuard != GuardValue) return false;
+            if (afterGuard != GuardValue)
+            {
+                NetLog.Warning("数据包后守卫值不匹配");
+                return false;
+            }
         }
         catch (EndOfStreamException)
         {
+            NetLog.Warning("数据包格式不完整");
             return false;
         }
-        
-        return DispatchProtocol(mainId, subId, bytes);
+
+        return DispatchProtocol(typeHash, bytes);
     }
 
-    private bool DispatchProtocol(ushort mainId, ushort subId, byte[] bytes)
+    private bool DispatchProtocol(ulong typeHash, byte[] bytes)
     {
-        var handler = _handlers[mainId][subId];
-        if (handler == null)
+        // 检查是否有对应的处理函数
+        if (!_handlers.ContainsKey(typeHash) || _handlers[typeHash] == null)
         {
-            NetLog.Warning($"未注册处理 {mainId}:{subId} 的处理函数");
+            NetLog.Warning($"未注册处理 Hash:0x{typeHash:X16} 的处理函数");
             return false;
         }
-        var type = _protocols[mainId][subId];
-        handler.Invoke(SerializeUtil.Deserialize(bytes, type));
-        return true;
+
+        // 获取协议类型
+        if (!_protocols.TryGetValue(typeHash, out var type))
+        {
+            NetLog.Error($"内部错误：找到处理函数但找不到协议类型 Hash:0x{typeHash:X16}");
+            return false;
+        }
+
+        var handler = _handlers[typeHash];
+
+        try
+        {
+            var deserializedData = SerializeUtil.Deserialize(bytes, type);
+            handler.Invoke(deserializedData);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            NetLog.Error($"处理协议数据时发生错误 Hash:0x{typeHash:X16} Type:{type.Name}", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 获取所有已注册的协议信息
+    /// </summary>
+    /// <returns>协议调试信息列表</returns>
+    public List<ProtocolDebugInfo> GetAllRegisteredProtocols()
+    {
+        var result = new List<ProtocolDebugInfo>();
+
+        foreach (var kvp in _protocols)
+        {
+            var typeHash = kvp.Key;
+            var type = kvp.Value;
+            var hasHandler = _handlers.ContainsKey(typeHash) && _handlers[typeHash] != null;
+
+            result.Add(new ProtocolDebugInfo
+            {
+                Hash = typeHash,
+                TypeName = type.FullName ?? type.Name,
+                AssemblyName = type.Assembly.GetName().Name!,
+                HasHandler = hasHandler,
+                RegisteredTime = DateTime.Now // 这里简化处理，实际可以在注册时记录时间
+            });
+        }
+
+        return result.OrderBy(info => info.Hash).ToList();
+    }
+
+    /// <summary>
+    /// 获取指定类型的协议信息
+    /// </summary>
+    /// <typeparam name="T">协议类型</typeparam>
+    /// <returns>协议调试信息，如果未注册则返回null</returns>
+    public ProtocolDebugInfo? GetProtocolInfo<T>()
+    {
+        return GetProtocolInfo(typeof(T));
+    }
+
+    /// <summary>
+    /// 获取指定类型的协议信息
+    /// </summary>
+    /// <param name="type">协议类型</param>
+    /// <returns>协议调试信息，如果未注册则返回null</returns>
+    public ProtocolDebugInfo? GetProtocolInfo(Type type)
+    {
+        var typeHash = MiscUtil.TypeHash(type);
+
+        if (!_protocols.ContainsKey(typeHash))
+        {
+            return null;
+        }
+
+        var hasHandler = _handlers.ContainsKey(typeHash) && _handlers[typeHash] != null;
+
+        return new ProtocolDebugInfo
+        {
+            Hash = typeHash,
+            TypeName = type.FullName ?? type.Name,
+            AssemblyName = type.Assembly.GetName().Name!,
+            HasHandler = hasHandler,
+            RegisteredTime = DateTime.Now
+        };
+    }
+
+    /// <summary>
+    /// 打印调试信息到控制台和日志
+    /// </summary>
+    public void PrintDebugInfo()
+    {
+        var allProtocols = GetAllRegisteredProtocols();
+        var withHandlers = allProtocols.Where(p => p.HasHandler).ToList();
+        var withoutHandlers = allProtocols.Where(p => !p.HasHandler).ToList();
+
+        NetLog.Info("=== ProtocolHandler 调试信息 ===");
+        NetLog.Info($"总协议数: {allProtocols.Count}");
+        NetLog.Info($"已注册处理函数: {withHandlers.Count}");
+        NetLog.Info($"未注册处理函数: {withoutHandlers.Count}");
+        NetLog.Info($"处理函数覆盖率: {(allProtocols.Count > 0 ? (double)withHandlers.Count / allProtocols.Count * 100 : 0):F1}%");
+
+        if (withHandlers.Count > 0)
+        {
+            NetLog.Info("\n✅ 已注册处理函数的协议:");
+            foreach (var protocol in withHandlers)
+            {
+                NetLog.Info($"  {protocol}");
+            }
+        }
+
+        if (withoutHandlers.Count > 0)
+        {
+            NetLog.Info("\n⚠️ 已注册但无处理函数的协议:");
+            foreach (var protocol in withoutHandlers)
+            {
+                NetLog.Info($"  {protocol}");
+            }
+        }
+
+        if (allProtocols.Count == 0)
+        {
+            NetLog.Info("未注册任何协议");
+        }
+
+        NetLog.Info("=== 调试信息结束 ===");
     }
 }
 
@@ -232,5 +374,42 @@ public static class Extensions
     public static void RegisterCallingProtocol(this ProtocolHandler handler)
     {
         handler.RegisterProtocol(Assembly.GetCallingAssembly());
+    }
+}
+
+
+/// <summary>
+/// 协议调试信息结构体
+/// </summary>
+public struct ProtocolDebugInfo
+{
+    /// <summary>
+    /// 类型哈希值
+    /// </summary>
+    public ulong Hash { get; set; }
+
+    /// <summary>
+    /// 完整类型名称
+    /// </summary>
+    public string TypeName { get; set; }
+
+    /// <summary>
+    /// 程序集名称
+    /// </summary>
+    public string AssemblyName { get; set; }
+
+    /// <summary>
+    /// 是否已注册处理函数
+    /// </summary>
+    public bool HasHandler { get; set; }
+
+    /// <summary>
+    /// 注册时间（如果可追踪）
+    /// </summary>
+    public DateTime? RegisteredTime { get; set; }
+
+    public override string ToString()
+    {
+        return $"[{(HasHandler ? "✓" : "○")}] 0x{Hash:X16} {TypeName} ({AssemblyName})";
     }
 }
