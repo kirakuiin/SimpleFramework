@@ -1,4 +1,5 @@
-﻿using NUnit.Framework;
+﻿using System;
+using NUnit.Framework;
 using SimpleFramework.Utility;
 
 namespace Test.Utility;
@@ -41,6 +42,16 @@ public class TestSerializeUtil
         Assert.AreEqual(msg.Value, finalRes.Value);
         Assert.AreEqual(msg.Name, finalRes.Name);
         Assert.IsTrue(finalRes.IsTrue);
+    }
+    
+    [Test]
+    public void TestPureStrSerialize()
+    {
+        const string msg = "hello world";
+        var result = SerializeUtil.SerializeBytes(msg);
+        
+        var finalRes = SerializeUtil.Deserialize<string>(result);
+        Assert.AreEqual(msg, finalRes);
     }
 }
 

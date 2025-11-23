@@ -32,16 +32,14 @@ public class TestFileUtil
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(_testDirPath))
+        if (!Directory.Exists(_testDirPath)) return;
+        try
         {
-            try
-            {
-                Directory.Delete(_testDirPath, true);
-            }
-            catch
-            {
-                // 忽略清理错误
-            }
+            Directory.Delete(_testDirPath, true);
+        }
+        catch
+        {
+            // 忽略清理错误
         }
     }
 
