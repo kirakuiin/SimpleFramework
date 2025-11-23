@@ -148,21 +148,10 @@ public readonly struct PeerDisconnectedEvent(long peerId)
 
 
 /// <summary>
-/// 子协议编号
-/// </summary>
-public static class ConnProtocol
-{
-    public const ushort CRequestApprove = 1;
-    public const ushort SResponseApprove = 2;
-    public const ushort SPeerConnect = 3;
-}
-
-
-/// <summary>
 /// 客户端申请加入
 /// </summary>
 /// <param name="payload"></param>
-[Protocol(MainProtocol.Connection, ConnProtocol.CRequestApprove)]
+[Protocol]
 public struct RequestApproveProtocol(long clientId, string payload)
 {
     public long ClientId = clientId;
@@ -174,7 +163,7 @@ public struct RequestApproveProtocol(long clientId, string payload)
 /// 服务端回复请求
 /// </summary>
 /// <param name="reason"></param>
-[Protocol(MainProtocol.Connection, ConnProtocol.SResponseApprove)]
+[Protocol]
 public struct ResponseApproveProtocol(TransportReason reason)
 {
     public TransportReason Reason = reason;
@@ -185,8 +174,7 @@ public struct ResponseApproveProtocol(TransportReason reason)
 /// peer加入连接
 /// </summary>
 /// <param name="clientId"></param>
-[Protocol(MainProtocol.Connection, ConnProtocol.SPeerConnect)]
-[Serializable]
+[Protocol]
 public struct PeerConnectProtocol(long clientId)
 {
     public long ClientId = clientId;

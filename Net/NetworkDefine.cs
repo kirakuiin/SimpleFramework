@@ -101,35 +101,3 @@ public static class NetLog
         Logger.Error(message, exception);
     }
 }
-
-
-/// <summary>
-/// 主协议编号
-/// </summary>
-public static class MainProtocol
-{
-    /// <summary>
-    /// 连接协议
-    /// </summary>
-    public const ushort Connection = 1;
-}
-
-
-/// <summary>
-/// 被此属性标记的结构体视作一个网络协议结构体
-/// </summary>
-/// <param name="mainId">主协议id</param>
-/// <param name="subId">子协议id</param>
-[AttributeUsage(AttributeTargets.Class|AttributeTargets.Struct)]
-public class ProtocolAttribute(ushort mainId, ushort subId) : Attribute
-{
-    /// <summary>
-    /// 主协议号
-    /// </summary>
-    public ushort MainId {get;} = mainId;
-    
-    /// <summary>
-    /// 子协议号
-    /// </summary>
-    public ushort SubId {get;} = subId;
-}
