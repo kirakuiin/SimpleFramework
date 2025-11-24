@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using NUnit.Framework;
 using SimpleFramework.Utility;
 
@@ -53,6 +54,20 @@ public class TestSerializeUtil
         var finalRes = SerializeUtil.Deserialize<string>(result);
         Assert.AreEqual(msg, finalRes);
     }
+    
+    [Test]
+    public void TestDictAndList()
+    {
+        Dictionary<int, string> dict = new() { { 1, "hello" }, { 2, "world" } };
+        List<int> list = [1, 2, 3];
+        var msg = new SpecialMsg(dict, list);
+        var result = SerializeUtil.SerializeBytes(msg);
+        
+        var finalRes = SerializeUtil.Deserialize<SpecialMsg>(result);
+        
+        Assert.AreEqual(msg.Dict[1], finalRes.Dict[1]);
+        Assert.AreEqual(msg.List.Count, finalRes.List.Count);
+    }
 }
 
 public struct Message
@@ -60,4 +75,11 @@ public struct Message
     public int Value { init; get; }
     public string Name;
     public bool IsTrue;
+}
+
+public class SpecialMsg(Dictionary<int, string> dict, List<int> list)
+{
+    public Dictionary<int, string> Dict => dict;
+    
+    public List<int> List = list;
 }

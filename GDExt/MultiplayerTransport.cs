@@ -231,7 +231,7 @@ public partial class MultiplayerTransport : Node, ITransport, ITransfer, INetSta
 
     public void SendData(long clientId, byte[] data)
     {
-        if (!IsConnected() || clientId == Multiplayer.GetUniqueId()) return;
+        if (!IsConnected()) return;
         var result = RpcId(clientId, nameof(_SendDataRpc), data);
         if (result > 0)
         {

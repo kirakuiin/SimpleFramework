@@ -41,10 +41,23 @@ public class SerializeUtil
     /// <param name="options"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns></returns>
-    public static T Deserialize<T>(string bytes,  JsonSerializerOptions? options = null)
+    public static T Deserialize<T>(string bytes, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
         return JsonSerializer.Deserialize<T>(bytes, options)!;
+    }
+
+    /// <summary>
+    /// 反序列化字符串
+    /// </summary>
+    /// <param name="bytes"></param>
+    /// <param name="type"></param>
+    /// <param name="options"></param>
+    /// <returns></returns>
+    public static object Deserialize(string bytes, Type type, JsonSerializerOptions? options = null)
+    {
+        options ??= DefaultOptions;
+        return JsonSerializer.Deserialize(bytes, returnType:type, options:options)!;
     }
     
     /// <summary>
@@ -70,6 +83,6 @@ public class SerializeUtil
     public static object Deserialize(byte[] bytes, Type type, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
-        return JsonSerializer.Deserialize(Encoding.UTF8.GetString(bytes), returnType:type, options:options)!;
+        return Deserialize(Encoding.UTF8.GetString(bytes), type, options);
     }
 }

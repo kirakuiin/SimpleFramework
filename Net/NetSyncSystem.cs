@@ -3,56 +3,111 @@ using SimpleFramework.Utility;
 
 namespace SimpleFramework.Net;
 
+
 /// <summary>
-/// 一个用于同步网络间各种数据，状态的系统
+/// 一个用于同步网络间各种数据，状态的模块
 /// <para>底层通过监听网络连接事件，比如<see cref="PeerConnectedEvent"/>等事件来实现功能</para>
-/// <remarks>底层依赖<see cref="ConnectionModel"/></remarks>
+/// <remarks>底层依赖<see cref="Connection.ConnectionModel"/></remarks>
+/// <param name="playerUniqueId">玩家唯一id</param>
 /// </summary>
-public class NetSyncSystem : AbstractSystem
+public class NetSyncSystem(string playerUniqueId): AbstractSystem
 {
     private ITransfer Transfer => this.GetUtility<ITransfer>();
     
+    private ConnectionModel ConnModel => this.GetModel<ConnectionModel>();
+    
     private readonly ProtocolHandler _protocolHandler = new (NetDefine.SyncGuard);
     
-    private readonly DisposableGroup _events =  new (); // 存储各种事件的引用
+    private readonly Dictionary<ulong, Type> _eventTypes = new();
+
+    private readonly Dictionary<Type, object> _globalData = new();
+    
+    private readonly Dictionary<Type, object> _playerPersonalData = new();
+
+    private readonly Dictionary<string, Dictionary<Type, object>> _playerGlobalData = new();
+    
     
     protected override void OnInitialize()
     {
-        this.ThrowIfNull<ConnectionModel>();
-        RegisterEvents();
+        InitConnEvent();
+        InitProtocolHandler();
+        Transfer.DataReceived += OnDataReceived;
+    }
+    
+    private void OnDataReceived(byte[] data)
+    {
+        _protocolHandler.HandleData(data);
     }
 
     protected override void OnUninitialize()
     {
-        _events.Dispose();
+        Transfer.DataReceived -= OnDataReceived;
     }
 
-    private void RegisterEvents()
+    private void InitConnEvent()
     {
-        _events.Add(this.RegisterEvent<ServerCreateEvent>(OnServerCreate));
-        _events.Add(this.RegisterEvent<ClientConnectEvent>(OnClientConnect));
-        _events.Add(this.RegisterEvent<PeerConnectedEvent>(OnPeerConnected));
-        _events.Add(this.RegisterEvent<PeerDisconnectedEvent>(OnPeerDisconnected));
-        _events.Add(this.RegisterEvent<ServerDisconnectedEvent>(OnServerDisconnected));
+        this.RegisterEvent<ServerCreateEvent>(OnServerCreate);
+        this.RegisterEvent<ClientConnectEvent>(OnClientConnect);
     }
 
-    private void OnServerCreate(ServerCreateEvent e)
+    private void OnClientConnect(ClientConnectEvent @event)
     {
+        if (@event.Reason == TransportReason.Ok)
+        {
+        }
     }
+
+    private void OnServerCreate(ServerCreateEvent @event)
+    {
+        if (@event.Reason == TransportReason.Ok)
+        {
+        }
+    }
+
+    private void InitProtocolHandler()
+    {
+        _protocolHandler.RegisterExecutingProtocol();
+        _protocolHandler.RegisterHandler<SyncDataProtocol>(OnSyncData);
+    }
+
+    private void OnSyncData(SyncDataProtocol data)
+    {
+        if (_eventTypes.TryGetValue(data.TypeHash, out var type))
+        {
+            var realData = SerializeUtil.Deserialize(data.JsonData, type); 
+        }
+    }
+
+    /// <summary>
+    /// 注册需要同步的数据类型
+    /// </summary>
+    /// <remarks>注意: 数据类型必须在双端被注册之后才能被同步</remarks>
+    /// <typeparam name="T"></typeparam>
+    public void RegisterType<T>()
+    {
+        _eventTypes.Add(MiscUtil.TypeHash<T>(), typeof(T));
+    }
+
+}
+
+
+/// <summary>
+/// 被同步数据的作用范围
+/// </summary>
+public enum EDataScope
+{
+    Global,  // 所有玩家可见
+    PlayerGlobal,  // 和玩家相关，但是所有玩家可见
+    Person,  // 仅玩家和服务端可见
+}
+
+
+[Protocol]
+public struct SyncDataProtocol(EDataScope scope, ulong typeHash, string jsonData)
+{
+    public EDataScope Scope = scope;
     
-    private void OnClientConnect(ClientConnectEvent e)
-    {
-    }
+    public ulong TypeHash = typeHash;
     
-    private void OnPeerConnected(PeerConnectedEvent e)
-    {
-    }
-    
-    private void OnPeerDisconnected(PeerDisconnectedEvent e)
-    {
-    }
-    
-    private void OnServerDisconnected(ServerDisconnectedEvent e)
-    {
-    }
+    public string JsonData = jsonData;
 }
