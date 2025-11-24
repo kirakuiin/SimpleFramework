@@ -20,11 +20,11 @@ public class NetSyncSystem(string playerUniqueId): AbstractSystem
     
     private readonly Dictionary<ulong, Type> _eventTypes = new();
 
-    private readonly Dictionary<Type, object> _globalData = new();
+    private readonly Dictionary<Type, object> _globalData = new(); // 全局数据
     
-    private readonly Dictionary<Type, object> _playerPersonalData = new();
+    private readonly Dictionary<Type, Dictionary<string, object>> _playerPersonalData = new();  // 玩家数据
 
-    private readonly Dictionary<string, Dictionary<Type, object>> _playerGlobalData = new();
+    private readonly Dictionary<Type, Dictionary<string, object>> _playerGlobalData = new();  // 玩家数据，但全局共享
     
     
     protected override void OnInitialize()
@@ -88,6 +88,48 @@ public class NetSyncSystem(string playerUniqueId): AbstractSystem
         _eventTypes.Add(MiscUtil.TypeHash<T>(), typeof(T));
     }
 
+    /// <summary>
+    /// 同步数据
+    /// </summary>
+    /// <param name="scope">数据作用域</param>
+    /// <param name="message">数据体</param>
+    /// <typeparam name="T"></typeparam>
+    public void SyncData<T>(EDataScope scope, T message)
+    {
+        var data = new SyncDataProtocol(scope, MiscUtil.TypeHash<T>(), SerializeUtil.Serialize(message));
+        if (ConnModel.IsServer())
+        {
+            OnSyncData(data);
+        }
+        else if (_protocolHandler.PackData(message, out var bytes))
+        {
+            Transfer.SendData(ConnModel.ServerId, bytes);
+        }
+        else
+        {
+            NetLog.Error($"同步数据类型{nameof(T)}失败");
+        }
+    }
+
+    public bool GetGlobalData<T>(out T? message)
+    {
+        var isSuccess = false;
+        isSuccess = _globalData.TryGetValue(typeof(T), out var value);
+        message = (T)value!;
+        return isSuccess;
+    }
+
+    public bool GetPlayerGlobalData<T>(out T? message, string uniqueId = "")
+    {
+        uniqueId = string.IsNullOrEmpty(uniqueId) ? playerUniqueId : uniqueId;
+        var isSuccess = false;
+        message = default;
+        if (!_playerGlobalData.TryGetValue(typeof(T), out var value)) return isSuccess;
+        isSuccess = value.TryGetValue(uniqueId, out var result);
+        message = (T)result!;
+        return isSuccess;
+    }
+    
 }
 
 

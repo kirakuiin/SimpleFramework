@@ -7,6 +7,8 @@ namespace SimpleFramework.Utility;
 /// </summary>
 public static class MiscUtil
 {
+    private static Dictionary<Type, ulong> _typeHashCaches = new ();
+    
     /// <summary>
     /// 获得类型的唯一名称
     /// </summary>
@@ -53,6 +55,10 @@ public static class MiscUtil
     /// <returns></returns>
     public static ulong TypeHash(Type type)
     {
+        if (_typeHashCaches.TryGetValue(type, out var hash))
+        {
+            return hash;
+        }
         var typeName = GetUniqueTypeName(type);
         return ComputeHash(typeName);
     }
