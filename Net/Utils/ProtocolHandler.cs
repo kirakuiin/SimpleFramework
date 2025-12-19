@@ -196,7 +196,6 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
             var beforeGuard = br.ReadUInt16();
             if (beforeGuard != GuardValue)
             {
-                NetLog.Warning("数据包前守卫值不匹配");
                 return false;
             }
 
@@ -206,7 +205,6 @@ public class ProtocolHandler(ushort guardValue = 0xCafe) : IUtility
             var afterGuard = br.ReadUInt16();
             if (afterGuard != GuardValue)
             {
-                NetLog.Warning("数据包后守卫值不匹配");
                 return false;
             }
         }
