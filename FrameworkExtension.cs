@@ -19,7 +19,7 @@ public static class ModelReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="NullReferenceException"></exception>
-    public static void ThrowIfNull<T>(this IModelAccessible self) where T : class, IModel
+    public static void Require<T>(this IModelAccessible self) where T : class, IModel
     {
         if (self.GetModel<T>() == null)
         {
@@ -57,7 +57,7 @@ public static class UtilityReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="NullReferenceException"></exception>
-    public static void ThrowIfNull<T>(this IUtilityAccessible self) where T : class, IUtility
+    public static void Require<T>(this IUtilityAccessible self) where T : class, IUtility
     {
         if (self.GetUtility<T>() == null)
         {

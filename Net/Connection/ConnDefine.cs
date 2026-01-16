@@ -91,6 +91,13 @@ public readonly struct ServerCreateEvent(TransportReason reason)
 
 
 /// <summary>
+/// 服务端关闭事件
+/// <remarks>仅服务端</remarks>
+/// </summary>
+public readonly struct ServerStopEvent;
+
+
+/// <summary>
 /// 客户端连接事件
 /// <remarks>仅客户端</remarks>
 /// </summary>

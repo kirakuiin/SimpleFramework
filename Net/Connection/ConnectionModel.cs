@@ -8,7 +8,7 @@ namespace SimpleFramework.Net.Connection;
 /// 客户端事件: <see cref="ClientConnectEvent"/>, <see cref="ClientReconnectEvent"/>, <see cref="ServerDisconnectedEvent"/>
 /// </para>
 /// <para>
-/// 服务端事件: <see cref="ServerCreateEvent"/>
+/// 服务端事件: <see cref="ServerCreateEvent"/>, <see cref="ServerStopEvent"/>
 /// </para>
 /// <para>
 /// 通用事件: <see cref="PeerConnectedEvent"/>, <see cref="PeerDisconnectedEvent"/>
@@ -88,8 +88,8 @@ public class ConnectionModel: AbstractModel
 
     protected override void OnInitialize()
     {
-        this.ThrowIfNull<ITransport>();
-        this.ThrowIfNull<ITransfer>();
+        this.Require<ITransport>();
+        this.Require<ITransfer>();
         ProtocolHandler.RegisterExecutingProtocol();
         InitStateMachine();
     }

@@ -177,6 +177,7 @@ internal class HostingState(ConnectionModel model) : ConnState(model)
         Model.Transport.PeerConnected -= OnPeerConnected;
         Model.Transport.PeerDisconnected -= OnPeerDisconnected;
         Model.ProtocolHandler.UnRegisterHandler<RequestApproveProtocol>();
+        Model.SendEvent(new ServerStopEvent());
     }
 }
 
