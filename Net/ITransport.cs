@@ -15,6 +15,7 @@ public enum TransportReason
     AuthenticationFailed,  // 认证失败
     ReachMaxConnections,  // 连接已满
     ReconnectFailed,  // 重连失败
+    UserClosed,  // 主动关闭
 }
 
 

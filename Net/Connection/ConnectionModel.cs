@@ -163,6 +163,12 @@ public class ConnectionModel: AbstractModel
     public bool IsServer() => Transport.IsServer();
     
     /// <summary>
+    /// 是否为纯客户端
+    /// </summary>
+    /// <returns></returns>
+    public bool IsClient() => IsConnected() && !IsServer();
+    
+    /// <summary>
     /// 当前已连接的peer数量
     /// </summary>
     public int PeerCount => GetAllPeerIds().Count;
@@ -186,7 +192,12 @@ public class ConnectionModel: AbstractModel
     /// </summary>
     public void Stop()
     {
+        var isClient = IsClient();
         _stateMachine.Dispatch(ConnEvent.Stop);
+        if (isClient)
+        {
+            this.SendEvent(new ServerDisconnectedEvent(TransportReason.UserClosed));
+        }
     }
 
     /// <summary>

@@ -127,6 +127,7 @@ public class ClientInfoModel<TInfo> : AbstractModel where TInfo : struct, IClien
         _clientInfos.Clear();
         _uidToClientId.Clear();
         LocalInfo = default;
+        NetLog.Info($"清空客户端信息数据");
     }
 
     #endregion
