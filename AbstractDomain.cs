@@ -321,6 +321,31 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetSystem<TSystem>() : null;
     }
 
+    /// <summary>
+    /// 尝试在域中获取系统。
+    /// </summary>
+    /// <param name="system">找到的系统；未找到时为 null。</param>
+    /// <typeparam name="TSystem"></typeparam>
+    /// <returns>找到系统时返回 true。</returns>
+    public bool TryGetSystem<TSystem>(out TSystem system) where TSystem : class, ISystem
+    {
+        system = GetSystem<TSystem>();
+        return system != null;
+    }
+
+    /// <summary>
+    /// 在域中获取系统，未找到时抛出异常。
+    /// </summary>
+    /// <typeparam name="TSystem"></typeparam>
+    /// <returns><see cref="ISystem"/></returns>
+    /// <exception cref="NullReferenceException"></exception>
+    public TSystem RequireSystem<TSystem>() where TSystem : class, ISystem
+    {
+        var system = GetSystem<TSystem>();
+        if (system != null) return system;
+        throw new NullReferenceException($"System not found: {typeof(TSystem).FullName} in {GetType().FullName}.");
+    }
+
     public TModel GetModel<TModel>() where TModel : class, IModel
     {
         var result = _container.Get<TModel>();
@@ -329,12 +354,62 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetModel<TModel>() : null;
     }
 
+    /// <summary>
+    /// 尝试在域中获取模型。
+    /// </summary>
+    /// <param name="model">找到的模型；未找到时为 null。</param>
+    /// <typeparam name="TModel"></typeparam>
+    /// <returns>找到模型时返回 true。</returns>
+    public bool TryGetModel<TModel>(out TModel model) where TModel : class, IModel
+    {
+        model = GetModel<TModel>();
+        return model != null;
+    }
+
+    /// <summary>
+    /// 在域中获取模型，未找到时抛出异常。
+    /// </summary>
+    /// <typeparam name="TModel"></typeparam>
+    /// <returns><see cref="IModel"/></returns>
+    /// <exception cref="NullReferenceException"></exception>
+    public TModel RequireModel<TModel>() where TModel : class, IModel
+    {
+        var model = GetModel<TModel>();
+        if (model != null) return model;
+        throw new NullReferenceException($"Model not found: {typeof(TModel).FullName} in {GetType().FullName}.");
+    }
+
     public TUtility GetUtility<TUtility>() where TUtility : class, IUtility
     {
         var result = _container.Get<TUtility>();
         if (result != null) return result;
 
         return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetUtility<TUtility>() : null;
+    }
+
+    /// <summary>
+    /// 尝试在域中获取功能组件。
+    /// </summary>
+    /// <param name="utility">找到的功能组件；未找到时为 null。</param>
+    /// <typeparam name="TUtility"></typeparam>
+    /// <returns>找到功能组件时返回 true。</returns>
+    public bool TryGetUtility<TUtility>(out TUtility utility) where TUtility : class, IUtility
+    {
+        utility = GetUtility<TUtility>();
+        return utility != null;
+    }
+
+    /// <summary>
+    /// 在域中获取功能组件，未找到时抛出异常。
+    /// </summary>
+    /// <typeparam name="TUtility"></typeparam>
+    /// <returns><see cref="IUtility"/></returns>
+    /// <exception cref="NullReferenceException"></exception>
+    public TUtility RequireUtility<TUtility>() where TUtility : class, IUtility
+    {
+        var utility = GetUtility<TUtility>();
+        if (utility != null) return utility;
+        throw new NullReferenceException($"Utility not found: {typeof(TUtility).FullName} in {GetType().FullName}.");
     }
 
     public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.Register(onEvent);

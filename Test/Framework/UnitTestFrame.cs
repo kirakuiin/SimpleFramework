@@ -152,6 +152,62 @@ public class TestFramework
     }
 
     [Test]
+    public void TestTryGetAndRequireModel()
+    {
+        Assert.IsTrue(ADomain.Instance.TryGetModel<Model>(out var model));
+        Assert.AreSame(ADomain.Instance.GetModel<Model>(), model);
+
+        Assert.IsFalse(ADomain.Instance.TryGetModel<ModelNull>(out var missing));
+        Assert.IsNull(missing);
+
+        Assert.AreSame(model, ADomain.Instance.RequireModel<Model>());
+        var ex = Assert.Throws<NullReferenceException>(() => ADomain.Instance.RequireModel<ModelNull>());
+        Assert.That(ex!.Message, Does.Contain(typeof(ModelNull).FullName));
+        Assert.That(ex.Message, Does.Contain(typeof(ADomain).FullName));
+    }
+
+    [Test]
+    public void TestTryGetAndRequireUtility()
+    {
+        Assert.IsTrue(ADomain.Instance.TryGetUtility<Utility>(out var utility));
+        Assert.AreSame(ADomain.Instance.GetUtility<Utility>(), utility);
+
+        Assert.IsFalse(ADomain.Instance.TryGetUtility<ITestUtility>(out var missing));
+        Assert.IsNull(missing);
+
+        Assert.AreSame(utility, ADomain.Instance.RequireUtility<Utility>());
+        var ex = Assert.Throws<NullReferenceException>(() => ADomain.Instance.RequireUtility<ITestUtility>());
+        Assert.That(ex!.Message, Does.Contain(typeof(ITestUtility).FullName));
+        Assert.That(ex.Message, Does.Contain(typeof(ADomain).FullName));
+    }
+
+    [Test]
+    public void TestTryGetAndRequireSystem()
+    {
+        Assert.IsTrue(ADomain.Instance.TryGetSystem<System>(out var system));
+        Assert.AreSame(ADomain.Instance.GetSystem<System>(), system);
+
+        Assert.IsFalse(ADomain.Instance.TryGetSystem<LifecycleSystem>(out var missing));
+        Assert.IsNull(missing);
+
+        Assert.AreSame(system, ADomain.Instance.RequireSystem<System>());
+        var ex = Assert.Throws<NullReferenceException>(() => ADomain.Instance.RequireSystem<LifecycleSystem>());
+        Assert.That(ex!.Message, Does.Contain(typeof(LifecycleSystem).FullName));
+        Assert.That(ex.Message, Does.Contain(typeof(ADomain).FullName));
+    }
+
+    [Test]
+    public void TestRequireExtensionsReturnInstances()
+    {
+        Assert.AreSame(ADomain.Instance.GetModel<Model>(), _control.RequireModel<Model>());
+        Assert.AreSame(ADomain.Instance.GetUtility<Utility>(), _control.RequireUtility<Utility>());
+        Assert.AreSame(ADomain.Instance.GetSystem<System>(), _control.RequireSystem<System>());
+
+        _control.Require<Model>();
+        _control.Require<Utility>();
+    }
+
+    [Test]
     public void TestRegisterSystemAsUsesServiceKey()
     {
         var domain = ADomain.Create();
@@ -181,7 +237,7 @@ public class TestFramework
         ADomain.Instance.RegisterUtilityAs<ITestUtility>(new InterfaceUtility(IntVal));
 
         Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
-        Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>().Value);
+        Assert.AreEqual(IntVal, ADomain.Instance.RequireUtility<ITestUtility>().Value);
     }
 
     [Test]

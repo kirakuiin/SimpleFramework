@@ -12,6 +12,16 @@ public static class ModelReadableExtensions
     /// <returns><see cref="IModel"/></returns>
     public static T GetModel<T>(this IModelAccessible self) where T : class, IModel =>
         self.Domain.GetModel<T>();
+
+    /// <summary>
+    /// 在域中获取模型，未找到时抛出异常。
+    /// </summary>
+    /// <param name="self"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <returns><see cref="IModel"/></returns>
+    /// <exception cref="NullReferenceException"></exception>
+    public static T RequireModel<T>(this IModelAccessible self) where T : class, IModel =>
+        self.Domain.RequireModel<T>();
     
     /// <summary>
     /// 如果依赖的组件不存在则抛出
@@ -21,10 +31,7 @@ public static class ModelReadableExtensions
     /// <exception cref="NullReferenceException"></exception>
     public static void Require<T>(this IModelAccessible self) where T : class, IModel
     {
-        if (self.GetModel<T>() == null)
-        {
-            throw new NullReferenceException($"依赖的组件不存在 {nameof(T)}");
-        }
+        self.RequireModel<T>();
     }
 }
 
@@ -38,6 +45,16 @@ public static class SystemReadableExtensions
     /// <returns><see cref="ISystem"/></returns>
     public static T GetSystem<T>(this ISystemAccessible self) where T : class, ISystem =>
         self.Domain.GetSystem<T>();
+
+    /// <summary>
+    /// 从域中获取系统，未找到时抛出异常。
+    /// </summary>
+    /// <param name="self"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <returns><see cref="ISystem"/></returns>
+    /// <exception cref="NullReferenceException"></exception>
+    public static T RequireSystem<T>(this ISystemAccessible self) where T : class, ISystem =>
+        self.Domain.RequireSystem<T>();
 }
 
 public static class UtilityReadableExtensions
@@ -52,6 +69,16 @@ public static class UtilityReadableExtensions
         self.Domain.GetUtility<T>();
 
     /// <summary>
+    /// 从域中获取功能组件，未找到时抛出异常。
+    /// </summary>
+    /// <param name="self"></param>
+    /// <typeparam name="T"></typeparam>
+    /// <returns><see cref="IUtility"/></returns>
+    /// <exception cref="NullReferenceException"></exception>
+    public static T RequireUtility<T>(this IUtilityAccessible self) where T : class, IUtility =>
+        self.Domain.RequireUtility<T>();
+
+    /// <summary>
     /// 如果依赖的组件不存在则抛出
     /// </summary>
     /// <param name="self"></param>
@@ -59,10 +86,7 @@ public static class UtilityReadableExtensions
     /// <exception cref="NullReferenceException"></exception>
     public static void Require<T>(this IUtilityAccessible self) where T : class, IUtility
     {
-        if (self.GetUtility<T>() == null)
-        {
-            throw new NullReferenceException($"依赖的组件不存在 {nameof(T)}");
-        }
+        self.RequireUtility<T>();
     }
 }
 
