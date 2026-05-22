@@ -33,6 +33,23 @@ public class TestCounter
     }
 
     [Test]
+    public void TestObjectEqualsUsesCounterValues()
+    {
+        object counter = new Counter<string>(_counter);
+
+        Assert.IsTrue(counter.Equals(_counter));
+    }
+
+    [Test]
+    public void TestHashCodeUsesCounterValues()
+    {
+        var counter = new Counter<string>(_counter);
+        var set = new HashSet<Counter<string>> { counter };
+
+        Assert.IsTrue(set.Contains(_counter));
+    }
+
+    [Test]
     public void TestCount()
     {
         Assert.AreEqual(3, _counter.Count);

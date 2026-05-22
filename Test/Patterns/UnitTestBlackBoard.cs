@@ -315,6 +315,25 @@ public class TestBlackBoard
     }
 
     [Test]
+    public void TestUnregisterOneOfMultipleHandlersKeepsOtherHandlers()
+    {
+        var eventCount = 0;
+        var eventCount2 = 0;
+
+        void Handler1(object? sender, BlackBoardEventArgs args) => eventCount++;
+        void Handler2(object? sender, BlackBoardEventArgs args) => eventCount2++;
+
+        _blackBoard.Register("test", Handler1);
+        _blackBoard.Register("test", Handler2);
+
+        _blackBoard.Unregister("test", Handler1);
+        _blackBoard.Set("test", 42);
+
+        Assert.AreEqual(0, eventCount);
+        Assert.AreEqual(1, eventCount2);
+    }
+
+    [Test]
     public void TestEventUnsubscribe()
     {
         var eventCount = 0;
@@ -379,4 +398,4 @@ public class TestBlackBoard
 
         _blackBoard.Unregister("test", Handler);
     }
-} 
+}

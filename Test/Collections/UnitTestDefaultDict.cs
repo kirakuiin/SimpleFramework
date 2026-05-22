@@ -46,6 +46,15 @@ public class TestDefaultDict
         
         Assert.IsFalse(_dict.ContainsKey("hello"));
     }
+
+    [Test]
+    public void TestTryGetValueDoesNotInitializeMissingKey()
+    {
+        Assert.IsFalse(_dict.TryGetValue("missing", out var value));
+        Assert.AreEqual(default(int), value);
+        Assert.IsFalse(_dict.ContainsKey("missing"));
+        Assert.AreEqual(0, _dict.Count);
+    }
     
     
     [Test]

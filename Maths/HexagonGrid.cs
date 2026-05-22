@@ -148,7 +148,7 @@ public readonly struct FractionalHex
         Q = q;
         R = r;
         S = s;
-        if (Math.Round(q + r + s) != 0) throw new ArgumentException("q + r + s must be 0");
+        if (Math.Abs(q + r + s) > 1e-6) throw new ArgumentException("q + r + s must be 0");
     }
 }
 
@@ -214,9 +214,9 @@ public readonly struct HexLayout
         Origin = origin;
         Size = size;
         
-        // 构建完整的变换矩阵：基础变换 * 缩放
-        _transformMatrix = hexOrientation.Forward * Matrix2D.CreateScale(size.X, size.Y);
-        _inverseMatrix = Matrix2D.CreateScale(1/size.X, 1/size.Y) * hexOrientation.Inverse;
+        // 构建完整的变换矩阵：缩放 * 基础变换
+        _transformMatrix = Matrix2D.CreateScale(size.X, size.Y) * hexOrientation.Forward;
+        _inverseMatrix = hexOrientation.Inverse * Matrix2D.CreateScale(1/size.X, 1/size.Y);
     }
 
     /// <summary>

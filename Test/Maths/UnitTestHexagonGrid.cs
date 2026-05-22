@@ -106,6 +106,30 @@ public class TestHexagonGrid
     }
 
     [Test]
+    public void TestLayoutUsesPerAxisScaleAfterOrientation()
+    {
+        var hex = new Hex(3, 4, -7);
+        var size = new Point(10.0, 15.0);
+        var origin = new Point(35.0, 71.0);
+        var layout = new HexLayout(HexOrientation.Pointy, size, origin);
+        var expected = new Point(
+            (Math.Sqrt(3.0) * hex.Q + Math.Sqrt(3.0) / 2.0 * hex.R) * size.X + origin.X,
+            (3.0 / 2.0 * hex.R) * size.Y + origin.Y);
+
+        var pixel = layout.HexToPixel(hex);
+
+        Assert.That(pixel.X, Is.EqualTo(expected.X).Within(1e-5));
+        Assert.That(pixel.Y, Is.EqualTo(expected.Y).Within(1e-5));
+        Assert.That(layout.PixelToHex(expected), Is.EqualTo(hex));
+    }
+
+    [Test]
+    public void TestFractionalHexRejectsCoordinatesThatDoNotSumToZero()
+    {
+        Assert.Throws<ArgumentException>(() => new FractionalHex(0.2, 0.2, 0.09));
+    }
+
+    [Test]
     public void TestHexCornerOffset()
     {
         var layout = new HexLayout(HexOrientation.Flat, new Point(10.0, 10.0), new Point(0, 0));

@@ -102,10 +102,11 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     public bool RemoveEntity(Entity entity)
     {
         if (!entity.World.Equals(this)) return false;
+        if (!_idToEntity.Remove(entity.Id)) return false;
         var archetype = entity.Archetype;
         _signatureToEntities[archetype.TypeSignature].Remove(entity);
         OnEntityRemoved?.Invoke(this, entity);
-        return _idToEntity.Remove(entity.Id);
+        return true;
     }
     
     /// <summary>

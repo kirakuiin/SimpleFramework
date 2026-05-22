@@ -306,6 +306,19 @@ public class UnitTestWorld
     }
 
     [Test]
+    public void TestRemoveEntityDoesNotNotifyWhenEntityAlreadyRemoved()
+    {
+        var removedCount = 0;
+        _world.OnEntityRemoved += (_, _) => removedCount++;
+
+        var entity = _world.CreateEntity();
+        Assert.IsTrue(_world.RemoveEntity(entity));
+        Assert.IsFalse(_world.RemoveEntity(entity));
+
+        Assert.AreEqual(1, removedCount);
+    }
+
+    [Test]
     public void TestMoveEntity()
     {
         var entity = _world.CreateEntity<TestIntComponent>();
@@ -318,4 +331,4 @@ public class UnitTestWorld
         Assert.IsTrue(afterSignature.Has<TestIntComponent>());
         Assert.IsTrue(afterSignature.Has<TestStringComponent>());
     }
-} 
+}

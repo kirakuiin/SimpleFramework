@@ -18,6 +18,12 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
     
     public void LoadConfig(string filePath)
     {
+        if (IsDisposed)
+        {
+            ToolkitLog.Warning("IniConfigTool已释放，无法加载配置");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(filePath))
         {
             ToolkitLog.Warning("文件路径不能为空");
@@ -93,6 +99,7 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
         if (IsDisposed)
         {
             ToolkitLog.Warning("配置工具已经关闭, 无法保存");
+            return;
         }
 
         var savePath = string.IsNullOrEmpty(filePath) ? _configPath : filePath;
@@ -154,6 +161,12 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
     /// <returns>配置值或默认值</returns>
     public T Get<T>(string section, string key, T defaultValue = default!)
     {
+        if (IsDisposed)
+        {
+            ToolkitLog.Warning("IniConfigTool已释放，无法读取配置值");
+            return defaultValue;
+        }
+
         if (string.IsNullOrWhiteSpace(section) || string.IsNullOrWhiteSpace(key))
             return defaultValue;
 

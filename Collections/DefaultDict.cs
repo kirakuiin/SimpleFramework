@@ -90,6 +90,13 @@ public class DefaultDict<TK, TV> :
         return _delegate.ContainsKey(key);
     }
 
+    /// <summary>
+    /// 尝试获取已存在的值。
+    /// </summary>
+    /// <remarks>
+    /// 此方法保持 <see cref="Dictionary{TKey,TValue}.TryGetValue(TKey,out TValue)"/> 的探测语义：
+    /// 当键不存在时不会调用默认值工厂，也不会向字典插入新键。需要获取或创建默认值时请使用索引器。
+    /// </remarks>
     public bool TryGetValue(TK key, out TV value)
     {
         return _delegate.TryGetValue(key, out value);

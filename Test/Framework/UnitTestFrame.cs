@@ -114,6 +114,18 @@ public class TestFramework
     }
 
     [Test]
+    public void TestBindableUnRegisterIsIdempotent()
+    {
+        var property = new BindableProperty<int>(1);
+        var unregister = property.Register((_, _) => { });
+
+        unregister.UnRegister();
+
+        Assert.DoesNotThrow(() => unregister.UnRegister());
+        Assert.DoesNotThrow(() => unregister.Dispose());
+    }
+
+    [Test]
     public void TestRegister()
     {
         var system = _aDomain.GetSystem<System>();

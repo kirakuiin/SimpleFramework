@@ -186,6 +186,20 @@ public class TestMiscUtil
         }
 
         [Test]
+        public void TestTypeHashCachesComputedHash()
+        {
+            var cacheField = typeof(MiscUtil).GetField("_typeHashCaches",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var cache = (System.Collections.Concurrent.ConcurrentDictionary<Type, ulong>)cacheField.GetValue(null);
+            cache.Clear();
+
+            var hash = MiscUtil.TypeHash(typeof(TestTypeForHash1));
+
+            Assert.IsTrue(cache.TryGetValue(typeof(TestTypeForHash1), out var cachedHash));
+            Assert.AreEqual(hash, cachedHash);
+        }
+
+        [Test]
         public void TestTypeHashForBuiltinTypes()
         {
             // Act

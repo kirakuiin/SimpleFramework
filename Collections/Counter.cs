@@ -278,11 +278,28 @@ public class Counter<T>
         return !(a > b);
     }
 
-    public bool Equals(Counter<T> other)
+    public bool Equals(Counter<T>? other)
     {
         if (other is null) return false;
         if (ReferenceEquals(this, other)) return true;
         var allKey = new HashSet<T>(Keys.Concat(other.Keys));
         return allKey.All(key => this.GetValueOrDefault(key, 0) == other.GetValueOrDefault(key, 0));
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is Counter<T> other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = 0;
+        foreach (var pair in this)
+        {
+            if (pair.Value == 0) continue;
+            hash ^= HashCode.Combine(pair.Key, pair.Value);
+        }
+
+        return hash;
     }
 }

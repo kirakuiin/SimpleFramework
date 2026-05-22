@@ -259,6 +259,22 @@ public class TestIniConfigTool
         string content = File.ReadAllText(testFile, System.Text.Encoding.UTF8);
         Assert.IsTrue(content.Contains("Key=Value"));
     }
+
+    [Test]
+    public void TestDisposedToolDoesNotLoadOrSave()
+    {
+        string loadFile = Path.Combine(_testDirPath, "disposed-load.ini");
+        string saveFile = Path.Combine(_testDirPath, "disposed-save.ini");
+        File.WriteAllText(loadFile, "[Section]\nKey=Loaded", System.Text.Encoding.UTF8);
+        _configTool.Set("Section", "Key", "Original");
+        _configTool.Dispose();
+
+        _configTool.LoadConfig(loadFile);
+        _configTool.SaveConfig(saveFile);
+
+        Assert.AreEqual(null, _configTool.Get<string>("Section", "Key"));
+        Assert.IsFalse(File.Exists(saveFile));
+    }
     
     [Test]
     public void TestReload()

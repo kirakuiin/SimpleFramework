@@ -134,6 +134,7 @@ internal class BindablePropertyUnRegister<T> : IUnRegister
     
     public void UnRegister()
     {
+        if (_property == null) return;
         _property.UnRegister(_onValueChanged);
         _property = null;
         _onValueChanged = null;

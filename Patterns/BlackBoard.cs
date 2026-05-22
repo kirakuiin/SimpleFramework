@@ -75,6 +75,10 @@ public class BlackBoard
             {
                 _events.Remove(key);
             }
+            else
+            {
+                _events[key] = existingHandler;
+            }
         }
         finally
         {
