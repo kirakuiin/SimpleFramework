@@ -184,25 +184,156 @@ public class TestFramework
     public void TestGlobalEvent()
     {
         var receiver = new GlobalEventReceiver();
-        receiver.RegisterEvent();
         var receiver2 = new GlobalEventReceiver();
-        receiver2.RegisterEvent();
+        var receiverUnregister = receiver.RegisterEvent();
+        var receiver2Unregister = receiver2.RegisterEvent();
 
-        Assert.AreEqual(0, receiver.Value);
-        Assert.AreEqual(0, receiver2.Value);
+        try
+        {
+            Assert.AreEqual(0, receiver.Value);
+            Assert.AreEqual(0, receiver2.Value);
         
-        var value = 3;
-        EventBus.Global.Send(value);
+            var value = 3;
+            EventBus.Global.Send(value);
         
-        Assert.AreEqual(value, receiver.Value);
-        Assert.AreEqual(value, receiver2.Value);
+            Assert.AreEqual(value, receiver.Value);
+            Assert.AreEqual(value, receiver2.Value);
         
-        receiver.UnRegisterEvent();
+            receiverUnregister.UnRegister();
         
-        value = 4;
-        EventBus.Global.Send(value);
-        Assert.AreNotEqual(value, receiver.Value);
-        Assert.AreEqual(value, receiver2.Value);
+            value = 4;
+            EventBus.Global.Send(value);
+            Assert.AreNotEqual(value, receiver.Value);
+            Assert.AreEqual(value, receiver2.Value);
+        }
+        finally
+        {
+            receiverUnregister.UnRegister();
+            receiver2Unregister.UnRegister();
+        }
+    }
+
+    [Test]
+    public void TestEventBusRemovesEmptyEventAfterUnregister()
+    {
+        var eventBus = new EventBus();
+        void OnEvent(EventA _) { }
+
+        eventBus.Register<EventA>(OnEvent);
+        Assert.IsTrue(eventBus.Contains<EventA>());
+
+        eventBus.UnRegister<EventA>(OnEvent);
+
+        Assert.IsFalse(eventBus.Contains<EventA>());
+    }
+
+    [Test]
+    public void TestEventBusClear()
+    {
+        var eventBus = new EventBus();
+        eventBus.Register<EventA>(_ => { });
+
+        Assert.IsTrue(eventBus.Contains<EventA>());
+
+        eventBus.Clear();
+
+        Assert.IsFalse(eventBus.Contains<EventA>());
+    }
+
+    [Test]
+    public void TestEventBusClearMakesOldUnregisterTokenStale()
+    {
+        var eventBus = new EventBus();
+        var called = false;
+        void OnEvent(EventA _) => called = true;
+
+        var oldUnregister = eventBus.Register<EventA>(OnEvent);
+        eventBus.Clear();
+        var newUnregister = eventBus.Register<EventA>(OnEvent);
+
+        try
+        {
+            oldUnregister.UnRegister();
+            eventBus.Send(new EventA("hello"));
+
+            Assert.IsTrue(called);
+        }
+        finally
+        {
+            newUnregister.UnRegister();
+        }
+    }
+
+    [Test]
+    public void TestEventUnregisterDuringTriggerDoesNotBreakIteration()
+    {
+        var eventBus = new EventBus();
+        IUnRegister unregister = null;
+        var firstCalled = false;
+        var secondCalled = false;
+
+        unregister = eventBus.Register<EventA>(_ =>
+        {
+            firstCalled = true;
+            unregister.UnRegister();
+        });
+        eventBus.Register<EventA>(_ => secondCalled = true);
+
+        eventBus.Send(new EventA("hello"));
+
+        Assert.IsTrue(firstCalled);
+        Assert.IsTrue(secondCalled);
+        Assert.IsTrue(eventBus.Contains<EventA>());
+    }
+
+    [Test]
+    public void TestDomainEventsDoNotPropagateToParentOrChild()
+    {
+        var parentCalled = false;
+        var childCalled = false;
+
+        ADomain.Instance.RegisterEvent<EventA>(_ => parentCalled = true);
+        BDomain.Instance.RegisterEvent<EventA>(_ => childCalled = true);
+        BDomain.Instance.SetParent(ADomain.Instance);
+
+        BDomain.Instance.SendEvent(new EventA("child"));
+
+        Assert.IsFalse(parentCalled);
+        Assert.IsTrue(childCalled);
+
+        parentCalled = false;
+        childCalled = false;
+
+        ADomain.Instance.SendEvent(new EventA("parent"));
+
+        Assert.IsTrue(parentCalled);
+        Assert.IsFalse(childCalled);
+    }
+
+    [Test]
+    public void TestDomainUninitializeClearsLocalEventsButKeepsGlobalEvents()
+    {
+        var domain = ADomain.Instance;
+        var localCalled = false;
+        var globalCalled = false;
+        var globalUnregister = EventBus.Global.Register<int>(_ => globalCalled = true);
+
+        try
+        {
+            domain.RegisterEvent<EventA>(_ => localCalled = true);
+
+            domain.UnInitialize();
+            domain.SendEvent(new EventA("local"));
+            ADomain.Instance.SendEvent(new EventA("recreated"));
+            EventBus.Global.Send(1);
+
+            Assert.IsFalse(localCalled);
+            Assert.IsTrue(globalCalled);
+        }
+        finally
+        {
+            globalUnregister.UnRegister();
+        }
     }
 
     #region AbstractDomain 核心功能测试

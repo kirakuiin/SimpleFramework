@@ -46,7 +46,9 @@ public class CustomUnRegister : IUnRegister
 /// </summary>
 public class Event<T> : IEvent
 {
-    private Action<T> _onEvent = _ => {};
+    private readonly List<Action<T>> _listeners = new();
+
+    public bool IsEmpty => _listeners.Count == 0;
     
     /// <summary>
     /// 注册一个单参数的回调。
@@ -55,7 +57,7 @@ public class Event<T> : IEvent
     /// <returns><see cref="IUnRegister"/></returns>
     public IUnRegister Register(Action<T> onEvent)
     {
-        _onEvent += onEvent;
+        _listeners.Add(onEvent);
         return new CustomUnRegister(() => UnRegister(onEvent));
     }
     
@@ -63,13 +65,19 @@ public class Event<T> : IEvent
     /// 取消一个注册。
     /// </summary>
     /// <param name="onEvent"><see cref="Action"/></param>
-    public void UnRegister(Action<T> onEvent) => _onEvent -= onEvent;
+    public void UnRegister(Action<T> onEvent) => _listeners.Remove(onEvent);
     
     /// <summary>
     /// 触发事件。
     /// </summary>
     /// <param name="t"></param>
-    public void Trigger(T t) => _onEvent.Invoke(t);
+    public void Trigger(T t)
+    {
+        foreach (var listener in _listeners.ToArray())
+        {
+            listener.Invoke(t);
+        }
+    }
 
     IUnRegister IEvent.Register(Action onEvent)
     {
@@ -99,6 +107,18 @@ public class EventContainer
     /// <returns><see cref="IEvent"/></returns>
     public T GetEvent<T>() where T : IEvent =>
         (_events.TryGetValue(typeof(T), out var @event) ? (T)@event : default)!;
+
+    /// <summary>
+    /// 移除事件。
+    /// </summary>
+    /// <typeparam name="T">事件类型</typeparam>
+    public void RemoveEvent<T>() where T : IEvent =>
+        _events.Remove(typeof(T));
+
+    /// <summary>
+    /// 清空事件。
+    /// </summary>
+    public void Clear() => _events.Clear();
 }
 
 /// <summary>
@@ -147,7 +167,16 @@ public class EventBus
             _container.AddEvent<Event<T>>();
         }
 
-        return _container.GetEvent<Event<T>>().Register(onEvent);
+        var @event = _container.GetEvent<Event<T>>();
+        @event.Register(onEvent);
+        return new CustomUnRegister(() =>
+        {
+            @event.UnRegister(onEvent);
+            if (@event.IsEmpty && ReferenceEquals(_container.GetEvent<Event<T>>(), @event))
+            {
+                _container.RemoveEvent<Event<T>>();
+            }
+        });
     }
 
     /// <summary>
@@ -157,6 +186,21 @@ public class EventBus
     /// <typeparam name="T"></typeparam>
     public void UnRegister<T>(Action<T> onEvent)
     {
-        _container.GetEvent<Event<T>>()?.UnRegister(onEvent);
+        var @event = _container.GetEvent<Event<T>>();
+        if (@event == null)
+        {
+            return;
+        }
+
+        @event.UnRegister(onEvent);
+        if (@event.IsEmpty)
+        {
+            _container.RemoveEvent<Event<T>>();
+        }
     }
+
+    /// <summary>
+    /// 清空事件。
+    /// </summary>
+    public void Clear() => _container.Clear();
 }

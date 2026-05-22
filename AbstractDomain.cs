@@ -53,6 +53,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         _container.GetComponents<IModel>().ToList().ForEach(
             system => system.UnInitialize());
         _container.Clear();
+        _eventBus.Clear();
         _domain = null;
         _parent = null;
         UnInit();
