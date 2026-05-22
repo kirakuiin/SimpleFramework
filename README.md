@@ -23,6 +23,33 @@
 - **Query**: 用于只读数据的查询
 - 支持带返回值的命令执行
 
+Core 使用示例:
+
+```csharp
+// 简单项目可以继续使用单例 Domain
+var domain = GameDomain.Instance;
+
+// 测试、多会话或工具场景可以显式创建独立 Domain
+var sessionDomain = GameDomain.Create();
+sessionDomain.UnInitialize();
+```
+
+组件注册与必需查找:
+
+```csharp
+domain.RegisterUtilityAs<ITimeUtility>(new TimeUtility());
+var timeUtility = domain.RequireUtility<ITimeUtility>();
+```
+
+Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。
+
+属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例:
+
+```csharp
+var hp = new BindableProperty<int>(100)
+    .WithComparer((prev, current) => Math.Abs(prev - current) < 5);
+```
+
 ### ECS模块
 
 实现了一个轻量级的ECS框架
