@@ -15,10 +15,15 @@ public class Container
     /// </summary>
     /// <param name="instance">组件实例</param>
     /// <typeparam name="T"></typeparam>
-    public void Register<T>(T instance)
+    /// <returns>同一键已注册的旧实例；不存在时返回默认值。</returns>
+    public T Register<T>(T instance)
     {
         Debug.Assert(instance != null, nameof(instance) + " != null");
-        _instances[typeof(T)] = instance;
+
+        var key = typeof(T);
+        var previous = _instances.TryGetValue(key, out var oldInstance) && oldInstance is T result ? result : default;
+        _instances[key] = instance;
+        return previous;
     }
 
     /// <summary>
@@ -28,13 +33,33 @@ public class Container
     /// <returns>组件实例</returns>
     public T Get<T>() where T : class
     {
-        var key = typeof(T);
-        if (_instances.TryGetValue(key, out var instance))
-        {
-            return (instance as T)!;
-        }
-        return null!;
+        return TryGet<T>(out var instance) ? instance : null!;
     }
+
+    /// <summary>
+    /// 尝试获得组件。
+    /// </summary>
+    /// <param name="instance">组件实例</param>
+    /// <typeparam name="T"></typeparam>
+    /// <returns>是否存在组件</returns>
+    public bool TryGet<T>(out T instance) where T : class
+    {
+        if (_instances.TryGetValue(typeof(T), out var value) && value is T result)
+        {
+            instance = result;
+            return true;
+        }
+
+        instance = null!;
+        return false;
+    }
+
+    /// <summary>
+    /// 移除组件。
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <returns>是否移除成功</returns>
+    public bool Remove<T>() => _instances.Remove(typeof(T));
 
     /// <summary>
     /// 获得指定类型的全部实例。

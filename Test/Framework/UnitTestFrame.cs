@@ -139,6 +139,43 @@ public class TestFramework
         
         Assert.AreEqual(AnoVal, BDomain.Instance.GetUtility<Utility>().Value);
     }
+
+    [Test]
+    public void TestExplicitGenericUtilityRegistrationUsesInterfaceKey()
+    {
+        ADomain.Instance.RegisterUtility<ITestUtility>(new InterfaceUtility(IntVal));
+
+        Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
+        Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>().Value);
+    }
+
+    [Test]
+    public void TestContainerTryGetAndRemove()
+    {
+        var container = new Container();
+        container.Register<IUtility>(new Utility(IntVal));
+
+        Assert.IsTrue(container.TryGet<IUtility>(out var utility));
+        Assert.AreEqual(IntVal, ((Utility)utility).Value);
+
+        Assert.IsTrue(container.Remove<IUtility>());
+        Assert.IsFalse(container.TryGet<IUtility>(out _));
+    }
+
+    [Test]
+    public void TestContainerRegisterReturnsPreviousInstance()
+    {
+        var container = new Container();
+        var first = new Utility(IntVal);
+        var second = new Utility(AnoVal);
+
+        var empty = container.Register<IUtility>(first);
+        var previous = container.Register<IUtility>(second);
+
+        Assert.IsNull(empty);
+        Assert.AreSame(first, previous);
+        Assert.AreSame(second, container.Get<IUtility>());
+    }
     
     [Test]
     public void TestSetParentLifeCycle()
@@ -654,6 +691,21 @@ public class Utility : IUtility
     }
     
     public int Value { get; private set; }
+}
+
+public interface ITestUtility : IUtility
+{
+    int Value { get; }
+}
+
+public class InterfaceUtility : ITestUtility
+{
+    public InterfaceUtility(int value)
+    {
+        Value = value;
+    }
+
+    public int Value { get; }
 }
 
 public class Command : AbstractCommand<int>
