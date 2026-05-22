@@ -39,6 +39,14 @@ public interface IDomain
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
     void RegisterSystem<T>(T system) where T : ISystem;
+
+    /// <summary>
+    /// 以指定类型注册系统。
+    /// <para>System 注册会纳入生命周期管理。</para>
+    /// </summary>
+    /// <param name="system"><see cref="ISystem"/></param>
+    /// <typeparam name="T"></typeparam>
+    void RegisterSystemAs<T>(T system) where T : ISystem;
     
     /// <summary>
     /// 注册模型。
@@ -46,6 +54,14 @@ public interface IDomain
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
     void RegisterModel<T>(T model) where T : IModel;
+
+    /// <summary>
+    /// 以指定类型注册模型。
+    /// <para>Model 注册会纳入生命周期管理。</para>
+    /// </summary>
+    /// <param name="model"><see cref="IModel"/></param>
+    /// <typeparam name="T"></typeparam>
+    void RegisterModelAs<T>(T model) where T : IModel;
     
     /// <summary>
     /// 注册功能组件。
@@ -53,6 +69,14 @@ public interface IDomain
     /// <param name="utility"><see cref="IUtility"/></param>
     /// <typeparam name="T"></typeparam>
     void RegisterUtility<T>(T utility) where T : IUtility;
+
+    /// <summary>
+    /// 以指定类型注册功能组件。
+    /// <para>Utility 注册不会纳入生命周期管理。</para>
+    /// </summary>
+    /// <param name="utility"><see cref="IUtility"/></param>
+    /// <typeparam name="T"></typeparam>
+    void RegisterUtilityAs<T>(T utility) where T : IUtility;
     
     /// <summary>
     /// 在域中获取系统。

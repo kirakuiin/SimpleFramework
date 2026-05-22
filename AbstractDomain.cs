@@ -15,12 +15,16 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     private WeakReference<IDomain> _parent;
     
-    private readonly List<WeakReference<IDomain>> _children = new();
+    private readonly List<IDomain> _children = new();
+
+    private readonly HashSet<Type> _constructableKeys = new();
+
+    private bool _isUninitializing;
     
     /// <summary>
     /// 获取对象，如果对象不存在则创建
     /// </summary>
-    public static T Instance => _domain ??= BuildDomain();
+    public static T Instance => _domain ??= Create();
     
     /// <summary>
     /// 获取对象，如果对象不存在则返回null
@@ -28,7 +32,11 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <returns></returns>
     public static T GetInstance() => _domain;
     
-    private static T BuildDomain()
+    /// <summary>
+    /// 创建一个新的独立域实例，并立即初始化。
+    /// </summary>
+    /// <returns>新的域实例。</returns>
+    public static T Create()
     {
         var domain = new T();
         domain.Init();
@@ -39,24 +47,64 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     public void UnInitialize()
     {
-        foreach (var child in _children)
+        var exceptions = new List<Exception>();
+
+        _isUninitializing = true;
+        try
         {
-            if (child.TryGetTarget(out var domain))
+            foreach (var child in _children.ToList())
             {
-                domain.UnInitialize();
+                try
+                {
+                    child.UnInitialize();
+                }
+                catch (Exception exception)
+                {
+                    exceptions.Add(exception);
+                }
+            }
+
+            _children.Clear();
+
+            foreach (var constructable in GetRegisteredConstructables())
+            {
+                try
+                {
+                    constructable.UnInitialize();
+                }
+                catch (Exception exception)
+                {
+                    exceptions.Add(exception);
+                }
+            }
+
+            _container.Clear();
+            _constructableKeys.Clear();
+            _eventBus.Clear();
+            SetParent(null);
+            if (ReferenceEquals(_domain, this))
+            {
+                _domain = null;
+            }
+
+            try
+            {
+                UnInit();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
             }
         }
-        _children.Clear();
-        
-        _container.GetComponents<ISystem>().ToList().ForEach(
-            system => system.UnInitialize());
-        _container.GetComponents<IModel>().ToList().ForEach(
-            system => system.UnInitialize());
-        _container.Clear();
-        _eventBus.Clear();
-        _domain = null;
-        _parent = null;
-        UnInit();
+        finally
+        {
+            _isUninitializing = false;
+        }
+
+        if (exceptions.Count > 0)
+        {
+            throw new AggregateException(exceptions);
+        }
     }
     
     protected virtual void UnInit() {}
@@ -115,25 +163,23 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         child.SetParent(this);
         
         // 防止重复添加
-        for (var i = _children.Count - 1; i >= 0; i--)
+        if (_children.Any(existingChild => ReferenceEquals(existingChild, child)))
         {
-            if (_children[i].TryGetTarget(out var existingChild) && ReferenceEquals(existingChild, child))
-            {
-                return;
-            }
+            return;
         }
         
-        _children.Add(new WeakReference<IDomain>(child));
+        _children.Add(child);
     }
 
     public void RemoveChild(IDomain child)
     {
         if (child == null) return;
 
-        // 遍历子域列表，找到匹配的弱引用并移除
+        // 遍历子域列表，找到匹配的子域并移除
         for (var i = _children.Count - 1; i >= 0; i--)
         {
-            if (!_children[i].TryGetTarget(out var existingChild) || !ReferenceEquals(existingChild, child)) continue;
+            var existingChild = _children[i];
+            if (!ReferenceEquals(existingChild, child)) continue;
             _children.RemoveAt(i);
 
             // 只有当子域的父域确实是当前域时才清空，避免递归调用
@@ -146,21 +192,126 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     }
 
     public void RegisterSystem<TSystem>(TSystem system) where TSystem : ISystem
+        => RegisterSystemAs(system);
+
+    public void RegisterSystemAs<TSystem>(TSystem system) where TSystem : ISystem
     {
-        system.SetDomain(this);
-        _container.Register(system);
-        system.Initialize();
+        EnsureNotUninitializing();
+
+        var hasSystem = IsConstructableRegistered(system);
+        var wasLifecycleManagedKey = _constructableKeys.Contains(typeof(TSystem));
+        var oldSystem = _container.Register(system);
+        _constructableKeys.Add(typeof(TSystem));
+        if (ReferenceEquals(oldSystem, system))
+        {
+            if (!hasSystem)
+            {
+                system.SetDomain(this);
+                system.Initialize();
+            }
+
+            return;
+        }
+
+        if (wasLifecycleManagedKey && oldSystem != null && !IsConstructableRegistered(oldSystem))
+        {
+            oldSystem.UnInitialize();
+        }
+
+        if (!hasSystem)
+        {
+            system.SetDomain(this);
+            system.Initialize();
+        }
     }
 
     public void RegisterModel<TModel>(TModel model) where TModel : IModel
+        => RegisterModelAs(model);
+
+    public void RegisterModelAs<TModel>(TModel model) where TModel : IModel
     {
-        model.SetDomain(this);
-        _container.Register(model);
-        model.Initialize();
+        EnsureNotUninitializing();
+
+        var hasModel = IsConstructableRegistered(model);
+        var wasLifecycleManagedKey = _constructableKeys.Contains(typeof(TModel));
+        var oldModel = _container.Register(model);
+        _constructableKeys.Add(typeof(TModel));
+        if (ReferenceEquals(oldModel, model))
+        {
+            if (!hasModel)
+            {
+                model.SetDomain(this);
+                model.Initialize();
+            }
+
+            return;
+        }
+
+        if (wasLifecycleManagedKey && oldModel != null && !IsConstructableRegistered(oldModel))
+        {
+            oldModel.UnInitialize();
+        }
+
+        if (!hasModel)
+        {
+            model.SetDomain(this);
+            model.Initialize();
+        }
     }
 
     public void RegisterUtility<TUtility>(TUtility utility) where TUtility : IUtility
-        => _container.Register(utility);
+        => RegisterUtilityAs(utility);
+
+    public void RegisterUtilityAs<TUtility>(TUtility utility) where TUtility : IUtility
+    {
+        EnsureNotUninitializing();
+
+        var wasLifecycleManagedKey = _constructableKeys.Remove(typeof(TUtility));
+        var oldUtility = _container.Register(utility);
+        if (wasLifecycleManagedKey && oldUtility is IConstructable oldConstructable &&
+            !IsConstructableRegistered(oldConstructable))
+        {
+            oldConstructable.UnInitialize();
+        }
+    }
+
+    private void EnsureNotUninitializing()
+    {
+        if (_isUninitializing)
+        {
+            throw new InvalidOperationException("Cannot register components while the domain is uninitializing.");
+        }
+    }
+
+    private List<IConstructable> GetRegisteredConstructables()
+    {
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var constructables = new List<IConstructable>();
+
+        AddRegisteredConstructables(typeof(ISystem), constructables, visited);
+        AddRegisteredConstructables(typeof(IModel), constructables, visited);
+
+        return constructables;
+    }
+
+    private void AddRegisteredConstructables(
+        Type lifecycleKeyType,
+        List<IConstructable> constructables,
+        HashSet<object> visited)
+    {
+        foreach (var key in _constructableKeys.Where(lifecycleKeyType.IsAssignableFrom))
+        {
+            if (_container.Get(key) is IConstructable constructable && visited.Add(constructable))
+            {
+                constructables.Add(constructable);
+            }
+        }
+    }
+
+    private bool IsConstructableRegistered(IConstructable constructable)
+    {
+        return GetRegisteredConstructables().Any(component => ReferenceEquals(component, constructable));
+    }
 
     public TSystem GetSystem<TSystem>() where TSystem : class, ISystem
     {

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using SimpleFramework;
 using SimpleFramework.FrameworkImpl;
@@ -144,6 +146,39 @@ public class TestFramework
     public void TestExplicitGenericUtilityRegistrationUsesInterfaceKey()
     {
         ADomain.Instance.RegisterUtility<ITestUtility>(new InterfaceUtility(IntVal));
+
+        Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
+        Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>().Value);
+    }
+
+    [Test]
+    public void TestRegisterSystemAsUsesServiceKey()
+    {
+        var domain = ADomain.Create();
+        var system = new LifecycleSystem();
+
+        domain.RegisterSystemAs<ISystem>(system);
+
+        Assert.IsNull(domain.GetSystem<LifecycleSystem>());
+        Assert.AreSame(system, domain.GetSystem<ISystem>());
+    }
+
+    [Test]
+    public void TestRegisterModelAsUsesServiceKey()
+    {
+        var domain = ADomain.Create();
+        var model = new LifecycleModel();
+
+        domain.RegisterModelAs<IModel>(model);
+
+        Assert.IsNull(domain.GetModel<LifecycleModel>());
+        Assert.AreSame(model, domain.GetModel<IModel>());
+    }
+
+    [Test]
+    public void TestRegisterUtilityAsUsesServiceKey()
+    {
+        ADomain.Instance.RegisterUtilityAs<ITestUtility>(new InterfaceUtility(IntVal));
 
         Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
         Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>().Value);
@@ -373,7 +408,304 @@ public class TestFramework
         }
     }
 
+    [Test]
+    public void TestCreateReturnsIndependentDomain()
+    {
+        var singleton = ADomain.Instance;
+        var created = ADomain.Create();
+
+        Assert.IsNotNull(created);
+        Assert.AreNotSame(singleton, created);
+
+        created.RegisterUtility(new Utility(AnoVal));
+        Assert.AreEqual(AnoVal, created.GetUtility<Utility>().Value);
+        Assert.AreEqual(IntVal, singleton.GetUtility<Utility>().Value);
+
+        created.UnInitialize();
+
+        Assert.AreSame(singleton, ADomain.GetInstance());
+    }
+
+    [Test]
+    public void TestAddChildOwnsCreatedChildLifecycle()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+
+        parent.AddChild(child);
+
+        parent.UnInitialize();
+
+        Assert.IsNull(child.Parent);
+    }
+
+    [Test]
+    public void TestRegisterModelReleasesPreviousInstance()
+    {
+        var domain = ADomain.Create();
+        var first = new LifecycleModel();
+        var second = new LifecycleModel();
+
+        domain.RegisterModel(first);
+        domain.RegisterModel(second);
+
+        Assert.AreEqual(1, first.InitializeCount);
+        Assert.AreEqual(1, first.UninitializeCount);
+        Assert.AreEqual(1, second.InitializeCount);
+        Assert.AreEqual(0, second.UninitializeCount);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, second.UninitializeCount);
+    }
+
+    [Test]
+    public void TestRegisterSameModelInstanceDoesNotInitializeTwice()
+    {
+        var domain = ADomain.Create();
+        var model = new LifecycleModel();
+
+        domain.RegisterModel(model);
+        domain.RegisterModel(model);
+
+        Assert.AreEqual(1, model.InitializeCount);
+        Assert.AreEqual(0, model.UninitializeCount);
+    }
+
+    [Test]
+    public void TestRegisterSystemReleasesPreviousInstance()
+    {
+        var domain = ADomain.Create();
+        var first = new LifecycleSystem();
+        var second = new LifecycleSystem();
+
+        domain.RegisterSystem(first);
+        domain.RegisterSystem(second);
+
+        Assert.AreEqual(1, first.InitializeCount);
+        Assert.AreEqual(1, first.UninitializeCount);
+        Assert.AreEqual(1, second.InitializeCount);
+        Assert.AreEqual(0, second.UninitializeCount);
+    }
+
+    [Test]
+    public void TestRegisterModelSameInstanceAcrossKeysLifecycleOnce()
+    {
+        var domain = ADomain.Create();
+        var model = new LifecycleModel();
+        var replacement = new LifecycleModel();
+
+        domain.RegisterModel(model);
+        domain.RegisterModelAs<IModel>(model);
+
+        Assert.AreEqual(1, model.InitializeCount);
+        Assert.AreEqual(0, model.UninitializeCount);
+
+        domain.RegisterModelAs<IModel>(replacement);
+
+        Assert.AreEqual(0, model.UninitializeCount);
+        Assert.AreEqual(1, replacement.InitializeCount);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, model.UninitializeCount);
+        Assert.AreEqual(1, replacement.UninitializeCount);
+    }
+
+    [Test]
+    public void TestRegisterSystemSameInstanceAcrossKeysLifecycleOnce()
+    {
+        var domain = ADomain.Create();
+        var system = new LifecycleSystem();
+
+        domain.RegisterSystem(system);
+        domain.RegisterSystemAs<ISystem>(system);
+
+        Assert.AreEqual(1, system.InitializeCount);
+        Assert.AreEqual(0, system.UninitializeCount);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, system.UninitializeCount);
+    }
+
+    [Test]
+    public void TestUninitializeReleasesSystemsBeforeModels()
+    {
+        var domain = ADomain.Create();
+        var order = new List<string>();
+        var model = new OrderedLifecycleModel(order);
+        var system = new OrderedLifecycleSystem(order);
+
+        domain.RegisterModel(model);
+        domain.RegisterSystem(system);
+
+        domain.UnInitialize();
+
+        CollectionAssert.AreEqual(new[] { "system", "model" }, order);
+    }
+
+    [Test]
+    public void TestRegisterDuringUninitializeThrowsBeforeInitializingComponent()
+    {
+        var domain = ADomain.Create();
+        var model = new RegisteringOnUninitializeModel();
+
+        domain.RegisterModel(model);
+        domain.RegisterModel(new LifecycleModel());
+
+        var exception = Assert.Throws<AggregateException>(() => domain.UnInitialize());
+        Assert.IsTrue(exception.InnerExceptions.Any(inner => inner is InvalidOperationException));
+        Assert.AreEqual(1, model.UninitializeCount);
+        Assert.AreEqual(0, model.RegisteredModel.InitializeCount);
+        Assert.AreEqual(0, model.RegisteredModel.UninitializeCount);
+        Assert.IsNull(domain.GetModel<IModel>());
+
+        var replacement = new LifecycleModel();
+        domain.RegisterModel(replacement);
+        Assert.AreEqual(1, replacement.InitializeCount);
+    }
+
+    [Test]
+    public void TestThrowingModelUninitializeStillClearsDomainAndResetsGuard()
+    {
+        var domain = ADomain.Create();
+        var throwing = new ThrowingOnUninitializeModel();
+
+        domain.RegisterModel(throwing);
+
+        var exception = Assert.Throws<AggregateException>(() => domain.UnInitialize());
+        Assert.IsTrue(exception.InnerExceptions.Any(inner => inner is InvalidOperationException));
+        Assert.AreEqual(1, throwing.UninitializeCount);
+        Assert.IsNull(domain.GetModel<ThrowingOnUninitializeModel>());
+
+        var replacement = new LifecycleModel();
+        domain.RegisterModel(replacement);
+        Assert.AreEqual(1, replacement.InitializeCount);
+    }
+
+    [Test]
+    public void TestDualRoleComponentLifecycleAcrossSystemAndModelKeys()
+    {
+        var domain = ADomain.Create();
+        var dualRole = new DualRoleComponent();
+        var replacementSystem = new LifecycleSystem();
+
+        domain.RegisterSystemAs<ISystem>(dualRole);
+        domain.RegisterModelAs<IModel>(dualRole);
+
+        Assert.AreEqual(1, dualRole.InitializeCount);
+        Assert.AreEqual(0, dualRole.UninitializeCount);
+
+        domain.RegisterSystemAs<ISystem>(replacementSystem);
+
+        Assert.AreEqual(0, dualRole.UninitializeCount);
+        Assert.AreEqual(1, replacementSystem.InitializeCount);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, dualRole.UninitializeCount);
+        Assert.AreEqual(1, replacementSystem.UninitializeCount);
+    }
+
+    [Test]
+    public void TestUtilityRegisteredConstructableHasNoLifecycle()
+    {
+        var domain = ADomain.Create();
+        var trap = new UtilityLifecycleTrap();
+
+        domain.RegisterUtilityAs<IUtility>(trap);
+        domain.UnInitialize();
+
+        Assert.AreEqual(0, trap.InitializeCount);
+        Assert.AreEqual(0, trap.UninitializeCount);
+    }
+
+    [Test]
+    public void TestUtilityConstructableBecomesManagedWhenRegisteredAsSystem()
+    {
+        var domain = ADomain.Create();
+        var trap = new UtilityLifecycleTrap();
+
+        domain.RegisterUtilityAs<IUtility>(trap);
+        domain.RegisterSystemAs<ISystem>(trap);
+
+        Assert.AreEqual(1, trap.InitializeCount);
+        Assert.AreEqual(0, trap.UninitializeCount);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, trap.UninitializeCount);
+    }
+
+    [Test]
+    public void TestUtilityReferenceDoesNotKeepReplacedSystemAlive()
+    {
+        var domain = ADomain.Create();
+        var trap = new UtilityLifecycleTrap();
+        var replacement = new LifecycleSystem();
+
+        domain.RegisterUtilityAs<IUtility>(trap);
+        domain.RegisterSystemAs<ISystem>(trap);
+        domain.RegisterSystemAs<ISystem>(replacement);
+
+        Assert.AreEqual(1, trap.InitializeCount);
+        Assert.AreEqual(1, trap.UninitializeCount);
+        Assert.AreEqual(1, replacement.InitializeCount);
+    }
+
+    [Test]
+    public void TestUtilityRegistrationUnderSameConcreteKeyReleasesManagedSystem()
+    {
+        var domain = ADomain.Create();
+        var system = new UtilityLifecycleTrap();
+        var utility = new UtilityLifecycleTrap();
+
+        domain.RegisterSystem(system);
+        domain.RegisterUtility(utility);
+
+        Assert.AreEqual(1, system.InitializeCount);
+        Assert.AreEqual(1, system.UninitializeCount);
+        Assert.AreEqual(0, utility.InitializeCount);
+        Assert.AreEqual(0, utility.UninitializeCount);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, system.UninitializeCount);
+        Assert.AreEqual(0, utility.UninitializeCount);
+    }
+
     #region AbstractDomain 核心功能测试
+
+    [Test]
+    public void TestUtilityOnlyConstructableReplacedBySystemUnderSameConcreteKeyIsNotUninitialized()
+    {
+        var domain = ADomain.Create();
+        var utility = new UtilityLifecycleTrap();
+        var system = new UtilityLifecycleTrap();
+
+        domain.RegisterUtility(utility);
+        domain.RegisterSystem(system);
+
+        Assert.AreEqual(0, utility.InitializeCount);
+        Assert.AreEqual(0, utility.UninitializeCount);
+        Assert.AreEqual(1, system.InitializeCount);
+    }
+
+    [Test]
+    public void TestUtilityOnlyConstructableReplacedByModelUnderSameConcreteKeyIsNotUninitialized()
+    {
+        var domain = ADomain.Create();
+        var utility = new UtilityModelLifecycleTrap();
+        var model = new UtilityModelLifecycleTrap();
+
+        domain.RegisterUtility(utility);
+        domain.RegisterModel(model);
+
+        Assert.AreEqual(0, utility.InitializeCount);
+        Assert.AreEqual(0, utility.UninitializeCount);
+        Assert.AreEqual(1, model.InitializeCount);
+    }
 
     [Test]
     public void TestSetParentWithNull()
@@ -670,6 +1002,173 @@ public class ModelNull : AbstractModel
 {
     protected override void OnInitialize()
     {
+    }
+}
+
+public class LifecycleModel : AbstractModel
+{
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
+    protected override void OnInitialize()
+    {
+        InitializeCount++;
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+    }
+}
+
+public class LifecycleSystem : AbstractSystem
+{
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
+    protected override void OnInitialize()
+    {
+        InitializeCount++;
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+    }
+}
+
+public class OrderedLifecycleModel : AbstractModel
+{
+    private readonly List<string> _order;
+
+    public OrderedLifecycleModel(List<string> order)
+    {
+        _order = order;
+    }
+
+    protected override void OnInitialize()
+    {
+    }
+
+    protected override void OnUninitialize()
+    {
+        _order.Add("model");
+    }
+}
+
+public class OrderedLifecycleSystem : AbstractSystem
+{
+    private readonly List<string> _order;
+
+    public OrderedLifecycleSystem(List<string> order)
+    {
+        _order = order;
+    }
+
+    protected override void OnInitialize()
+    {
+    }
+
+    protected override void OnUninitialize()
+    {
+        _order.Add("system");
+    }
+}
+
+public class RegisteringOnUninitializeModel : AbstractModel
+{
+    public int UninitializeCount { get; private set; }
+    public LifecycleModel RegisteredModel { get; } = new();
+
+    protected override void OnInitialize()
+    {
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+        Domain.RegisterModelAs<IModel>(RegisteredModel);
+    }
+}
+
+public class ThrowingOnUninitializeModel : AbstractModel
+{
+    public int UninitializeCount { get; private set; }
+
+    protected override void OnInitialize()
+    {
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+        throw new InvalidOperationException("Uninitialize failed.");
+    }
+}
+
+public class DualRoleComponent : ISystem, IModel
+{
+    public IDomain Domain { get; private set; }
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
+    public void SetDomain(IDomain domain)
+    {
+        Domain = domain;
+    }
+
+    public void Initialize()
+    {
+        InitializeCount++;
+    }
+
+    public void UnInitialize()
+    {
+        UninitializeCount++;
+    }
+}
+
+public class UtilityLifecycleTrap : IUtility, ISystem
+{
+    public IDomain Domain { get; private set; }
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
+    public void SetDomain(IDomain domain)
+    {
+        Domain = domain;
+    }
+
+    public void Initialize()
+    {
+        InitializeCount++;
+    }
+
+    public void UnInitialize()
+    {
+        UninitializeCount++;
+    }
+}
+
+public class UtilityModelLifecycleTrap : IUtility, IModel
+{
+    public IDomain Domain { get; private set; }
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
+    public void SetDomain(IDomain domain)
+    {
+        Domain = domain;
+    }
+
+    public void Initialize()
+    {
+        InitializeCount++;
+    }
+
+    public void UnInitialize()
+    {
+        UninitializeCount++;
     }
 }
 

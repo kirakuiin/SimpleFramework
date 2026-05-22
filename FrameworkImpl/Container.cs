@@ -37,6 +37,16 @@ public class Container
     }
 
     /// <summary>
+    /// 按注册键类型获得组件。
+    /// </summary>
+    /// <param name="key">注册键类型</param>
+    /// <returns>组件实例</returns>
+    public object Get(Type key)
+    {
+        return _instances.GetValueOrDefault(key);
+    }
+
+    /// <summary>
     /// 尝试获得组件。
     /// </summary>
     /// <param name="instance">组件实例</param>
