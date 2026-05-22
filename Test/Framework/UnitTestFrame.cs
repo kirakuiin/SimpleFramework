@@ -64,6 +64,44 @@ public class TestFramework
     }
 
     [Test]
+    public void TestBindableComparerIsInstanceScoped()
+    {
+        var left = new BindableProperty<int>(10)
+            .WithComparer((prev, current) => Math.Abs(prev - current) < 5);
+        var right = new BindableProperty<int>(10);
+
+        var leftChanged = false;
+        var rightChanged = false;
+
+        left.Register((_, _) => leftChanged = true);
+        right.Register((_, _) => rightChanged = true);
+
+        left.Value = 12;
+        right.Value = 12;
+
+        Assert.IsFalse(leftChanged);
+        Assert.IsTrue(rightChanged);
+    }
+
+    [Test]
+    public void TestBindableComparerHandlesNullValues()
+    {
+        var property = new BindableProperty<string>(null);
+        var changedCount = 0;
+
+        property.Register((_, _) => changedCount++);
+
+        property.Value = null;
+        Assert.AreEqual(0, changedCount);
+
+        property.Value = "hello";
+        Assert.AreEqual(1, changedCount);
+
+        property.Value = null;
+        Assert.AreEqual(2, changedCount);
+    }
+
+    [Test]
     public void TestUnRegister()
     {
         _control.UnRegister.UnRegister();

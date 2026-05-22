@@ -58,7 +58,7 @@ public class BindableProperty<T> : IBindableProperty<T>
 {
     private T _value;
 
-    public static Func<T, T, bool> Comparer { get; set; } = (a, b) => a.Equals(b);
+    private Func<T, T, bool> _comparer = EqualityComparer<T>.Default.Equals;
 
     private Action<T, T> OnValueChanged { get; set; } = (_, _) => {};
 
@@ -66,7 +66,7 @@ public class BindableProperty<T> : IBindableProperty<T>
 
     public BindableProperty<T> WithComparer(Func<T, T, bool> comparer)
     {
-        Comparer = comparer;
+        _comparer = comparer ?? EqualityComparer<T>.Default.Equals;
         return this;
     }
 
@@ -75,8 +75,7 @@ public class BindableProperty<T> : IBindableProperty<T>
         get => GetValue();
         set
         {
-            if (_value == null && value == null) return;
-            if (_value != null && Comparer(_value, value)) return;
+            if (_comparer(GetValue(), value)) return;
 
             var prev = GetValue();
             SetValue(value);
