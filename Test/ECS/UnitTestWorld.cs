@@ -82,12 +82,14 @@ public class UnitTestWorld
     public void AddNewComponentMovesEntityToNewSignature()
     {
         var world = new World();
-        var entity = world.CreateEntity(new TestPosition { X = 1 });
+        var entity = world.CreateEntity(new TestPosition { X = 1, Y = 7 });
 
         world.Add(entity, new TestVelocity { X = 2 });
 
         Assert.IsTrue(world.Has<TestPosition>(entity));
         Assert.IsTrue(world.Has<TestVelocity>(entity));
+        Assert.AreEqual(1, world.Get<TestPosition>(entity).X);
+        Assert.AreEqual(7, world.Get<TestPosition>(entity).Y);
         Assert.AreEqual(2, world.Get<TestVelocity>(entity).X);
         Assert.IsTrue(world.GetArchetype(entity).Signature.Has<TestPosition>());
         Assert.IsTrue(world.GetArchetype(entity).Signature.Has<TestVelocity>());
@@ -117,6 +119,20 @@ public class UnitTestWorld
         var entity = world.CreateEntity();
 
         Assert.Throws<InvalidOperationException>(() => world.Set(entity, new TestPosition()));
+    }
+
+    [Test]
+    public void SetExistingComponentUpdatesWithoutMovingArchetype()
+    {
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition { X = 1 });
+        var before = world.GetArchetype(entity);
+
+        world.Set(entity, new TestPosition { X = 42, Y = 24 });
+
+        Assert.AreSame(before, world.GetArchetype(entity));
+        Assert.AreEqual(42, world.Get<TestPosition>(entity).X);
+        Assert.AreEqual(24, world.Get<TestPosition>(entity).Y);
     }
 
     [Test]
@@ -156,6 +172,78 @@ public class UnitTestWorld
         Assert.IsFalse(b.IsAlive(entity));
         Assert.IsFalse(b.Has<TestPosition>(entity));
         Assert.Throws<InvalidOperationException>(() => b.Add(entity, new TestPosition()));
+    }
+
+    [Test]
+    public void InvalidEntityOperationsFollowWorldPolicy()
+    {
+        var world = new World();
+        var invalid = new Entity(world.WorldId, 100, 1);
+
+        Assert.IsFalse(world.IsAlive(invalid));
+        Assert.IsFalse(world.Has<TestPosition>(invalid));
+        Assert.IsFalse(world.TryGet(invalid, out TestPosition _));
+        Assert.IsFalse(world.DestroyEntity(invalid));
+        Assert.Throws<InvalidOperationException>(() => world.Get<TestPosition>(invalid));
+        Assert.Throws<InvalidOperationException>(() => world.Add(invalid, new TestPosition()));
+        Assert.Throws<InvalidOperationException>(() => world.Set(invalid, new TestPosition()));
+        Assert.Throws<InvalidOperationException>(() => world.Remove<TestPosition>(invalid));
+    }
+
+    [Test]
+    public void StaleAndDestroyedEntityOperationsFollowWorldPolicy()
+    {
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition());
+        var stale = new Entity(world.WorldId, entity.Id, entity.Version + 1);
+
+        Assert.IsFalse(world.IsAlive(stale));
+        Assert.IsFalse(world.Has<TestPosition>(stale));
+        Assert.IsFalse(world.TryGet(stale, out TestPosition _));
+        Assert.IsFalse(world.DestroyEntity(stale));
+        Assert.Throws<InvalidOperationException>(() => world.Get<TestPosition>(stale));
+        Assert.Throws<InvalidOperationException>(() => world.Add(stale, new TestVelocity()));
+        Assert.Throws<InvalidOperationException>(() => world.Set(stale, new TestPosition()));
+        Assert.Throws<InvalidOperationException>(() => world.Remove<TestPosition>(stale));
+
+        world.DestroyEntity(entity);
+
+        Assert.IsFalse(world.IsAlive(entity));
+        Assert.IsFalse(world.Has<TestPosition>(entity));
+        Assert.IsFalse(world.TryGet(entity, out TestPosition _));
+        Assert.IsFalse(world.DestroyEntity(entity));
+        Assert.Throws<InvalidOperationException>(() => world.Get<TestPosition>(entity));
+        Assert.Throws<InvalidOperationException>(() => world.Add(entity, new TestVelocity()));
+        Assert.Throws<InvalidOperationException>(() => world.Set(entity, new TestPosition()));
+        Assert.Throws<InvalidOperationException>(() => world.Remove<TestPosition>(entity));
+    }
+
+    [Test]
+    public void ForeignEntityOperationsFollowWorldPolicy()
+    {
+        var source = new World();
+        var target = new World();
+        var foreign = source.CreateEntity(new TestPosition());
+
+        Assert.IsFalse(target.IsAlive(foreign));
+        Assert.IsFalse(target.Has<TestPosition>(foreign));
+        Assert.IsFalse(target.TryGet(foreign, out TestPosition _));
+        Assert.IsFalse(target.DestroyEntity(foreign));
+        Assert.Throws<InvalidOperationException>(() => target.Get<TestPosition>(foreign));
+        Assert.Throws<InvalidOperationException>(() => target.Add(foreign, new TestVelocity()));
+        Assert.Throws<InvalidOperationException>(() => target.Set(foreign, new TestPosition()));
+        Assert.Throws<InvalidOperationException>(() => target.Remove<TestPosition>(foreign));
+    }
+
+    [Test]
+    public void CreateEntityRejectsDuplicateComponentTypes()
+    {
+        var world = new World();
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            world.CreateEntity(new TestPosition { X = 1 }, new TestPosition { X = 2 }));
+
+        StringAssert.Contains(nameof(TestPosition), ex!.Message);
     }
 
     [Test]

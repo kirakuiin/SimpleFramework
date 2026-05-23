@@ -58,6 +58,34 @@ public class UnitTestQuery
     }
 
     [Test]
+    public void QueryNotStopsReturningEntityAfterExcludedComponentIsAdded()
+    {
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition());
+        var query = world.Query<TestPosition>().Not<TestDeadTag>();
+
+        CollectionAssert.AreEqual(new[] { entity }, query.ToList());
+
+        world.Add(entity, new TestDeadTag());
+
+        Assert.IsEmpty(query.ToList());
+    }
+
+    [Test]
+    public void QueryStopsReturningEntityAfterIncludedComponentIsRemoved()
+    {
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition(), new TestVelocity());
+        var query = world.Query<TestPosition, TestVelocity>();
+
+        CollectionAssert.AreEqual(new[] { entity }, query.ToList());
+
+        world.Remove<TestVelocity>(entity);
+
+        Assert.IsEmpty(query.ToList());
+    }
+
+    [Test]
     public void QueryStopsReturningDestroyedEntities()
     {
         var world = new World();

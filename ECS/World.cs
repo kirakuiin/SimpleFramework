@@ -59,7 +59,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <returns>新实体句柄。</returns>
     public Entity CreateEntity<T1>(T1 c1) where T1 : IComponent
     {
-        return CreateEntityWithComponents(new Dictionary<Type, IComponent> { [typeof(T1)] = c1 });
+        return CreateEntityWithComponents(new IComponent[] { c1 });
     }
 
     /// <summary>
@@ -74,11 +74,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
         where T1 : IComponent
         where T2 : IComponent
     {
-        return CreateEntityWithComponents(new Dictionary<Type, IComponent>
-        {
-            [typeof(T1)] = c1,
-            [typeof(T2)] = c2
-        });
+        return CreateEntityWithComponents(new IComponent[] { c1, c2 });
     }
 
     /// <summary>
@@ -96,12 +92,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
         where T2 : IComponent
         where T3 : IComponent
     {
-        return CreateEntityWithComponents(new Dictionary<Type, IComponent>
-        {
-            [typeof(T1)] = c1,
-            [typeof(T2)] = c2,
-            [typeof(T3)] = c3
-        });
+        return CreateEntityWithComponents(new IComponent[] { c1, c2, c3 });
     }
 
     /// <summary>
@@ -122,13 +113,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
         where T3 : IComponent
         where T4 : IComponent
     {
-        return CreateEntityWithComponents(new Dictionary<Type, IComponent>
-        {
-            [typeof(T1)] = c1,
-            [typeof(T2)] = c2,
-            [typeof(T3)] = c3,
-            [typeof(T4)] = c4
-        });
+        return CreateEntityWithComponents(new IComponent[] { c1, c2, c3, c4 });
     }
 
     /// <summary>
@@ -387,6 +372,17 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     }
 
     /// <summary>
+    /// 根据预制体创建一个实体。
+    /// </summary>
+    /// <param name="prefab">实体预制体。</param>
+    /// <returns>新实体句柄。</returns>
+    public Entity Instantiate(EntityPrefab prefab)
+    {
+        ArgumentNullException.ThrowIfNull(prefab);
+        return CreateEntityWithComponents(prefab.GetComponents());
+    }
+
+    /// <summary>
     /// 销毁世界中的全部实体和原型。
     /// </summary>
     public void Destroy()
@@ -415,6 +411,11 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
         return _archetypes.Values;
     }
 
+    internal Entity CreateEntityWithBufferedComponents(IReadOnlyCollection<IComponent> components)
+    {
+        return CreateEntityWithComponents(components);
+    }
+
     public override string ToString()
     {
         return $"World '{Name}' ({EntityCount} entities)";
@@ -437,7 +438,16 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
 
     private Entity CreateEntityWithComponents(IReadOnlyCollection<IComponent> components)
     {
-        var values = components.ToDictionary(component => component.GetType(), component => component);
+        var values = new Dictionary<Type, IComponent>();
+        foreach (var component in components)
+        {
+            var type = component.GetType();
+            if (!values.TryAdd(type, component))
+            {
+                throw new ArgumentException($"Duplicate component type {type.Name}.", nameof(components));
+            }
+        }
+
         return CreateEntityWithComponents(values);
     }
 

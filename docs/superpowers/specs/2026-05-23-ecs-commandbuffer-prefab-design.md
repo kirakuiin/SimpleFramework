@@ -2,12 +2,12 @@
 
 ## 背景
 
-当前 ECS 重写已经合并，核心存储由 `World`、`Archetype`、`TypeSignature`、`Query` 和强类型组件列组成。`Query` 枚举期间会记录 `World.StructuralVersion`，如果遍历过程中发生创建实体、销毁实体、添加新组件、移除组件等结构变更，会抛出异常。这保护了 Archetype 行索引和组件引用的正确性。
+当前 ECS 核心存储由 `World`、`Archetype`、`TypeSignature`、`Query` 和强类型组件列组成。`Query` 枚举期间会记录 `World.StructuralVersion`；如果遍历中发生创建实体、销毁实体、添加新组件、移除组件等结构变更，会抛出异常。这保护了 Archetype 行索引和组件引用的正确性。
 
 本批次目标是在不重构核心存储的前提下，补齐 ECS 边界测试，并新增三个小型 API：
 
 - `CommandBuffer`：延迟播放结构变更，作为 Query 遍历期间修改结构的官方解法。
-- `EntityPrefab`：支持单实体默认组件值实例化。
+- `EntityPrefab`：支持“单实体 + 默认组件值”的第一版预制体。
 - `Each<T>`、`Each<T1,T2>`：提供轻量遍历语法糖，但不改变结构变更规则。
 
 `SystemGroup`、自动依赖排序、子实体 Prefab、序列化和资源引用不进入本批次实现范围。
@@ -22,22 +22,21 @@
 
 ## 边界行为与测试
 
-新增或扩展 `Test/ECS` 下的测试，先锁定这些行为：
+新增或扩展 `Test/ECS` 下的测试，锁定这些行为：
 
 - 添加新组件迁移 Archetype 时保留旧组件值。
 - `Query<T>().Not<TExclude>()` 在实体新增排除组件后不再返回该实体。
 - 移除 include 组件后，原 Query 不再返回该实体。
 - `Set<T>` 更新已有组件且不迁移 Archetype。
-- stale、foreign、invalid、destroyed entity 的 `Add`、`Remove`、`Get`、`Set`、`Has`、`TryGet`、`DestroyEntity` 行为明确一致。
-- 创建实体时传入重复组件类型应抛出明确异常。
+- stale、foreign、invalid、destroyed entity 的 `Add`、`Remove`、`Get`、`Set`、`Has`、`TryGet`、`DestroyEntity` 行为一致。
+- 创建实体时传入重复组件类型抛 `ArgumentException`，错误信息包含重复组件类型名。
 
-建议行为：
+行为约定：
 
 - `Has<T>`、`TryGet<T>`、`DestroyEntity` 对无效实体返回 `false`。
 - `Get<T>`、`Add<T>`、`Set<T>`、`Remove<T>` 对无效实体抛 `InvalidOperationException`。
 - `Set<T>` 对缺失组件抛 `InvalidOperationException`。
 - `Remove<T>` 对有效但缺失组件的实体返回 `false`。
-- 重复组件类型创建抛 `ArgumentException`，错误信息包含重复组件类型名。
 
 ## CommandBuffer
 
@@ -62,11 +61,9 @@ buffer.Playback();
 
 - `DestroyEntity` 对无效实体返回 `false`，不会中断播放。
 - `Add`、`Set`、`Remove` 对无效实体抛异常，播放停止并暴露错误。
-- 对已销毁实体执行后续 `Set` 或 `Remove` 时，也按 `World` 的无效实体规则处理。
+- 对已销毁实体执行后续 `Set` 或 `Remove` 时，同样按 `World` 的无效实体规则处理。
 
-### 延迟创建实体
-
-因为 `CreateEntity` 在播放前没有真实 `Entity`，CommandBuffer 使用轻量占位句柄：
+延迟创建实体使用轻量占位句柄：
 
 ```csharp
 var created = buffer.CreateEntity(new Position());
@@ -80,9 +77,8 @@ var entity = result.Resolve(created);
 - `BufferedEntity` 只在创建它的 CommandBuffer 内有效。
 - `CommandBuffer` 的 `Add`、`Set`、`Remove`、`DestroyEntity` 同时支持真实 `Entity` 和 `BufferedEntity`。
 - `Playback()` 返回 `CommandBufferResult`，用于把 `BufferedEntity` 解析为真实 `Entity`。
-- 如果占位实体在同一 buffer 内被销毁，`Resolve` 仍返回创建出的真实句柄，但该实体播放完成后可能已经不存活。这保持“按顺序真实执行”的语义。
-
-第一版不做跨 buffer 占位引用，也不做命令合并优化。
+- 如果占位实体在同一个 buffer 内被销毁，`Resolve` 仍返回创建出的真实句柄，但该实体播放完成后可能已经不存活。
+- 第一版不做跨 buffer 占位引用，也不做命令合并优化。
 
 ## EntityPrefab
 
@@ -146,19 +142,16 @@ world.Each<Position, Velocity>((Entity entity, ref Position position, ref Veloci
 
 - `CommandBuffer.cs`
 - `EntityPrefab.cs`
-- `Each.cs` 或扩展 `TemplateFunc.cs`
+- `ECSExtension.cs`
 
 测试放在 `Test/ECS/`：
 
 - `UnitTestCommandBuffer.cs`
 - `UnitTestEntityPrefab.cs`
+- `UnitTestEach.cs`
 - 扩展 `UnitTestWorld.cs` 和 `UnitTestQuery.cs`
 
-公共 API XML 注释使用中文。触碰 ECS 文件后运行乱码扫描：
-
-```powershell
-rg -n "瀛|鎸|绯|涓嶅|銆|€" ECS
-```
+公共 API XML 注释使用中文。
 
 ## 验证
 
@@ -168,7 +161,13 @@ rg -n "瀛|鎸|绯|涓嶅|銆|€" ECS
 dotnet test .\SimpleFramework.sln --no-restore -m:1 /nr:false
 ```
 
-命令需要设置超时。如果测试超时，先清理残留 `dotnet`、`testhost`、`vstest` 进程，再定位卡住原因。
+并扫描 ECS 乱码：
+
+```powershell
+rg -n "瀛|鎸|绯|涓嶅|銆|€" ECS
+```
+
+如果测试超时，先清理残留 `dotnet`、`testhost`、`vstest` 进程，再定位卡住原因。
 
 ## 非目标
 
