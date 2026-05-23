@@ -188,17 +188,18 @@ var hp = GameDomain.Instance.SendQuery(new ReadHpQuery());
 
 ```csharp
 var world = new World("Battle");
-var entity = world.CreateEntity<Position, Velocity>();
-entity.AddTag("player");
+var entity = world.CreateEntity<Position, Velocity>(
+    new Position { X = 0, Y = 0 },
+    new Velocity { X = 1, Y = 0 });
 
-var query = world.CreateQuery()
-    .Has<Position>()
-    .Not<Dead>()
-    .HasTag("player");
+var query = world.Query<Position, Velocity>()
+    .Not<Dead>();
 
 foreach (var item in query)
 {
-    var position = item.Get<Position>();
+    ref var position = ref world.Get<Position>(item);
+    ref var velocity = ref world.Get<Velocity>(item);
+    position.X += velocity.X;
 }
 ```
 

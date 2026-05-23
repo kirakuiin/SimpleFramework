@@ -1,201 +1,420 @@
 ﻿using System.Collections;
-using SimpleFramework.Collections;
 
 namespace SimpleFramework.ECS;
 
 /// <summary>
-/// 表示ECS系统中所有实体和原型的主容器。World管理实体的创建和组织及其组件。
+/// ECS 世界，负责实体生命周期、组件访问和结构迁移。
 /// </summary>
-/// <remarks>
-/// World负责：
-/// - 创建和管理实体
-/// - 根据实体的组件组成将其组织到原型中
-/// - 提供查询功能以查找和处理实体
-/// - 管理实体和原型的生命周期
-/// </remarks>
 public partial class World : IEnumerable<Archetype>, IEquatable<World>
 {
-    private readonly Dictionary<TypeSignature, Archetype> _signatureToArchetype = new();
-    // ReSharper disable once CollectionNeverUpdated.Local
-    private readonly DefaultDict<TypeSignature, List<Entity>> _signatureToEntities = new(() => new List<Entity>());
-    private readonly Dictionary<int, Entity> _idToEntity = new();
-    
-    /// <summary>
-    /// 当Archetype发生变化时触发的事件。
-    /// </summary>
-    public event Action<World, Archetype>? OnArchetypeUpdate;
-    
-    /// <summary>
-    /// 当实体被添加到世界时触发的事件。
-    /// </summary>
-    public event Action<World, Entity>? OnEntityAdded;
-    
-    /// <summary>
-    /// 当实体被移除时触发的事件。
-    /// </summary>
-    public event Action<World, Entity>? OnEntityRemoved;
+    private static int _nextWorldId;
+
+    private readonly Dictionary<TypeSignature, Archetype> _archetypes = new();
+    private readonly List<EntitySlot> _slots = new();
 
     /// <summary>
-    /// 初始化MyWorld类的新实例。
+    /// 创建 ECS 世界。
     /// </summary>
-    /// <param name="name">世界的名称。默认为"World"。</param>
+    /// <param name="name">世界名称。</param>
     public World(string name = "World")
     {
+        WorldId = Interlocked.Increment(ref _nextWorldId);
         Name = name;
+        GetOrCreateArchetype(new TypeSignature());
     }
 
     /// <summary>
-    /// 获取此世界的名称。
+    /// 世界唯一编号。
     /// </summary>
-    public string Name { init; get; }
+    public int WorldId { get; }
 
     /// <summary>
-    /// 获取此世界中的实体总数。
+    /// 世界名称。
     /// </summary>
-    public int EntityCount => _idToEntity.Count;
+    public string Name { get; init; }
 
     /// <summary>
-    /// 创建一个没有组件的新实体。
+    /// 当前存活实体数量。
     /// </summary>
-    /// <returns>新创建的实体。</returns>
+    public int EntityCount { get; private set; }
+
+    internal int ArchetypeVersion { get; private set; }
+
+    internal int StructuralVersion { get; private set; }
+
+    /// <summary>
+    /// 创建空实体。
+    /// </summary>
+    /// <returns>新实体句柄。</returns>
     public Entity CreateEntity()
     {
-        var signature = new TypeSignature();
-        return GetArchetype(signature).CreateEntity();
+        return CreateEntityWithComponents(Array.Empty<IComponent>());
     }
 
     /// <summary>
-    /// 创建一个具有指定组件类型的新实体。
+    /// 使用一个组件创建实体。
     /// </summary>
-    /// <param name="componentTypes">实体应具有的组件类型。</param>
-    /// <returns>新创建的实体。</returns>
-    public Entity CreateEntity(params Type[] componentTypes)
+    /// <typeparam name="T1">组件类型。</typeparam>
+    /// <param name="c1">组件值。</param>
+    /// <returns>新实体句柄。</returns>
+    public Entity CreateEntity<T1>(T1 c1) where T1 : IComponent
     {
-        var signature = new TypeSignature(componentTypes);
-        return GetArchetype(signature).CreateEntity();
+        return CreateEntityWithComponents(new Dictionary<Type, IComponent> { [typeof(T1)] = c1 });
     }
 
     /// <summary>
-    /// 为此世界创建新查询。
+    /// 使用两个组件创建实体。
     /// </summary>
-    /// <returns>新的查询实例。</returns>
-    public Query CreateQuery()
+    /// <typeparam name="T1">第一个组件类型。</typeparam>
+    /// <typeparam name="T2">第二个组件类型。</typeparam>
+    /// <param name="c1">第一个组件值。</param>
+    /// <param name="c2">第二个组件值。</param>
+    /// <returns>新实体句柄。</returns>
+    public Entity CreateEntity<T1, T2>(T1 c1, T2 c2)
+        where T1 : IComponent
+        where T2 : IComponent
+    {
+        return CreateEntityWithComponents(new Dictionary<Type, IComponent>
+        {
+            [typeof(T1)] = c1,
+            [typeof(T2)] = c2
+        });
+    }
+
+    /// <summary>
+    /// 使用三个组件创建实体。
+    /// </summary>
+    /// <typeparam name="T1">第一个组件类型。</typeparam>
+    /// <typeparam name="T2">第二个组件类型。</typeparam>
+    /// <typeparam name="T3">第三个组件类型。</typeparam>
+    /// <param name="c1">第一个组件值。</param>
+    /// <param name="c2">第二个组件值。</param>
+    /// <param name="c3">第三个组件值。</param>
+    /// <returns>新实体句柄。</returns>
+    public Entity CreateEntity<T1, T2, T3>(T1 c1, T2 c2, T3 c3)
+        where T1 : IComponent
+        where T2 : IComponent
+        where T3 : IComponent
+    {
+        return CreateEntityWithComponents(new Dictionary<Type, IComponent>
+        {
+            [typeof(T1)] = c1,
+            [typeof(T2)] = c2,
+            [typeof(T3)] = c3
+        });
+    }
+
+    /// <summary>
+    /// 使用四个组件创建实体。
+    /// </summary>
+    /// <typeparam name="T1">第一个组件类型。</typeparam>
+    /// <typeparam name="T2">第二个组件类型。</typeparam>
+    /// <typeparam name="T3">第三个组件类型。</typeparam>
+    /// <typeparam name="T4">第四个组件类型。</typeparam>
+    /// <param name="c1">第一个组件值。</param>
+    /// <param name="c2">第二个组件值。</param>
+    /// <param name="c3">第三个组件值。</param>
+    /// <param name="c4">第四个组件值。</param>
+    /// <returns>新实体句柄。</returns>
+    public Entity CreateEntity<T1, T2, T3, T4>(T1 c1, T2 c2, T3 c3, T4 c4)
+        where T1 : IComponent
+        where T2 : IComponent
+        where T3 : IComponent
+        where T4 : IComponent
+    {
+        return CreateEntityWithComponents(new Dictionary<Type, IComponent>
+        {
+            [typeof(T1)] = c1,
+            [typeof(T2)] = c2,
+            [typeof(T3)] = c3,
+            [typeof(T4)] = c4
+        });
+    }
+
+    /// <summary>
+    /// 销毁实体。
+    /// </summary>
+    /// <param name="entity">实体句柄。</param>
+    /// <returns>如果实体被销毁则为 true；实体无效或已销毁时为 false。</returns>
+    public bool DestroyEntity(Entity entity)
+    {
+        if (!TryGetSlot(entity, out var slot))
+        {
+            return false;
+        }
+
+        var moved = slot.Archetype.RemoveAtSwapBack(slot.Row);
+        if (moved.HasValue)
+        {
+            _slots[moved.Value.Id].Row = slot.Row;
+        }
+
+        slot.Alive = false;
+        slot.Archetype = null!;
+        slot.Row = -1;
+        EntityCount--;
+        StructuralVersion++;
+        return true;
+    }
+
+    /// <summary>
+    /// 判断实体句柄是否仍然有效且存活。
+    /// </summary>
+    /// <param name="entity">实体句柄。</param>
+    /// <returns>如果实体存活则为 true。</returns>
+    public bool IsAlive(Entity entity)
+    {
+        return TryGetSlot(entity, out _);
+    }
+
+    /// <summary>
+    /// 判断实体是否拥有指定组件。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <param name="entity">实体句柄。</param>
+    /// <returns>如果实体拥有该组件则为 true。</returns>
+    public bool Has<T>(Entity entity) where T : IComponent
+    {
+        return TryGetSlot(entity, out var slot) && slot.Archetype.Signature.Has<T>();
+    }
+
+    /// <summary>
+    /// 获取组件引用。返回的引用只在下一次结构变更前有效。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <param name="entity">实体句柄。</param>
+    /// <returns>组件引用。</returns>
+    public ref T Get<T>(Entity entity) where T : IComponent
+    {
+        var slot = Validate(entity);
+        if (!slot.Archetype.Signature.Has<T>())
+        {
+            throw new InvalidOperationException($"Entity {entity} does not contain component {typeof(T).Name}.");
+        }
+
+        return ref slot.Archetype.Get<T>(slot.Row);
+    }
+
+    /// <summary>
+    /// 尝试获取实体组件。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <param name="entity">实体句柄。</param>
+    /// <param name="component">找到时返回组件值。</param>
+    /// <returns>如果找到组件则为 true。</returns>
+    public bool TryGet<T>(Entity entity, out T component) where T : IComponent
+    {
+        if (TryGetSlot(entity, out var slot) && slot.Archetype.Signature.Has<T>())
+        {
+            component = slot.Archetype.Get<T>(slot.Row);
+            return true;
+        }
+
+        component = default!;
+        return false;
+    }
+
+    /// <summary>
+    /// 添加或更新实体组件。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <param name="entity">实体句柄。</param>
+    /// <param name="component">组件值。</param>
+    /// <returns>原实体句柄。</returns>
+    public Entity Add<T>(Entity entity, T component) where T : IComponent
+    {
+        var slot = Validate(entity);
+        if (slot.Archetype.Signature.Has<T>())
+        {
+            slot.Archetype.Set(slot.Row, component);
+            return entity;
+        }
+
+        var values = slot.Archetype.GetAllBoxed(slot.Row).ToDictionary(pair => pair.Key, pair => pair.Value);
+        values[typeof(T)] = component;
+        MoveToSignature(entity, slot, values.Keys, values);
+        StructuralVersion++;
+        return entity;
+    }
+
+    /// <summary>
+    /// 更新实体已有组件。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <param name="entity">实体句柄。</param>
+    /// <param name="component">组件值。</param>
+    /// <returns>原实体句柄。</returns>
+    public Entity Set<T>(Entity entity, T component) where T : IComponent
+    {
+        var slot = Validate(entity);
+        if (!slot.Archetype.Signature.Has<T>())
+        {
+            throw new InvalidOperationException($"Entity {entity} does not contain component {typeof(T).Name}.");
+        }
+
+        slot.Archetype.Set(slot.Row, component);
+        return entity;
+    }
+
+    /// <summary>
+    /// 移除实体组件。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <param name="entity">实体句柄。</param>
+    /// <returns>如果组件被移除则为 true。</returns>
+    public bool Remove<T>(Entity entity) where T : IComponent
+    {
+        var slot = Validate(entity);
+        var type = typeof(T);
+        if (!slot.Archetype.Signature.Has(type))
+        {
+            return false;
+        }
+
+        var values = slot.Archetype.GetAllBoxed(slot.Row)
+            .Where(pair => pair.Key != type)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+        MoveToSignature(entity, slot, values.Keys, values);
+        StructuralVersion++;
+        return true;
+    }
+
+    /// <summary>
+    /// 获取实体当前所属原型。
+    /// </summary>
+    /// <param name="entity">实体句柄。</param>
+    /// <returns>实体当前原型。</returns>
+    public Archetype GetArchetype(Entity entity)
+    {
+        return Validate(entity).Archetype;
+    }
+
+    /// <summary>
+    /// 根据实体编号获取当前存活实体句柄。
+    /// </summary>
+    /// <param name="id">实体编号。</param>
+    /// <returns>实体存活时返回实体句柄，否则返回 null。</returns>
+    public Entity? GetEntity(int id)
+    {
+        if (id < 0 || id >= _slots.Count)
+        {
+            return null;
+        }
+
+        var slot = _slots[id];
+        return slot.Alive ? new Entity(WorldId, id, slot.Version) : null;
+    }
+
+    /// <summary>
+    /// 获取当前全部存活实体。
+    /// </summary>
+    /// <returns>存活实体序列。</returns>
+    public IEnumerable<Entity> GetEntities()
+    {
+        for (var id = 0; id < _slots.Count; id++)
+        {
+            var slot = _slots[id];
+            if (slot.Alive)
+            {
+                yield return new Entity(WorldId, id, slot.Version);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 创建空查询。
+    /// </summary>
+    /// <returns>查询对象。</returns>
+    public Query Query()
     {
         return new Query(this);
     }
 
     /// <summary>
-    /// 根据实体的ID获取实体。
+    /// 创建包含一个组件类型的查询。
     /// </summary>
-    /// <param name="id"></param>
-    /// <returns></returns>
-    public Entity? GetEntity(int id)
+    /// <typeparam name="T1">组件类型。</typeparam>
+    /// <returns>查询对象。</returns>
+    public Query Query<T1>() where T1 : IComponent
     {
-        return _idToEntity.GetValueOrDefault(id);
-    }
-    
-    /// <summary>
-    /// 移除实体
-    /// </summary>
-    /// <param name="entity"></param>
-    /// <returns>如果成功移除则返回真</returns>
-    public bool RemoveEntity(Entity entity)
-    {
-        if (!entity.World.Equals(this)) return false;
-        if (!_idToEntity.Remove(entity.Id)) return false;
-        var archetype = entity.Archetype;
-        _signatureToEntities[archetype.TypeSignature].Remove(entity);
-        OnEntityRemoved?.Invoke(this, entity);
-        return true;
-    }
-    
-    /// <summary>
-    /// 移除实体
-    /// </summary>
-    /// <param name="id"></param>
-    /// <returns>如果成功移除则返回真</returns>
-    public bool RemoveEntity(int id)
-    {
-        return _idToEntity.TryGetValue(id, out var entity) && RemoveEntity(entity);
+        return Query().Has<T1>();
     }
 
     /// <summary>
-    /// 获取此世界中所有实体的列表。
+    /// 创建包含两个组件类型的查询。
     /// </summary>
-    /// <returns>所有实体的列表。</returns>
-    public IEnumerable<Entity> GetEntities()
+    /// <typeparam name="T1">第一个组件类型。</typeparam>
+    /// <typeparam name="T2">第二个组件类型。</typeparam>
+    /// <returns>查询对象。</returns>
+    public Query Query<T1, T2>()
+        where T1 : IComponent
+        where T2 : IComponent
     {
-        return _idToEntity.Values;
+        return Query().Has<T1>().Has<T2>();
     }
 
     /// <summary>
-    /// 获取或创建具有指定类型签名的原型。
+    /// 创建包含三个组件类型的查询。
     /// </summary>
-    /// <param name="signature">要查找或创建原型的类型签名。</param>
-    /// <returns>匹配的或新创建的原型。</returns>
-    public Archetype GetArchetype(TypeSignature signature)
+    /// <typeparam name="T1">第一个组件类型。</typeparam>
+    /// <typeparam name="T2">第二个组件类型。</typeparam>
+    /// <typeparam name="T3">第三个组件类型。</typeparam>
+    /// <returns>查询对象。</returns>
+    public Query Query<T1, T2, T3>()
+        where T1 : IComponent
+        where T2 : IComponent
+        where T3 : IComponent
     {
-        if (_signatureToArchetype.TryGetValue(signature, out var archetype))
-        {
-            return archetype;
-        }
-
-        archetype = new Archetype(this, signature);
-        _signatureToArchetype[signature] = archetype;
-        OnArchetypeUpdate?.Invoke(this, archetype);
-        return archetype;
+        return Query().Has<T1>().Has<T2>().Has<T3>();
     }
 
     /// <summary>
-    /// 移动entity到新的原型
+    /// 创建包含四个组件类型的查询。
     /// </summary>
-    /// <param name="entity"></param>
-    /// <param name="before">旧的签名</param>
-    /// <param name="after">新的签名</param>
-    internal void MoveEntity(Entity entity, TypeSignature before, TypeSignature after)
+    /// <typeparam name="T1">第一个组件类型。</typeparam>
+    /// <typeparam name="T2">第二个组件类型。</typeparam>
+    /// <typeparam name="T3">第三个组件类型。</typeparam>
+    /// <typeparam name="T4">第四个组件类型。</typeparam>
+    /// <returns>查询对象。</returns>
+    public Query Query<T1, T2, T3, T4>()
+        where T1 : IComponent
+        where T2 : IComponent
+        where T3 : IComponent
+        where T4 : IComponent
     {
-        if (!entity.World.Equals(this)) return;
-        
-        _signatureToEntities[before].Remove(entity);
-        _signatureToEntities[after].Add(entity);
+        return Query().Has<T1>().Has<T2>().Has<T3>().Has<T4>();
     }
 
     /// <summary>
-    /// 销毁此世界及其所有实体和原型。
+    /// 销毁世界中的全部实体和原型。
     /// </summary>
     public void Destroy()
     {
-        _signatureToArchetype.Clear();
-        _signatureToEntities.Clear();
-        _idToEntity.Clear();
+        _archetypes.Clear();
+        foreach (var slot in _slots)
+        {
+            if (slot.Alive)
+            {
+                slot.Version++;
+            }
+
+            slot.Alive = false;
+            slot.Archetype = null!;
+            slot.Row = -1;
+        }
+
+        EntityCount = 0;
+        ArchetypeVersion++;
+        StructuralVersion++;
+        GetOrCreateArchetype(new TypeSignature());
     }
 
-    /// <summary>
-    /// 添加一个实体的具体逻辑
-    /// </summary>
-    /// <param name="entity"></param>
-    internal void AddEntity(Entity entity)
+    internal IReadOnlyCollection<Archetype> GetAllArchetypes()
     {
-        if (!entity.World.Equals(this)) return;
-        _idToEntity[entity.Id] = entity;
-        _signatureToEntities[entity.Archetype.TypeSignature].Add(entity);
-        OnEntityAdded?.Invoke(this, entity);
-    }
-    
-    /// <summary>
-    /// 获取某个签名下的所有的Entity
-    /// </summary>
-    /// <param name="signature"></param>
-    /// <returns></returns>
-    internal IEnumerable<Entity> GetEntities(TypeSignature signature)
-    {
-        return _signatureToEntities.TryGetValue(signature, out var entities) ? entities : Enumerable.Empty<Entity>();
+        return _archetypes.Values;
     }
 
-    /// <summary>
-    /// 返回表示当前世界的字符串。
-    /// </summary>
-    /// <returns>包含世界名称和实体数量的字符串。</returns>
     public override string ToString()
     {
         return $"World '{Name}' ({EntityCount} entities)";
@@ -203,7 +422,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
 
     public IEnumerator<Archetype> GetEnumerator()
     {
-        return (from pair in _signatureToEntities where pair.Value.Count > 0 select GetArchetype(pair.Key)).GetEnumerator();
+        return _archetypes.Values.Where(archetype => archetype.EntityCount > 0).GetEnumerator();
     }
 
     IEnumerator IEnumerable.GetEnumerator()
@@ -213,6 +432,97 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
 
     public bool Equals(World? other)
     {
-        return other is not null && ReferenceEquals(this, other);
+        return ReferenceEquals(this, other);
+    }
+
+    private Entity CreateEntityWithComponents(IReadOnlyCollection<IComponent> components)
+    {
+        var values = components.ToDictionary(component => component.GetType(), component => component);
+        return CreateEntityWithComponents(values);
+    }
+
+    private Entity CreateEntityWithComponents(IReadOnlyDictionary<Type, IComponent> values)
+    {
+        var signature = new TypeSignature(values.Keys);
+        var archetype = GetOrCreateArchetype(signature);
+        var id = _slots.Count;
+        var slot = new EntitySlot { Version = 1, Alive = true, Archetype = archetype };
+        var entity = new Entity(WorldId, id, slot.Version);
+        slot.Row = archetype.Add(entity, values);
+        _slots.Add(slot);
+        EntityCount++;
+        StructuralVersion++;
+        return entity;
+    }
+
+    private Archetype GetOrCreateArchetype(TypeSignature signature)
+    {
+        if (_archetypes.TryGetValue(signature, out var archetype))
+        {
+            return archetype;
+        }
+
+        archetype = new Archetype(signature);
+        _archetypes[signature] = archetype;
+        ArchetypeVersion++;
+        return archetype;
+    }
+
+    private void MoveToSignature(
+        Entity entity,
+        EntitySlot slot,
+        IEnumerable<Type> types,
+        IReadOnlyDictionary<Type, IComponent> values)
+    {
+        var oldArchetype = slot.Archetype;
+        var oldRow = slot.Row;
+        var target = GetOrCreateArchetype(new TypeSignature(types));
+        var newRow = target.Add(entity, values);
+        var moved = oldArchetype.RemoveAtSwapBack(oldRow);
+
+        if (moved.HasValue)
+        {
+            _slots[moved.Value.Id].Row = oldRow;
+        }
+
+        slot.Archetype = target;
+        slot.Row = newRow;
+    }
+
+    private EntitySlot Validate(Entity entity)
+    {
+        if (!TryGetSlot(entity, out var slot))
+        {
+            throw new InvalidOperationException($"Invalid entity handle {entity} for world {WorldId}.");
+        }
+
+        return slot;
+    }
+
+    private bool TryGetSlot(Entity entity, out EntitySlot slot)
+    {
+        slot = null!;
+
+        if (entity.WorldId != WorldId || entity.Id < 0 || entity.Id >= _slots.Count)
+        {
+            return false;
+        }
+
+        var candidate = _slots[entity.Id];
+        if (!candidate.Alive || candidate.Version != entity.Version)
+        {
+            return false;
+        }
+
+        slot = candidate;
+        return true;
+    }
+
+    private sealed class EntitySlot
+    {
+        public int Version;
+        public bool Alive;
+        public Archetype Archetype = null!;
+        public int Row;
     }
 }

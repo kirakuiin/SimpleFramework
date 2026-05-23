@@ -1,29 +1,26 @@
-﻿namespace SimpleFramework.ECS;
+namespace SimpleFramework.ECS;
 
 /// <summary>
-/// 一个简化版本的系统基类
+/// ECS 系统基类。
 /// </summary>
 public abstract class EcsSystem
 {
-    protected readonly World World;
-    protected Query Query;
-
+    /// <summary>
+    /// 创建 ECS 系统。
+    /// </summary>
+    /// <param name="world">系统所属世界。</param>
     protected EcsSystem(World world)
     {
         World = world;
-        Query = world.CreateQuery();
     }
 
     /// <summary>
-    /// 更新函数
+    /// 系统所属世界。
     /// </summary>
-    public virtual void Update()
-    {
-        Query.Foreach(ProcessEntity);
-    }
+    protected World World { get; }
 
     /// <summary>
-    /// 处理单个实体的调用
+    /// 执行系统更新。
     /// </summary>
-    protected abstract void ProcessEntity(Entity entity);
+    public abstract void Update();
 }

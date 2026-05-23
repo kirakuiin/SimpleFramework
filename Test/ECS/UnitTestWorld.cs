@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using NUnit.Framework;
 using SimpleFramework.ECS;
@@ -7,328 +8,243 @@ namespace Test.ECS;
 [TestFixture]
 public class UnitTestWorld
 {
-    private World _world;
-
-    [SetUp]
-    public void Setup()
+    [Test]
+    public void WorldCreationSetsNameAndWorldId()
     {
-        _world = new World("TestWorld");
+        var world = new World("TestWorld");
+
+        Assert.AreEqual("TestWorld", world.Name);
+        Assert.Greater(world.WorldId, 0);
+        Assert.AreEqual(0, world.EntityCount);
     }
 
     [Test]
-    public void TestWorldCreation()
+    public void CreateEntityReturnsAliveHandle()
     {
-        Assert.IsNotNull(_world);
-        Assert.AreEqual("TestWorld", _world.Name);
-        Assert.AreEqual(0, _world.EntityCount);
+        var world = new World();
+
+        var entity = world.CreateEntity();
+
+        Assert.AreEqual(world.WorldId, entity.WorldId);
+        Assert.AreEqual(0, entity.Id);
+        Assert.AreEqual(1, entity.Version);
+        Assert.IsTrue(world.IsAlive(entity));
+        Assert.AreEqual(1, world.EntityCount);
     }
 
     [Test]
-    public void TestCreateEmptyEntity()
+    public void CreateEntityWithInitialComponentsStoresValues()
     {
-        var entity = _world.CreateEntity();
-        Assert.IsNotNull(entity);
-        Assert.AreEqual(_world, entity.World);
-        Assert.AreEqual(1, _world.EntityCount);
+        var world = new World();
+
+        var entity = world.CreateEntity(
+            new TestPosition { X = 1, Y = 2 },
+            new TestVelocity { X = 3, Y = 4 },
+            new TestHealth { Current = 5, Max = 6 },
+            new TestName { Value = "player" });
+
+        Assert.IsTrue(world.Has<TestPosition>(entity));
+        Assert.IsTrue(world.Has<TestVelocity>(entity));
+        Assert.IsTrue(world.Has<TestHealth>(entity));
+        Assert.IsTrue(world.Has<TestName>(entity));
+        Assert.AreEqual(1, world.Get<TestPosition>(entity).X);
+        Assert.AreEqual(4, world.Get<TestVelocity>(entity).Y);
+        Assert.AreEqual(5, world.Get<TestHealth>(entity).Current);
+        Assert.AreEqual("player", world.Get<TestName>(entity).Value);
     }
 
     [Test]
-    public void TestCreateEntityWithComponents()
+    public void GetReturnsWritableReferenceForStructComponent()
     {
-        var entity = _world.CreateEntity(typeof(TestIntComponent), typeof(TestStringComponent));
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
-        Assert.AreEqual(1, _world.EntityCount);
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition { X = 1, Y = 2 });
+
+        ref var position = ref world.Get<TestPosition>(entity);
+        position.X = 10;
+
+        Assert.AreEqual(10, world.Get<TestPosition>(entity).X);
     }
 
     [Test]
-    public void TestCreateQuery()
+    public void AddExistingComponentUpdatesInPlace()
     {
-        var query = _world.CreateQuery();
-        Assert.IsNotNull(query);
-        Assert.AreEqual(_world, query.World);
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition { X = 1 });
+        var before = world.GetArchetype(entity);
+
+        world.Add(entity, new TestPosition { X = 9 });
+
+        Assert.AreSame(before, world.GetArchetype(entity));
+        Assert.AreEqual(9, world.Get<TestPosition>(entity).X);
     }
 
     [Test]
-    public void TestRemoveEntity()
+    public void AddNewComponentMovesEntityToNewSignature()
     {
-        var entity = _world.CreateEntity();
-        Assert.AreEqual(1, _world.EntityCount);
-        
-        _world.RemoveEntity(entity);
-        Assert.AreEqual(0, _world.EntityCount);
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition { X = 1 });
+
+        world.Add(entity, new TestVelocity { X = 2 });
+
+        Assert.IsTrue(world.Has<TestPosition>(entity));
+        Assert.IsTrue(world.Has<TestVelocity>(entity));
+        Assert.AreEqual(2, world.Get<TestVelocity>(entity).X);
+        Assert.IsTrue(world.GetArchetype(entity).Signature.Has<TestPosition>());
+        Assert.IsTrue(world.GetArchetype(entity).Signature.Has<TestVelocity>());
     }
 
     [Test]
-    public void TestRemoveEntityId()
+    public void RemoveComponentMovesEntityToReducedSignature()
     {
-        var entity = _world.CreateEntity<TestIntComponent>();
-        Assert.AreEqual(1, _world.EntityCount);
-        
-        _world.RemoveEntity(entity.Id);
-        Assert.AreEqual(0, _world.EntityCount);
-    }
-    
-    [Test]
-    public void TestGetEntityById()
-    {
-        var entity = _world.CreateEntity<TestIntComponent>();
-        
-        var entity1 = _world.GetEntity(entity.Id);
-        
-        Assert.AreEqual(entity, entity1);
+        var world = new World();
+        var entity = world.CreateEntity(
+            new TestPosition { X = 1 },
+            new TestVelocity { X = 2 });
+
+        Assert.IsTrue(world.Remove<TestVelocity>(entity));
+
+        Assert.IsTrue(world.Has<TestPosition>(entity));
+        Assert.IsFalse(world.Has<TestVelocity>(entity));
+        Assert.IsFalse(world.Remove<TestVelocity>(entity));
+        Assert.IsTrue(world.GetArchetype(entity).Signature.Has<TestPosition>());
+        Assert.IsFalse(world.GetArchetype(entity).Signature.Has<TestVelocity>());
     }
 
     [Test]
-    public void TestGetEntities()
+    public void SetMissingComponentThrows()
     {
-        var entity1 = _world.CreateEntity();
-        var entity2 = _world.CreateEntity(typeof(TestIntComponent));
-        
-        var entities = _world.GetEntities().ToList();
-        Assert.AreEqual(2, entities.Count);
-        Assert.Contains(entity1, entities);
-        Assert.Contains(entity2, entities);
+        var world = new World();
+        var entity = world.CreateEntity();
+
+        Assert.Throws<InvalidOperationException>(() => world.Set(entity, new TestPosition()));
     }
 
     [Test]
-    public void TestDestroy()
+    public void TryGetReturnsFalseForMissingOrInvalidEntity()
     {
-        _world.CreateEntity();
-        _world.CreateEntity(typeof(TestIntComponent));
-        Assert.AreEqual(2, _world.EntityCount);
-        
-        _world.Destroy();
-        Assert.AreEqual(0, _world.EntityCount);
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition { X = 1 });
+        var missing = new Entity(world.WorldId, 100, 1);
+
+        Assert.IsTrue(world.TryGet(entity, out TestPosition position));
+        Assert.AreEqual(1, position.X);
+        Assert.IsFalse(world.TryGet(entity, out TestVelocity _));
+        Assert.IsFalse(world.TryGet(missing, out TestPosition _));
     }
 
     [Test]
-    public void TestToString()
+    public void DestroyInvalidatesEntityHandle()
     {
-        var str = _world.ToString();
-        Assert.IsTrue(str.Contains("TestWorld"));
-        Assert.IsTrue(str.Contains("0 entities"));
-        
-        _world.CreateEntity();
-        str = _world.ToString();
-        Assert.IsTrue(str.Contains("1 entities"));
+        var world = new World();
+        var entity = world.CreateEntity();
+
+        Assert.IsTrue(world.IsAlive(entity));
+        Assert.IsTrue(world.DestroyEntity(entity));
+        Assert.IsFalse(world.IsAlive(entity));
+        Assert.IsFalse(world.DestroyEntity(entity));
+        Assert.Throws<InvalidOperationException>(() => world.Get<TestPosition>(entity));
+        Assert.AreEqual(0, world.EntityCount);
     }
 
     [Test]
-    public void TestEquals()
+    public void ForeignEntityIsRejected()
     {
-        var world2 = new World("TestWorld2");
-        Assert.IsFalse(_world.Equals(world2));
-        Assert.IsTrue(_world.Equals(_world));
+        var a = new World();
+        var b = new World();
+        var entity = a.CreateEntity();
+
+        Assert.IsFalse(b.IsAlive(entity));
+        Assert.IsFalse(b.Has<TestPosition>(entity));
+        Assert.Throws<InvalidOperationException>(() => b.Add(entity, new TestPosition()));
     }
 
     [Test]
-    public void TestGetEnumerator()
+    public void DestroyUpdatesSwappedEntityRow()
     {
-        _world.CreateEntity();
-        _world.CreateEntity(typeof(TestIntComponent));
-        
-        int count = 0;
-        foreach (var archetype in _world)
-        {
-            count++;
-            Assert.IsNotNull(archetype);
-        }
-        Assert.AreEqual(2, count);
-    }
+        var world = new World();
+        var first = world.CreateEntity(new TestPosition { X = 1 });
+        var second = world.CreateEntity(new TestPosition { X = 2 });
 
-    // Template function tests
-    [Test]
-    public void TestCreateEntityWithOneComponent()
-    {
-        var entity = _world.CreateEntity<TestIntComponent>();
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
+        Assert.IsTrue(world.DestroyEntity(first));
+
+        Assert.IsTrue(world.IsAlive(second));
+        Assert.AreEqual(2, world.Get<TestPosition>(second).X);
     }
 
     [Test]
-    public void TestCreateEntityWithTwoComponents()
+    public void GetEntityReturnsAliveHandleById()
     {
-        var entity = _world.CreateEntity<TestIntComponent, TestStringComponent>();
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
+        var world = new World();
+        var entity = world.CreateEntity();
+
+        Assert.AreEqual(entity, world.GetEntity(entity.Id));
+        world.DestroyEntity(entity);
+        Assert.IsNull(world.GetEntity(entity.Id));
     }
 
     [Test]
-    public void TestCreateEntityWithThreeComponents()
+    public void GetEntitiesReturnsOnlyAliveEntities()
     {
-        var entity = _world.CreateEntity<TestIntComponent, TestStringComponent, TestDoubleComponent>();
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
-        Assert.IsTrue(entity.Has<TestDoubleComponent>());
+        var world = new World();
+        var first = world.CreateEntity();
+        var second = world.CreateEntity(new TestPosition());
+        world.DestroyEntity(first);
+
+        CollectionAssert.AreEqual(new[] { second }, world.GetEntities().ToList());
     }
 
     [Test]
-    public void TestCreateEntityWithFourComponents()
+    public void QuerySugarCreatesIncludedQueries()
     {
-        var entity = _world.CreateEntity<TestIntComponent, TestStringComponent, TestDoubleComponent, TestBoolComponent>();
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
-        Assert.IsTrue(entity.Has<TestDoubleComponent>());
-        Assert.IsTrue(entity.Has<TestBoolComponent>());
+        var world = new World();
+        var entity = world.CreateEntity(
+            new TestPosition(),
+            new TestVelocity(),
+            new TestHealth(),
+            new TestDeadTag());
+
+        CollectionAssert.AreEqual(new[] { entity }, world.Query<TestPosition>().ToList());
+        CollectionAssert.AreEqual(new[] { entity }, world.Query<TestPosition, TestVelocity>().ToList());
+        CollectionAssert.AreEqual(new[] { entity }, world.Query<TestPosition, TestVelocity, TestHealth>().ToList());
+        CollectionAssert.AreEqual(new[] { entity },
+            world.Query<TestPosition, TestVelocity, TestHealth, TestDeadTag>().ToList());
     }
 
     [Test]
-    public void TestCreateEntityWithOneComponentInstance()
+    public void DestroyClearsWorld()
     {
-        var comp = new TestIntComponent { Value = 42 };
-        var entity = _world.CreateEntity(comp);
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.AreEqual(comp, entity.Get<TestIntComponent>());
+        var world = new World();
+        world.CreateEntity();
+        world.CreateEntity(new TestPosition());
+
+        world.Destroy();
+
+        Assert.AreEqual(0, world.EntityCount);
+        Assert.IsEmpty(world.GetEntities());
     }
 
     [Test]
-    public void TestCreateEntityWithTwoComponentInstances()
+    public void DestroyDoesNotMakeOldHandlesValidAgain()
     {
-        var comp1 = new TestIntComponent { Value = 42 };
-        var comp2 = new TestStringComponent { Value = "test" };
-        var entity = _world.CreateEntity(comp1, comp2);
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
-        Assert.AreEqual(comp1, entity.Get<TestIntComponent>());
-        Assert.AreEqual(comp2, entity.Get<TestStringComponent>());
+        var world = new World();
+        var oldEntity = world.CreateEntity(new TestPosition { X = 1 });
+
+        world.Destroy();
+        var newEntity = world.CreateEntity(new TestPosition { X = 2 });
+
+        Assert.AreNotEqual(oldEntity, newEntity);
+        Assert.IsFalse(world.IsAlive(oldEntity));
+        Assert.Throws<InvalidOperationException>(() => world.Get<TestPosition>(oldEntity));
+        Assert.AreEqual(2, world.Get<TestPosition>(newEntity).X);
     }
 
     [Test]
-    public void TestCreateEntityWithThreeComponentInstances()
+    public void WorldEnumeratesNonEmptyArchetypes()
     {
-        var comp1 = new TestIntComponent { Value = 42 };
-        var comp2 = new TestStringComponent { Value = "test" };
-        var comp3 = new TestDoubleComponent { Value = 3.14 };
-        var entity = _world.CreateEntity(comp1, comp2, comp3);
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
-        Assert.IsTrue(entity.Has<TestDoubleComponent>());
-        Assert.AreEqual(comp1, entity.Get<TestIntComponent>());
-        Assert.AreEqual(comp2, entity.Get<TestStringComponent>());
-        Assert.AreEqual(comp3, entity.Get<TestDoubleComponent>());
-    }
+        var world = new World();
+        world.CreateEntity();
+        world.CreateEntity(new TestPosition());
 
-    [Test]
-    public void TestCreateEntityWithFourComponentInstances()
-    {
-        var comp1 = new TestIntComponent { Value = 42 };
-        var comp2 = new TestStringComponent { Value = "test" };
-        var comp3 = new TestDoubleComponent { Value = 3.14 };
-        var comp4 = new TestBoolComponent { Value = true };
-        var entity = _world.CreateEntity(comp1, comp2, comp3, comp4);
-        Assert.IsNotNull(entity);
-        Assert.IsTrue(entity.Has<TestIntComponent>());
-        Assert.IsTrue(entity.Has<TestStringComponent>());
-        Assert.IsTrue(entity.Has<TestDoubleComponent>());
-        Assert.IsTrue(entity.Has<TestBoolComponent>());
-        Assert.AreEqual(comp1, entity.Get<TestIntComponent>());
-        Assert.AreEqual(comp2, entity.Get<TestStringComponent>());
-        Assert.AreEqual(comp3, entity.Get<TestDoubleComponent>());
-        Assert.AreEqual(comp4, entity.Get<TestBoolComponent>());
-    }
-
-    [Test]
-    public void TestCreateQueryWithOneComponent()
-    {
-        var query = _world.CreateQuery<TestIntComponent>();
-        _world.CreateEntity<TestIntComponent>();
-        Assert.IsNotNull(query);
-        Assert.AreEqual(1, query.GetArchetypes().Count);
-    }
-
-    [Test]
-    public void TestCreateQueryWithTwoComponents()
-    {
-        var query = _world.CreateQuery<TestIntComponent, TestStringComponent>();
-        _world.CreateEntity<TestIntComponent, TestStringComponent>();
-        Assert.IsNotNull(query);
-        Assert.AreEqual(1, query.GetArchetypes().Count);
-    }
-
-    [Test]
-    public void TestCreateQueryWithThreeComponents()
-    {
-        var query = _world.CreateQuery<TestIntComponent, TestStringComponent, TestDoubleComponent>();
-        _world.CreateEntity<TestIntComponent, TestStringComponent, TestDoubleComponent>();
-        Assert.IsNotNull(query);
-        Assert.AreEqual(1, query.GetArchetypes().Count);
-    }
-
-    [Test]
-    public void TestCreateQueryWithFourComponents()
-    {
-        var query = _world.CreateQuery<TestIntComponent, TestStringComponent, TestDoubleComponent, TestBoolComponent>();
-        _world.CreateEntity<TestIntComponent, TestStringComponent, TestDoubleComponent, TestBoolComponent>();
-        Assert.IsNotNull(query);
-        Assert.AreEqual(1, query.GetArchetypes().Count);
-    }
-
-    [Test]
-    public void TestOnArchetypeUpdateEvent()
-    {
-        Archetype? updatedArchetype = null;
-        _world.OnArchetypeUpdate += (world, archetype) => updatedArchetype = archetype;
-        
-        var entity = _world.CreateEntity<TestIntComponent>();
-        Assert.IsNotNull(updatedArchetype);
-        Assert.IsTrue(updatedArchetype.Has<TestIntComponent>());
-    }
-
-    [Test]
-    public void TestOnEntityAddedEvent()
-    {
-        Entity? addedEntity = null;
-        _world.OnEntityAdded += (world, entity) => addedEntity = entity;
-        
-        var entity = _world.CreateEntity();
-        Assert.IsNotNull(addedEntity);
-        Assert.AreEqual(entity, addedEntity);
-    }
-
-    [Test]
-    public void TestOnEntityRemovedEvent()
-    {
-        Entity? removedEntity = null;
-        _world.OnEntityRemoved += (world, entity) => removedEntity = entity;
-        
-        var entity = _world.CreateEntity();
-        _world.RemoveEntity(entity);
-        Assert.IsNotNull(removedEntity);
-        Assert.AreEqual(entity, removedEntity);
-    }
-
-    [Test]
-    public void TestRemoveEntityDoesNotNotifyWhenEntityAlreadyRemoved()
-    {
-        var removedCount = 0;
-        _world.OnEntityRemoved += (_, _) => removedCount++;
-
-        var entity = _world.CreateEntity();
-        Assert.IsTrue(_world.RemoveEntity(entity));
-        Assert.IsFalse(_world.RemoveEntity(entity));
-
-        Assert.AreEqual(1, removedCount);
-    }
-
-    [Test]
-    public void TestMoveEntity()
-    {
-        var entity = _world.CreateEntity<TestIntComponent>();
-        var beforeSignature = entity.Archetype.TypeSignature;
-        
-        entity.Add(new TestStringComponent { Value = "test" });
-        var afterSignature = entity.Archetype.TypeSignature;
-        
-        Assert.AreNotEqual(beforeSignature, afterSignature);
-        Assert.IsTrue(afterSignature.Has<TestIntComponent>());
-        Assert.IsTrue(afterSignature.Has<TestStringComponent>());
+        Assert.AreEqual(2, world.Count());
     }
 }

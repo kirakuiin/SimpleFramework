@@ -3,41 +3,43 @@ using SimpleFramework.ECS;
 
 namespace Test.ECS;
 
-// Test components for unit testing
-public class TestIntComponent : IComponent
+public struct TestPosition : IComponent
 {
-    public int Value { get; set; }
+    public float X;
+    public float Y;
 }
 
-public class TestStringComponent : IComponent
+public struct TestVelocity : IComponent
 {
-    public string Value { get; set; }
+    public float X;
+    public float Y;
 }
 
-public class TestDoubleComponent : IComponent
+public struct TestHealth : IComponent
 {
-    public double Value { get; set; }
+    public int Current;
+    public int Max;
 }
 
-public class TestBoolComponent : IComponent
+public struct TestDeadTag : IComponent
 {
-    public bool Value { get; set; }
+}
+
+public sealed class TestName : IComponent
+{
+    public string Value { get; set; } = string.Empty;
 }
 
 [TestFixture]
 public class TestComponent
 {
     [Test]
-    public void TestComponentCreation()
+    public void ComponentTypesCanBeStructsOrClasses()
     {
-        var intComp = new TestIntComponent { Value = 42 };
-        var stringComp = new TestStringComponent { Value = "test" };
-        var doubleComp = new TestDoubleComponent { Value = 3.14 };
-        var boolComp = new TestBoolComponent { Value = true };
+        IComponent position = new TestPosition { X = 1, Y = 2 };
+        IComponent name = new TestName { Value = "player" };
 
-        Assert.AreEqual(42, intComp.Value);
-        Assert.AreEqual("test", stringComp.Value);
-        Assert.AreEqual(3.14, doubleComp.Value);
-        Assert.AreEqual(true, boolComp.Value);
+        Assert.IsInstanceOf<TestPosition>(position);
+        Assert.IsInstanceOf<TestName>(name);
     }
 }

@@ -1,200 +1,169 @@
-﻿using System.Collections;
-using System.Text;
-using SimpleFramework.Utility.Extensions;
+using System.Collections;
 
 namespace SimpleFramework.ECS;
 
 /// <summary>
-/// 将一系列类型聚合为一个签名，类型不能重复，且类型的顺序不会被保留
+/// 不可变的组件类型签名。
 /// </summary>
-public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyList<Type>
+public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyCollection<Type>
 {
-    private readonly SortedSet<Type> _typeSet = new(TypeSignatureComparer.Comparer);
+    private static readonly IComparer<Type> TypeComparer = Comparer<Type>.Create(CompareTypes);
+    private readonly int _hashCode;
+    private readonly Type[] _types;
 
     /// <summary>
-    /// 签名中包含的类型数量
+    /// 使用组件类型创建签名。
     /// </summary>
-    public int Count => _typeSet.Count;
+    /// <param name="types">组件类型集合。</param>
+    public TypeSignature(params Type[] types)
+        : this((IEnumerable<Type>)types)
+    {
+    }
 
+    /// <summary>
+    /// 使用组件类型集合创建签名。
+    /// </summary>
+    /// <param name="types">组件类型集合。</param>
     public TypeSignature(IEnumerable<Type> types)
     {
-        types.Apply(Add);
+        ArgumentNullException.ThrowIfNull(types);
+
+        _types = types.Select(ValidateType).Distinct().OrderBy(type => type, TypeComparer).ToArray();
+        _hashCode = CalculateHashCode(_types);
     }
 
+    /// <summary>
+    /// 复制已有签名。
+    /// </summary>
+    /// <param name="signature">要复制的签名。</param>
     public TypeSignature(TypeSignature signature)
     {
-        Copy(signature);
-    }
+        ArgumentNullException.ThrowIfNull(signature);
 
-    public TypeSignature(params Type[] types)
-    {
-        types.Apply(Add);
-    }
-
-    /// <summary>
-    /// 清理签名内的全部类型
-    /// </summary>
-    public TypeSignature Clear()
-    {
-        _typeSet.Clear();
-        return this;
+        _types = signature._types;
+        _hashCode = signature._hashCode;
     }
 
     /// <summary>
-    /// 新增类型
+    /// 签名内的组件类型数量。
     /// </summary>
-    /// <param name="types"></param>
-    /// <returns></returns>
-    public TypeSignature Add(params Type[] types)
+    public int Count => _types.Length;
+
+    /// <summary>
+    /// 判断签名是否包含指定组件类型。
+    /// </summary>
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <returns>如果包含该组件类型则为 true。</returns>
+    public bool Has<T>() where T : IComponent
     {
-        types.Apply(Add);
-        return this;
+        return Has(typeof(T));
     }
 
     /// <summary>
-    /// 移除类型
+    /// 判断签名是否包含指定组件类型。
     /// </summary>
-    /// <param name="types"></param>
-    /// <returns></returns>
-    public TypeSignature Remove(params Type[] types)
+    /// <param name="type">组件类型。</param>
+    /// <returns>如果包含该组件类型则为 true。</returns>
+    public bool Has(Type type)
     {
-        types.Apply(Remove);
-        return this;
+        return Array.BinarySearch(_types, ValidateType(type), TypeComparer) >= 0;
     }
 
     /// <summary>
-    /// 复制另一份签名到自身
+    /// 判断签名是否包含另一个签名的全部组件类型。
     /// </summary>
-    public TypeSignature Copy(TypeSignature signature)
+    /// <param name="signature">要检查的签名。</param>
+    /// <returns>如果包含全部组件类型则为 true。</returns>
+    public bool HasAll(TypeSignature signature)
     {
-        Clear();
-        _typeSet.UnionWith(signature._typeSet);
-        return this;
+        ArgumentNullException.ThrowIfNull(signature);
+        return signature._types.All(Has);
     }
 
     /// <summary>
-    /// 新增一个类型
+    /// 判断签名是否包含另一个签名中的任意组件类型。
     /// </summary>
-    public TypeSignature Add(Type type)
+    /// <param name="signature">要检查的签名。</param>
+    /// <returns>如果包含任意组件类型则为 true。</returns>
+    public bool HasAny(TypeSignature signature)
     {
-        _typeSet.Add(type);
-        return this;
-    }
-    
-    /// <summary>
-    /// 新增一个类型
-    /// </summary>
-    public TypeSignature Add<T>() => Add(typeof(T));
-
-    /// <summary>
-    /// 从类型中移除签名
-    /// </summary>
-    public TypeSignature Remove(Type type)
-    {
-         _typeSet.Remove(type);   
-         return this;
+        ArgumentNullException.ThrowIfNull(signature);
+        return signature._types.Any(Has);
     }
 
-    /// <summary>
-    /// 从类型中移除签名
-    /// </summary>
-    public TypeSignature Remove<T>() => Remove(typeof(T));
-
-    /// <summary>
-    /// 如果签名中含有类型，返回真
-    /// </summary>
-    public bool Has<T>() => Has(typeof(T));
-
-    /// <summary>
-    /// 如果签名中含有类型，返回真
-    /// </summary>
-    public bool Has(Type type) => _typeSet.Contains(type);
-
-    /// <summary>
-    /// 如果含有签名里的任意一个类型，返回真
-    /// </summary>
-    public bool HasAny(TypeSignature other)
+    public IEnumerator<Type> GetEnumerator()
     {
-        return other._typeSet.Intersect(_typeSet).Any();
-    }
-
-    /// <summary>
-    /// 如果含有签名里的所有类型，返回真
-    /// </summary>
-    /// <returns></returns>
-    public bool HasAll(TypeSignature other)
-    {
-        return _typeSet.IsSupersetOf(other._typeSet);
-    }
-
-    public override int GetHashCode()
-    {
-        var b = new StringBuilder();
-        foreach (var type in _typeSet)
-        {
-            b.Append(type.Name);
-        }
-        return b.ToString().GetHashCode();
-    }
-
-    public bool Equals(TypeSignature? other)
-    {
-        if (other == null || Count != other.Count)
-        {
-            return false;
-        }
-
-        return _typeSet.SetEquals(other._typeSet);
-    }
-
-    public override bool Equals(object? obj)
-        => obj is TypeSignature sig && sig.Equals(this);
-
-    public override string ToString()
-    {
-        var sig = new StringBuilder("TypeSignature [");
-        foreach (var type in _typeSet)
-        {
-            sig.Append($"{type.Name}, ");
-        }
-        sig.Append(']');
-        return sig.ToString();
-    }
-
-    Type IReadOnlyList<Type>.this[int index] => _typeSet.ToList()[index];
-
-    IEnumerator<Type> IEnumerable<Type>.GetEnumerator()
-    {
-        return ((IEnumerable<Type>)_typeSet).GetEnumerator();
+        return ((IEnumerable<Type>)_types).GetEnumerator();
     }
 
     IEnumerator IEnumerable.GetEnumerator()
     {
-        return _typeSet.GetEnumerator();
+        return GetEnumerator();
     }
 
-    int IReadOnlyCollection<Type>.Count => Count;
-}
-
-
-
-/// <summary>
-/// 签名排序函数
-/// </summary>
-internal class TypeSignatureComparer : IComparer<Type>
-{
-    /// <summary>
-    /// 静态比较器
-    /// </summary>
-    public static readonly TypeSignatureComparer Comparer = new();
-    
-    public int Compare(Type? x, Type? y)
+    public bool Equals(TypeSignature? other)
     {
-        return x switch
+        if (ReferenceEquals(this, other))
         {
-            null when y == null => 0,
-            null => -1,
-            _ => y == null ? 1 : string.Compare(x.FullName, y.FullName, StringComparison.Ordinal)
-        };
+            return true;
+        }
+
+        return other is not null && _types.SequenceEqual(other._types);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is TypeSignature signature && Equals(signature);
+    }
+
+    public override int GetHashCode()
+    {
+        return _hashCode;
+    }
+
+    public override string ToString()
+    {
+        return $"TypeSignature [{string.Join(", ", _types.Select(type => type.Name))}]";
+    }
+
+    private static Type ValidateType(Type type)
+    {
+        if (type is null || !typeof(IComponent).IsAssignableFrom(type))
+        {
+            throw new ArgumentException("签名类型必须实现 IComponent。", nameof(type));
+        }
+
+        return type;
+    }
+
+    private static int CalculateHashCode(IEnumerable<Type> types)
+    {
+        var hash = new HashCode();
+        foreach (var type in types)
+        {
+            hash.Add(type);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static int CompareTypes(Type? left, Type? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return 0;
+        }
+
+        if (left is null)
+        {
+            return -1;
+        }
+
+        if (right is null)
+        {
+            return 1;
+        }
+
+        return string.Compare(left.FullName, right.FullName, StringComparison.Ordinal);
     }
 }
