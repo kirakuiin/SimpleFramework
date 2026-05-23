@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using SimpleFramework.ECS;
 
@@ -9,129 +10,61 @@ namespace Test.ECS;
 public class TestTypeSignature
 {
     [Test]
-    public void TestSignatureCreate()
+    public void TypeSignatureEqualityIsOrderIndependent()
     {
-        var sig = new TypeSignature(typeof(int), typeof(string));
-        
-        Assert.AreEqual(2, sig.Count);
-    }
-    
-    [Test]
-    public void TestEqual()
-    {
-        var sig1 = new TypeSignature(typeof(int), typeof(List<int>));
-        var sig2 = new TypeSignature(typeof(int), typeof(List<int>));
-        var sig3 = new TypeSignature(typeof(int), typeof(List<string>));
-        
-        Assert.IsTrue(sig1.Equals(sig2));
-        Assert.IsFalse(sig1.Equals(sig3));
-    }
-    
-    [Test]
-    public void TestAdd()
-    {
-        var sig = new TypeSignature();
-        
-        sig.Add(typeof(double)).Add(typeof(string)).Add(typeof(List<int>));
-        sig.Add<float>().Add<float>();
-        
-        Assert.AreEqual(4, sig.Count);
-    }
-    
-    [Test]
-    public void TestRemove()
-    {
-        var sig = new TypeSignature(typeof(int), typeof(List<string>), typeof(string));
+        var signature = new TypeSignature(typeof(TestPosition), typeof(TestVelocity), typeof(TestHealth));
+        var sameTypesDifferentOrder = new TypeSignature(typeof(TestHealth), typeof(TestPosition), typeof(TestVelocity));
+        var duplicateTypes = new TypeSignature(typeof(TestPosition), typeof(TestVelocity), typeof(TestPosition), typeof(TestHealth));
+        var different = new TypeSignature(typeof(TestPosition), typeof(TestName));
 
-        sig.Remove(typeof(int)).Remove(typeof(string));
-        sig.Remove<List<string>>();
-        
-        Assert.AreEqual(0, sig.Count);
-    }
-    
-    [Test]
-    public void TestCopy()
-    {
-        var sig1 = new TypeSignature(typeof(int), typeof(List<int>));
-        var sig2 = new TypeSignature(typeof(int));
-        
-        sig2.Copy(sig1);
-        
-        Assert.AreEqual(2, sig2.Count);
+        Assert.AreEqual(signature, sameTypesDifferentOrder);
+        Assert.AreEqual(signature, duplicateTypes);
+        Assert.AreEqual(signature.GetHashCode(), sameTypesDifferentOrder.GetHashCode());
+        Assert.AreNotEqual(signature, different);
     }
 
     [Test]
-    public void TestHasAny()
+    public void TypeSignatureRejectsNonComponentTypes()
     {
-        var sig1 = new TypeSignature(typeof(int), typeof(List<int>)); 
-        var sig2 = new TypeSignature(typeof(string), typeof(List<int>)); 
-        var sig3 = new TypeSignature(typeof(string), typeof(List<string>)); 
-        
-        Assert.IsTrue(sig1.HasAny(sig2));
-        Assert.IsFalse(sig1.HasAny(sig3));
+        Assert.Throws<ArgumentException>(() => new TypeSignature(typeof(string)));
+        Assert.Throws<ArgumentException>(() => new TypeSignature(typeof(TestPosition), null!));
     }
-    
-    [Test]
-    public void TestHasAll()
-    {
-        var sig1 = new TypeSignature(typeof(int), typeof(List<int>)); 
-        var sig2 = new TypeSignature(typeof(string), typeof(List<int>)); 
-        var sig3 = new TypeSignature(typeof(int)); 
-        var sig4 = new TypeSignature(typeof(List<int>), typeof(string)); 
-        
-        Assert.IsFalse(sig1.HasAll(sig2));
-        Assert.IsTrue(sig1.HasAll(sig3));
-        Assert.IsTrue(sig2.HasAll(sig4));
-    }
-    
-    [Test]
-    public void TestEnumerate()
-    {
-        var types = new List<Type>(){typeof(int), typeof(float), typeof(string)};
-        var sig1 = new TypeSignature(types);
 
-        foreach (var type in sig1)
-        {
-            Assert.Contains(type, types);
-        }
-    }
-    
     [Test]
-    public void TestToString()
+    public void TypeSignatureHasAndHasAllWork()
     {
-        var sig1 = new TypeSignature(typeof(int), typeof(float), typeof(string));
+        var signature = new TypeSignature(typeof(TestPosition), typeof(TestVelocity), typeof(TestHealth));
+        var required = new TypeSignature(typeof(TestVelocity), typeof(TestPosition));
+        var missing = new TypeSignature(typeof(TestName));
 
-        Assert.AreEqual("TypeSignature [Int32, Single, String, ]", sig1.ToString());
+        Assert.IsTrue(signature.Has<TestPosition>());
+        Assert.IsTrue(signature.Has(typeof(TestVelocity)));
+        Assert.IsFalse(signature.Has<TestName>());
+        Assert.IsTrue(signature.HasAll(required));
+        Assert.IsFalse(signature.HasAll(missing));
+        Assert.IsTrue(signature.HasAny(new TypeSignature(typeof(TestName), typeof(TestHealth))));
+        Assert.IsFalse(signature.HasAny(missing));
     }
-    
+
     [Test]
-    public void TestHash()
+    public void TypeSignatureCanEnumerateTypes()
     {
-        var sig1 = new TypeSignature(typeof(int), typeof(float), typeof(string));
-        var sig2 = new TypeSignature(typeof(int), typeof(float), typeof(string));
-        
-        var set = new HashSet<TypeSignature>() {sig1, sig2};
-        
-        Assert.IsTrue(set.Contains(sig1));
-        Assert.AreEqual(1, set.Count);
+        var expected = new HashSet<Type> { typeof(TestPosition), typeof(TestVelocity), typeof(TestName) };
+        var signature = new TypeSignature(expected);
+
+        CollectionAssert.AreEquivalent(expected, signature.ToArray());
+        Assert.AreEqual(expected.Count, signature.Count);
     }
-    
+
     [Test]
-    public void TestOrder()
+    public void TypeSignatureToStringContainsTypeNames()
     {
-        var sig1 = new TypeSignature(typeof(int), typeof(float), typeof(string));
-        var sig2 = new TypeSignature(typeof(int), typeof(string), typeof(float));
-        
-        Assert.AreEqual(sig1, sig2);
-    }
-    
-    [Test]
-    public void TestClear()
-    {
-        var sig1 = new TypeSignature(typeof(int), typeof(float), typeof(string));
-        
-        sig1.Clear();
-        
-        Assert.AreEqual(0, sig1.Count);
+        var signature = new TypeSignature(typeof(TestPosition), typeof(TestDeadTag), typeof(TestName));
+
+        var text = signature.ToString();
+
+        StringAssert.Contains(nameof(TestPosition), text);
+        StringAssert.Contains(nameof(TestDeadTag), text);
+        StringAssert.Contains(nameof(TestName), text);
     }
 }

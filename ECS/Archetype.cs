@@ -1,103 +1,155 @@
-﻿using System.Collections;
+using System.Collections;
 
 namespace SimpleFramework.ECS;
 
 /// <summary>
-/// 表示共享相同组件类型的实体集合。原型用于高效地分组和处理具有相似结构的实体。
+/// 存储相同组件签名的实体行。
 /// </summary>
-/// <remarks>
-/// 原型由World创建和管理。实体根据其组件组成自动分配到适当的原型。
-/// </remarks>
-public class Archetype : IEnumerable<Entity>, IEquatable<Archetype>
+public sealed class Archetype : IEnumerable<Entity>
 {
-    private readonly World _world;
-    private readonly TypeSignature _typeSignature;
+    private readonly Dictionary<Type, IComponentColumn> _columns = new();
+    private readonly List<Entity> _entities = new();
 
-    /// <summary>
-    /// 初始化MyArchetype类的新实例。
-    /// </summary>
-    /// <param name="world">此原型所属的世界。</param>
-    /// <param name="typeSignature">定义此原型结构的类型签名。</param>
-    public Archetype(World world, TypeSignature typeSignature)
+    internal Archetype(TypeSignature signature)
     {
-        _world = world;
-        _typeSignature = typeSignature;
+        Signature = signature ?? throw new ArgumentNullException(nameof(signature));
+
+        foreach (var type in signature)
+        {
+            _columns[type] = CreateColumn(type);
+        }
     }
 
     /// <summary>
-    /// 获取此原型所属的世界。
+    /// 原型的组件签名。
     /// </summary>
-    public World World => _world;
+    public TypeSignature Signature { get; }
 
     /// <summary>
-    /// 获取定义此原型结构的类型签名。
+    /// 原型中的实体数量。
     /// </summary>
-    public TypeSignature TypeSignature => _typeSignature;
+    public int EntityCount => _entities.Count;
 
-    /// <summary>
-    /// 获取此原型中的实体数量。
-    /// </summary>
-    public int EntityCount => _world.GetEntities(_typeSignature).Count();
-
-    /// <summary>
-    /// 在此原型中创建新实体。
-    /// </summary>
-    /// <returns>新创建的实体。</returns>
-    public Entity CreateEntity()
+    internal int Add(Entity entity, IReadOnlyDictionary<Type, IComponent> components)
     {
-        var entity = new Entity(_world, this._typeSignature);
-        _world.AddEntity(entity);
-        return entity;
+        ArgumentNullException.ThrowIfNull(components);
+
+        var row = _entities.Count;
+        _entities.Add(entity);
+
+        foreach (var type in Signature)
+        {
+            if (!components.TryGetValue(type, out var component))
+            {
+                throw new InvalidOperationException($"Missing component {type.Name}.");
+            }
+
+            _columns[type].AddBoxed(component);
+        }
+
+        return row;
+    }
+
+    internal int Add(Entity entity, IEnumerable<IComponent> components)
+    {
+        return Add(entity, components.ToDictionary(component => component.GetType(), component => component));
+    }
+
+    internal Entity GetEntity(int row)
+    {
+        return _entities[row];
+    }
+
+    internal ref T Get<T>(int row) where T : IComponent
+    {
+        return ref GetColumn<T>().GetRef(row);
+    }
+
+    internal void Set<T>(int row, T value) where T : IComponent
+    {
+        GetColumn<T>().GetRef(row) = value;
+    }
+
+    internal IComponent GetBoxed(int row, Type type)
+    {
+        return _columns[type].GetBoxed(row);
+    }
+
+    internal IReadOnlyDictionary<Type, IComponent> GetAllBoxed(int row)
+    {
+        var values = new Dictionary<Type, IComponent>();
+        foreach (var type in Signature)
+        {
+            values[type] = GetBoxed(row, type);
+        }
+
+        return values;
+    }
+
+    internal Entity? RemoveAtSwapBack(int row)
+    {
+        var last = _entities.Count - 1;
+        Entity? moved = null;
+
+        if (row != last)
+        {
+            moved = _entities[last];
+            _entities[row] = _entities[last];
+        }
+
+        _entities.RemoveAt(last);
+
+        foreach (var column in _columns.Values)
+        {
+            column.RemoveAtSwapBack(row);
+        }
+
+        return moved;
     }
 
     /// <summary>
-    /// 检查此原型是否具有指定类型的组件。
+    /// 判断原型是否包含指定组件类型。
     /// </summary>
-    /// <typeparam name="T">要检查的组件类型。</typeparam>
-    /// <returns>如果此原型具有该组件类型则为true；否则为false。</returns>
-    public bool Has<T>()
+    /// <typeparam name="T">组件类型。</typeparam>
+    /// <returns>如果包含该组件类型则为 true。</returns>
+    public bool Has<T>() where T : IComponent
     {
-        return _typeSignature.Has<T>();
+        return Signature.Has<T>();
     }
 
     /// <summary>
-    /// 检查此原型是否具有指定类型的组件。
+    /// 判断原型是否包含指定组件类型。
     /// </summary>
-    /// <param name="type">要检查的组件类型。</param>
-    /// <returns>如果此原型具有该组件类型则为true；否则为false。</returns>
+    /// <param name="type">组件类型。</param>
+    /// <returns>如果包含该组件类型则为 true。</returns>
     public bool Has(Type type)
     {
-        return _typeSignature.Has(type);
-    }
-    
-    /// <summary>
-    /// 检查此原型是否匹配指定的类型签名。
-    /// </summary>
-    /// <param name="signature">要检查的类型签名。</param>
-    /// <returns>如果此原型匹配该签名则为true；否则为false。</returns>
-    public bool HasAll(TypeSignature signature)
-    {
-        return _typeSignature.HasAll(signature);
-    }
-    
-    /// <summary>
-    /// 检查此原型是否含有指定的类型签名。
-    /// </summary>
-    /// <param name="signature">要检查的类型签名。</param>
-    /// <returns>如果此原型匹配该签名则为true；否则为false。</returns>
-    public bool HasAny(TypeSignature signature)
-    {
-        return _typeSignature.HasAny(signature);
+        return Signature.Has(type);
     }
 
-    public override string ToString()
+    /// <summary>
+    /// 判断原型是否包含签名中的全部组件类型。
+    /// </summary>
+    /// <param name="signature">要检查的签名。</param>
+    /// <returns>如果包含全部组件类型则为 true。</returns>
+    public bool HasAll(TypeSignature signature)
     {
-        return $"Archetype [{_typeSignature}]";
+        return Signature.HasAll(signature);
+    }
+
+    /// <summary>
+    /// 判断原型是否包含签名中的任意组件类型。
+    /// </summary>
+    /// <param name="signature">要检查的签名。</param>
+    /// <returns>如果包含任意组件类型则为 true。</returns>
+    public bool HasAny(TypeSignature signature)
+    {
+        return Signature.HasAny(signature);
     }
 
     public IEnumerator<Entity> GetEnumerator()
     {
-        return _world.GetEntities(_typeSignature).GetEnumerator();
+        return _entities.GetEnumerator();
     }
 
     IEnumerator IEnumerable.GetEnumerator()
@@ -105,10 +157,24 @@ public class Archetype : IEnumerable<Entity>, IEquatable<Archetype>
         return GetEnumerator();
     }
 
-    public bool Equals(Archetype? other)
+    public override string ToString()
     {
-        if (other is null) return false;
-        if (ReferenceEquals(this, other)) return true;
-        return _world.Equals(other._world) && _typeSignature.Equals(other._typeSignature);
+        return $"Archetype [{Signature}]";
+    }
+
+    private ComponentColumn<T> GetColumn<T>() where T : IComponent
+    {
+        if (!_columns.TryGetValue(typeof(T), out var column))
+        {
+            throw new InvalidOperationException($"Archetype does not contain component {typeof(T).Name}.");
+        }
+
+        return (ComponentColumn<T>)column;
+    }
+
+    private static IComponentColumn CreateColumn(Type type)
+    {
+        var columnType = typeof(ComponentColumn<>).MakeGenericType(type);
+        return (IComponentColumn)Activator.CreateInstance(columnType)!;
     }
 }

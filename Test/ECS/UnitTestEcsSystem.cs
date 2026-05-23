@@ -6,70 +6,39 @@ namespace Test.ECS;
 [TestFixture]
 public class TestEcsSystem
 {
-    private World _world;
-    private TestSystem _system;
-
-    [SetUp]
-    public void Setup()
+    [Test]
+    public void SystemProcessesMatchingQueryEntities()
     {
-        _world = new World();
-        _system = new TestSystem(_world);
+        var world = new World();
+        var system = new MovementTestSystem(world);
+        var entity = world.CreateEntity(
+            new TestPosition { X = 1 },
+            new TestVelocity { X = 2 });
+        world.CreateEntity(new TestPosition { X = 10 });
+
+        system.Update();
+
+        Assert.AreEqual(3, world.Get<TestPosition>(entity).X);
     }
 
-
-    [Test]
-    public void TestSystemUpdate()
+    private sealed class MovementTestSystem : EcsSystem
     {
-        var entity = _world.CreateEntity();
-        entity.Add(new TestIntComponent { Value = 42 });
-        entity.Add(new TestStringComponent { Value = "test" });
+        private readonly Query _query;
 
-        _system.Update();
-        Assert.AreEqual(1, _system.ProcessedEntities);
-    }
+        public MovementTestSystem(World world) : base(world)
+        {
+            _query = world.Query<TestPosition, TestVelocity>();
+        }
 
-    [Test]
-    public void TestSystemQuery()
-    {
-        var entity1 = _world.CreateEntity();
-        entity1.Add(new TestIntComponent { Value = 1 });
-        entity1.Add(new TestStringComponent { Value = "test1" });
-
-        var entity2 = _world.CreateEntity();
-        entity2.Add(new TestIntComponent { Value = 2 });
-        entity2.Add(new TestStringComponent { Value = "test2" });
-
-        _system.Update();
-        Assert.AreEqual(2, _system.ProcessedEntities);
-    }
-
-    [Test]
-    public void TestSystemWithoutRequiredComponent()
-    {
-        var entity = _world.CreateEntity();
-        entity.Add(new TestStringComponent { Value = "test" });
-
-        _system.Update();
-        Assert.AreEqual(0, _system.ProcessedEntities);
+        public override void Update()
+        {
+            foreach (var entity in _query)
+            {
+                ref var position = ref World.Get<TestPosition>(entity);
+                ref var velocity = ref World.Get<TestVelocity>(entity);
+                position.X += velocity.X;
+                position.Y += velocity.Y;
+            }
+        }
     }
 }
-
-// Test system implementation
-public class TestSystem : EcsSystem
-{
-    public int ProcessedEntities { get; private set; }
-
-    public TestSystem(World world) : base(world)
-    {
-        Query = world.CreateQuery<TestIntComponent, TestStringComponent>();
-    }
-
-    protected override void ProcessEntity(Entity entity)
-    {
-        ProcessedEntities++;
-        var intComp = entity.Get<TestIntComponent>();
-        var stringComp = entity.Get<TestStringComponent>();
-        Assert.IsNotNull(intComp);
-        Assert.IsNotNull(stringComp);
-    }
-} 

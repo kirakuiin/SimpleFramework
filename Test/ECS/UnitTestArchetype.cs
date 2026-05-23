@@ -1,141 +1,102 @@
-using System.Collections.Generic;
-using System.Linq;
 using NUnit.Framework;
 using SimpleFramework.ECS;
 
 namespace Test.ECS;
 
 [TestFixture]
-public class TestArchetype
+public class UnitTestArchetype
 {
-    private World _world;
-    private Archetype _archetype;
-    private TypeSignature _signature;
-
-    [SetUp]
-    public void Setup()
-    {
-        _world = new World();
-        _signature = new TypeSignature(typeof(TestIntComponent),
-            typeof(TestStringComponent));
-        _archetype = new Archetype(_world, _signature);
-    }
-
     [Test]
-    public void TestArchetypeCreation()
+    public void ArchetypeStoresTypedComponentsByAlignedRow()
     {
-        Assert.IsNotNull(_archetype);
-        Assert.AreEqual(_world, _archetype.World);
-        Assert.AreEqual(_signature, _archetype.TypeSignature);
-        Assert.AreEqual(0, _archetype.EntityCount);
-    }
+        var signature = new TypeSignature(typeof(TestPosition), typeof(TestVelocity));
+        var archetype = new Archetype(signature);
+        var entity = new Entity(1, 1, 1);
 
-    [Test]
-    public void TestCreateEntity()
-    {
-        var entity = _archetype.CreateEntity();
-        Assert.IsNotNull(entity);
-        Assert.AreEqual(_archetype, entity.Archetype);
-        Assert.AreEqual(1, _archetype.EntityCount);
-    }
-
-    [Test]
-    public void TestAddEntity()
-    {
-        var entity = _world.CreateEntity<TestStringComponent, TestIntComponent>();
-        Assert.AreEqual(1, _archetype.EntityCount);
-        Assert.Contains(entity, _archetype.ToList());
-    }
-
-    [Test]
-    public void TestRemoveEntity()
-    {
-        var entity = _archetype.CreateEntity();
-        Assert.AreEqual(1, _archetype.EntityCount);
-        
-        _world.RemoveEntity(entity);
-        Assert.AreEqual(0, _archetype.EntityCount);
-        Assert.IsFalse(_archetype.Contains(entity));
-    }
-
-    [Test]
-    public void TestHasComponent()
-    {
-        Assert.IsTrue(_archetype.Has<TestIntComponent>());
-        Assert.IsTrue(_archetype.Has<TestStringComponent>());
-        Assert.IsFalse(_archetype.Has<TestDoubleComponent>());
-    }
-
-    [Test]
-    public void TestHasComponentWithType()
-    {
-        Assert.IsTrue(_archetype.Has(typeof(TestIntComponent)));
-        Assert.IsTrue(_archetype.Has(typeof(TestStringComponent)));
-        Assert.IsFalse(_archetype.Has(typeof(TestDoubleComponent)));
-    }
-
-    [Test]
-    public void TestHasAll()
-    {
-        var matchingSignature = new TypeSignature(typeof(TestStringComponent), typeof(TestIntComponent));
-        var matchingSignature1 = new TypeSignature(typeof(TestStringComponent));
-        var nonMatchingSignature = new TypeSignature(typeof(List<int>), typeof(TestIntComponent));
-        
-        Assert.IsTrue(_archetype.HasAll(matchingSignature));
-        Assert.IsTrue(_archetype.HasAll(matchingSignature1));
-        Assert.IsFalse(_archetype.HasAll(nonMatchingSignature));
-    }
-    
-    [Test]
-    public void TestHasAny()
-    {
-        var matchingSignature = new TypeSignature(typeof(TestStringComponent), typeof(TestIntComponent));
-        var matchingSignature1 = new TypeSignature(typeof(TestStringComponent), typeof(string));
-        var nonMatchingSignature = new TypeSignature(typeof(List<int>));
-        
-        Assert.IsTrue(_archetype.HasAny(matchingSignature));
-        Assert.IsTrue(_archetype.HasAny(matchingSignature1));
-        Assert.IsFalse(_archetype.HasAny(nonMatchingSignature));
-    }
-
-    [Test]
-    public void TestToString()
-    {
-        var str = _archetype.ToString();
-        Assert.IsTrue(str.StartsWith("Archetype ["));
-        Assert.IsTrue(str.Contains("TestIntComponent"));
-        Assert.IsTrue(str.Contains("TestStringComponent"));
-    }
-
-    [Test]
-    public void TestGetEnumerator()
-    {
-        var entity1 = _archetype.CreateEntity();
-        var entity2 = _archetype.CreateEntity();
-        
-        int count = 0;
-        foreach (var entity in _archetype)
+        var row = archetype.Add(entity, new IComponent[]
         {
-            count++;
-            Assert.IsNotNull(entity);
-        }
-        Assert.AreEqual(2, count);
-        Assert.AreEqual(2, _archetype.EntityCount);
+            new TestPosition { X = 1, Y = 2 },
+            new TestVelocity { X = 3, Y = 4 }
+        });
+
+        Assert.AreEqual(0, row);
+        Assert.AreEqual(entity, archetype.GetEntity(0));
+        Assert.AreEqual(1, archetype.Get<TestPosition>(0).X);
+        Assert.AreEqual(4, archetype.Get<TestVelocity>(0).Y);
     }
 
     [Test]
-    public void TestEquals()
+    public void ArchetypeSetUpdatesStoredComponent()
     {
-        var sameArchetype = new Archetype(_world, _signature);
-        var differentWorld = new World();
-        var differentArchetype = new Archetype(differentWorld, _signature);
-        var differentSignature = new TypeSignature(typeof(double));
-        var differentSignatureArchetype = new Archetype(_world, differentSignature);
-        
-        Assert.IsTrue(_archetype.Equals(_archetype));
-        Assert.IsTrue(_archetype.Equals(sameArchetype));
-        Assert.IsFalse(_archetype.Equals(differentArchetype));
-        Assert.IsFalse(_archetype.Equals(differentSignatureArchetype));
-        Assert.IsFalse(_archetype.Equals(null));
+        var signature = new TypeSignature(typeof(TestPosition));
+        var archetype = new Archetype(signature);
+        archetype.Add(new Entity(1, 1, 1), new IComponent[] { new TestPosition { X = 1 } });
+
+        archetype.Set(0, new TestPosition { X = 5, Y = 6 });
+
+        Assert.AreEqual(5, archetype.Get<TestPosition>(0).X);
+        Assert.AreEqual(6, archetype.Get<TestPosition>(0).Y);
     }
-} 
+
+    [Test]
+    public void ArchetypeGetReturnsWritableReference()
+    {
+        var signature = new TypeSignature(typeof(TestPosition));
+        var archetype = new Archetype(signature);
+        archetype.Add(new Entity(1, 1, 1), new IComponent[] { new TestPosition { X = 1 } });
+
+        ref var position = ref archetype.Get<TestPosition>(0);
+        position.X = 9;
+
+        Assert.AreEqual(9, archetype.Get<TestPosition>(0).X);
+    }
+
+    [Test]
+    public void ArchetypeGetAllBoxedReturnsRowValues()
+    {
+        var signature = new TypeSignature(typeof(TestPosition), typeof(TestName));
+        var archetype = new Archetype(signature);
+        var name = new TestName { Value = "player" };
+        archetype.Add(new Entity(1, 1, 1), new IComponent[]
+        {
+            new TestPosition { X = 1 },
+            name
+        });
+
+        var values = archetype.GetAllBoxed(0);
+
+        Assert.AreEqual(1, ((TestPosition)values[typeof(TestPosition)]).X);
+        Assert.AreSame(name, values[typeof(TestName)]);
+    }
+
+    [Test]
+    public void ArchetypeRemoveAtSwapBackReturnsMovedEntity()
+    {
+        var signature = new TypeSignature(typeof(TestPosition));
+        var archetype = new Archetype(signature);
+        var first = new Entity(1, 1, 1);
+        var second = new Entity(1, 2, 1);
+        archetype.Add(first, new IComponent[] { new TestPosition { X = 1 } });
+        archetype.Add(second, new IComponent[] { new TestPosition { X = 2 } });
+
+        var moved = archetype.RemoveAtSwapBack(0);
+
+        Assert.AreEqual(second, moved);
+        Assert.AreEqual(second, archetype.GetEntity(0));
+        Assert.AreEqual(2, archetype.Get<TestPosition>(0).X);
+        Assert.AreEqual(1, archetype.EntityCount);
+    }
+
+    [Test]
+    public void ArchetypeRemoveAtSwapBackLastRowReturnsNull()
+    {
+        var signature = new TypeSignature(typeof(TestPosition));
+        var archetype = new Archetype(signature);
+        archetype.Add(new Entity(1, 1, 1), new IComponent[] { new TestPosition { X = 1 } });
+
+        var moved = archetype.RemoveAtSwapBack(0);
+
+        Assert.IsNull(moved);
+        Assert.AreEqual(0, archetype.EntityCount);
+    }
+}

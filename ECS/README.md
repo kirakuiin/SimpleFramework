@@ -1,6 +1,28 @@
-我希望生成一个简化版的ECS系统。具体要求如下：
+# SimpleFramework.ECS
 
-1. 简化版无需考虑内存优化相关内容，以可读性可简单性为第一要务。
-2. 简化版依旧要保持Entity，World，TypeSignature，Query，Archetype, System等概念。
-3. 代码使用中文进行文档注释
-4. 在Test目录下生成测试用例
+`SimpleFramework.ECS` is a lightweight archetype ECS module.
+
+Core concepts:
+
+- `Entity` is a value handle with `WorldId`, `Id`, and `Version`.
+- `World` owns entity lifecycle, component access, and structural changes.
+- `TypeSignature` is an immutable component type set.
+- `Archetype` stores entities with the same component signature.
+- `Query` filters entities by included and excluded component types.
+- `EcsSystem` is a small base class for update logic.
+
+Example:
+
+```csharp
+var world = new World("Battle");
+var entity = world.CreateEntity<Position, Velocity>(
+    new Position { X = 0, Y = 0 },
+    new Velocity { X = 1, Y = 0 });
+
+foreach (var item in world.Query<Position, Velocity>().Not<Dead>())
+{
+    ref var position = ref world.Get<Position>(item);
+    ref var velocity = ref world.Get<Velocity>(item);
+    position.X += velocity.X;
+}
+```
