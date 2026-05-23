@@ -51,6 +51,7 @@ This is still an archetype ECS, but not an engine-scale ECS. The implementation 
 ```csharp
 public readonly struct Entity : IEquatable<Entity>
 {
+    public int WorldId { get; }
     public int Id { get; }
     public int Version { get; }
 }
@@ -58,7 +59,7 @@ public readonly struct Entity : IEquatable<Entity>
 
 An entity does not own components. It does not expose `Add`, `Remove`, or `Get` methods. All component access and structural changes go through `World`.
 
-The `Version` value prevents stale handles from being accepted after an entity has been destroyed and the same slot is reused. A stale entity handle should fail validation before any read or write.
+The `WorldId` value prevents handles from one world being accepted by another world. The `Version` value prevents stale handles from being accepted after an entity has been destroyed and the same slot is reused. A foreign or stale entity handle should fail validation before any read or write.
 
 ## World
 
@@ -69,7 +70,7 @@ Expected API shape:
 ```csharp
 var world = new World();
 
-var entity = world.CreateEntity(
+var entity = world.CreateEntity<Position, Velocity>(
     new Position { X = 1, Y = 2 },
     new Velocity { X = 0.5f, Y = 0 });
 
@@ -91,7 +92,7 @@ world.DestroyEntity(entity);
 - Component add, remove, get, set, and try-get operations
 - Generic creation and query helpers for common component counts
 
-`World` should reject stale or foreign entity handles. Since `Entity` no longer stores a `World` reference, "foreign" means the id/version pair is not valid in this world.
+`World` should reject stale or foreign entity handles. Since `Entity` no longer stores a `World` reference, "foreign" means `Entity.WorldId` does not match the target world's id.
 
 `DestroyEntity` should mark the entity dead and remove its component data from the current archetype. Repeated destroy calls should return `false` instead of throwing.
 
@@ -110,10 +111,23 @@ The ECS should support both class and struct components implementing `IComponent
 The first phase does not require component constructors, reflection-based default creation, or automatic component initialization. Creating an entity with component types but no values is not a core requirement. Value-based creation is a core API:
 
 ```csharp
-var entity = world.CreateEntity(
+var entity = world.CreateEntity<Position, Health>(
     new Position { X = 0, Y = 0 },
     new Health { Current = 100, Max = 100 });
 ```
+
+The main creation and mutation APIs should be generic overloads, not `params IComponent[]`, so struct components do not box at the call site:
+
+```csharp
+var entity = world.CreateEntity<Position, Health>(
+    new Position { X = 0, Y = 0 },
+    new Health { Current = 100, Max = 100 });
+
+world.Add(entity, new Velocity { X = 1, Y = 0 });
+world.Set(entity, new Health { Current = 75, Max = 100 });
+```
+
+Convenience `params IComponent[]` overloads may exist later as lower-performance fallback APIs, but they are not the primary phase-one API.
 
 ## TypeSignature
 
@@ -164,7 +178,9 @@ internal sealed class ComponentColumn<T> : IComponentColumn
 
 Typed column storage is required so struct components do not need to be boxed during normal storage. `World.Get<T>(entity)` should return `ref T` by using `CollectionsMarshal.AsSpan` internally. The implementation should still avoid unsafe code.
 
-`GetBoxed` and boxed mutation helpers are allowed for structural movement code, where clarity is more important than avoiding every allocation. The hot path should be `World.Get<T>` returning a typed reference.
+`GetBoxed` and boxed mutation helpers are allowed for structural movement code, where clarity is more important than avoiding every allocation. This means add/remove structural moves may box struct components in phase one. That is an intentional first-phase tradeoff; a later performance phase can replace it with typed column-to-column copy if profiling shows structural changes are hot. The hot path should be `World.Get<T>` returning a typed reference.
+
+The `ref` returned from `World.Get<T>(entity)` is valid only until the next structural mutation in the same `World`. Users must not store the reference across calls that create or destroy entities, add or remove components, or otherwise change archetype storage. This constraint should be documented in XML comments.
 
 Archetype responsibilities:
 
@@ -224,7 +240,7 @@ Preferred sugar:
 using var query = world.Query<Position, Velocity>().Not<DeadTag>();
 ```
 
-`Query` should implement `IDisposable` if it subscribes to world events. It must not rely on a finalizer to unsubscribe.
+`Query` should not subscribe to world events in phase one. Instead, `World` should expose an internal archetype version that increments when a new archetype is created. A query stores the last version it matched and lazily refreshes its matching archetype list before enumeration or `GetArchetypes()` when the world version changes. This keeps query lifecycle simple and avoids event-subscription leaks.
 
 The first phase supports component include/exclude filters. Tag filters can be dropped unless they naturally fall out of tag components. A tag should usually be represented as an empty component:
 
@@ -237,10 +253,11 @@ public struct DeadTag : IComponent
 Query behavior requirements:
 
 - Existing archetypes are matched when the query is created or changed.
-- Newly created archetypes are matched automatically.
+- Newly created archetypes are matched by lazy refresh.
 - Destroyed entities do not appear in query results.
 - Structural changes update query results through archetype movement.
 - `GetArchetypes()` returns a read-only view.
+- Structural mutation during query enumeration is forbidden in phase one. `World` should track a structural version; query enumerators should capture it and throw `InvalidOperationException` if `CreateEntity`, `DestroyEntity`, `Add`, or `Remove` changes structure during enumeration. Later `CommandBuffer` support should become the official way to mutate structure while iterating.
 
 ## EcsSystem
 
@@ -262,7 +279,7 @@ public abstract class EcsSystem
 }
 ```
 
-Systems may create and hold queries. If a system owns disposable queries, it should dispose them when the system is disposed. The first phase does not need a full system manager, system group, or automatic ordering.
+Systems may create and hold queries. Since phase-one queries use lazy refresh and do not subscribe to world events, systems do not need to dispose queries. The first phase does not need a full system manager, system group, or automatic ordering.
 
 ## API Compatibility
 
@@ -319,7 +336,7 @@ Entity creation:
 
 ```csharp
 var empty = world.CreateEntity();
-var moving = world.CreateEntity(
+var moving = world.CreateEntity<Position, Velocity>(
     new Position { X = 0, Y = 0 },
     new Velocity { X = 1, Y = 0 });
 ```
@@ -365,6 +382,7 @@ Tests should be rewritten around the new model.
 Core tests:
 
 - Entity creation returns alive handles with stable ids and versions.
+- Entity handles from one world are rejected by other worlds.
 - Destroying an entity invalidates stale handles.
 - Repeated destroy returns `false`.
 - Adding a component makes `Has<T>` and `Get<T>` work.
@@ -378,7 +396,8 @@ Core tests:
 - Queries exclude entities with excluded components.
 - Queries update when an entity changes archetype.
 - Queries stop returning destroyed entities.
-- Query disposal detaches from world update events.
+- Query lazy refresh sees archetypes created after the query.
+- Query enumeration throws if structure changes during enumeration.
 - Type signatures are immutable and order independent.
 - EcsSystem can process query results through `World`.
 
@@ -406,7 +425,7 @@ After the core passes tests, consider these in order:
 
 These decisions are fixed for phase one:
 
-- Entity is a value handle with `Id` and `Version`.
+- Entity is a value handle with `WorldId`, `Id`, and `Version`.
 - World is the only structural mutation entry point.
 - Archetype component storage uses strongly typed columns.
 - TypeSignature is immutable.
