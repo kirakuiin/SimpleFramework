@@ -20,6 +20,11 @@ public abstract class EcsSystem
     protected World World { get; }
 
     /// <summary>
+    /// 系统是否启用，禁用后系统组会跳过更新。
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// 执行系统更新。
     /// </summary>
     public abstract void Update();
