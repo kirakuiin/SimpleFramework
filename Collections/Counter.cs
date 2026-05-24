@@ -8,6 +8,7 @@ namespace SimpleFramework.Collections;
 /// <typeparam name="T"></typeparam>
 public class Counter<T>
     : IDictionary<T, long>, IReadOnlyDictionary<T, long>, IEquatable<Counter<T>>
+    where T : notnull
 {
     private readonly DefaultDict<T, long> _delegate;
 

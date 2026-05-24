@@ -1,4 +1,5 @@
-﻿using System.Collections;
+using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 
 namespace SimpleFramework.Collections;
 
@@ -10,6 +11,7 @@ namespace SimpleFramework.Collections;
 public class DefaultDict<TK, TV> :
     IDictionary<TK, TV>,
     IReadOnlyDictionary<TK, TV>
+    where TK : notnull
 {
     private readonly Dictionary<TK, TV> _delegate;
 
@@ -97,7 +99,7 @@ public class DefaultDict<TK, TV> :
     /// 此方法保持 <see cref="Dictionary{TKey,TValue}.TryGetValue(TKey,out TValue)"/> 的探测语义：
     /// 当键不存在时不会调用默认值工厂，也不会向字典插入新键。需要获取或创建默认值时请使用索引器。
     /// </remarks>
-    public bool TryGetValue(TK key, out TV value)
+    public bool TryGetValue(TK key, [MaybeNullWhen(false)] out TV value)
     {
         return _delegate.TryGetValue(key, out value);
     }

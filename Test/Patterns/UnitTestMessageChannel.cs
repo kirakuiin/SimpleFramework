@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 using SimpleFramework.Patterns;
@@ -65,10 +66,11 @@ public class TestMessageChannel
         _channel.Subscribe(message => receivedMessages.Add(message));
         
         _channel.Dispose();
-        _channel.Publish("Test Message");
         
         Assert.That(receivedMessages.Count, Is.EqualTo(0));
         Assert.That(_channel.IsDisposed, Is.True);
+        Assert.Throws<ObjectDisposedException>(() => _channel.Publish("Test Message"));
+        Assert.Throws<ObjectDisposedException>(() => _channel.Subscribe(message => receivedMessages.Add(message)));
     }
 
     [Test]
@@ -113,10 +115,11 @@ public class TestMessageChannel
         _bufferedChannel.Subscribe(message => receivedMessages.Add(message));
         
         _bufferedChannel.Dispose();
-        _bufferedChannel.Publish("Test Message");
         
         Assert.That(receivedMessages.Count, Is.EqualTo(0));
         Assert.That(_bufferedChannel.IsDisposed, Is.True);
+        Assert.Throws<ObjectDisposedException>(() => _bufferedChannel.Publish("Test Message"));
+        Assert.Throws<ObjectDisposedException>(() => _bufferedChannel.Subscribe(message => receivedMessages.Add(message)));
     }
 
     [Test]

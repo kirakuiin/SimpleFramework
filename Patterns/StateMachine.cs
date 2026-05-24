@@ -252,6 +252,7 @@ public class StateMachine
 {
     private readonly List<State> _states = new();
     private readonly List<Transition> _transitions = new();
+    private readonly Dictionary<string, StateEventHandler> _eventHandlers = new();
     private State? _currentState;
     private State? _initialState;
     private bool _isActive;
@@ -311,6 +312,26 @@ public class StateMachine
     }
 
     /// <summary>
+    /// 添加状态机级别的事件处理器，无论当前状态是什么都会生效。
+    /// </summary>
+    /// <param name="eventName">事件名称</param>
+    /// <param name="handler">事件处理器</param>
+    public void AddEventHandler(string eventName, StateEventHandler handler)
+    {
+        if (string.IsNullOrEmpty(eventName))
+            throw new ArgumentException("Event name cannot be null or empty");
+
+        ArgumentNullException.ThrowIfNull(handler);
+
+        if (_eventHandlers.ContainsKey(eventName))
+        {
+            PatternLogger.Warning($"Duplicate state machine event handler for {eventName}");
+        }
+
+        _eventHandlers[eventName] = handler;
+    }
+
+    /// <summary>
     /// 设置活跃状态
     /// </summary>
     /// <param name="active">是否活跃</param>
@@ -349,7 +370,8 @@ public class StateMachine
         {
             return true;
         }
-        if (_states.Except([_currentState]).Any(state => state.HandleEvent(eventName, args)))
+
+        if (_eventHandlers.TryGetValue(eventName, out var handler) && handler(args))
         {
             return true;
         }

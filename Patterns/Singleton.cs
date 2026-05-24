@@ -60,8 +60,11 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
                 
             lock (LockObj)
             {
-                _instance = new T();
-                _instance.Initialize();
+                if (_instance == null)
+                {
+                    _instance = new T();
+                    _instance.Initialize();
+                }
             }
             return _instance;
         }

@@ -398,4 +398,18 @@ public class TestBlackBoard
 
         _blackBoard.Unregister("test", Handler);
     }
+
+    [Test]
+    public void TestEventHandlerCanReadAndWriteSameBoard()
+    {
+        _blackBoard.Register("source", (_, args) =>
+        {
+            var value = (int)args.NewValue!;
+            var current = _blackBoard.Get<int>("mirror");
+            _blackBoard.Set("mirror", current + value);
+        });
+
+        Assert.DoesNotThrow(() => _blackBoard.Set("source", 3));
+        Assert.AreEqual(3, _blackBoard.Get<int>("mirror"));
+    }
 }

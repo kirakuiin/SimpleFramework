@@ -484,7 +484,6 @@ public class TestStateMachine
         var s1 = new State().Named("state1");
         var s2 = new State().Named("state2");
         
-        s2.AddEventHandler("consume_event", args => true);
         stateMachine.AddState(s1);
         stateMachine.AddState(s2);
         stateMachine.InitialState = s1;
@@ -496,7 +495,49 @@ public class TestStateMachine
         Assert.IsTrue(stateMachine.Dispatch(StateEvents.EventFinished));
         Assert.IsFalse(stateMachine.Dispatch(StateEvents.EventFinished));
         Assert.IsTrue(stateMachine.Dispatch("consume_event"));
-        Assert.AreEqual(stateMachine.CurrentState, s2);
+        Assert.AreEqual(s1, stateMachine.CurrentState);
+    }
+
+    [Test]
+    public void TestInactiveSiblingEventHandlerDoesNotConsumeCurrentStateEvent()
+    {
+        var stateMachine = new StateMachine();
+        var s1 = new State().Named("state1");
+        var s2 = new State().Named("state2");
+
+        s2.AddEventHandler("go", _ => true);
+        stateMachine.AddState(s1);
+        stateMachine.AddState(s2);
+        stateMachine.AddTransition(s1, s2, "go");
+        stateMachine.InitialState = s1;
+        stateMachine.SetActive(true);
+
+        Assert.IsTrue(stateMachine.Dispatch("go"));
+        Assert.AreEqual(s2, stateMachine.CurrentState);
+    }
+
+    [Test]
+    public void TestStateMachineEventHandlerConsumesBeforeTransition()
+    {
+        var stateMachine = new StateMachine();
+        var s1 = new State().Named("state1");
+        var s2 = new State().Named("state2");
+        var consumed = false;
+
+        stateMachine.AddEventHandler("go", _ =>
+        {
+            consumed = true;
+            return true;
+        });
+        stateMachine.AddState(s1);
+        stateMachine.AddState(s2);
+        stateMachine.AddTransition(s1, s2, "go");
+        stateMachine.InitialState = s1;
+        stateMachine.SetActive(true);
+
+        Assert.IsTrue(stateMachine.Dispatch("go"));
+        Assert.IsTrue(consumed);
+        Assert.AreEqual(s1, stateMachine.CurrentState);
     }
 
     [Test]

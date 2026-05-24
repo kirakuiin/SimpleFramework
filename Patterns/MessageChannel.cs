@@ -96,6 +96,7 @@ public class MessageChannel<T> : IMessageChannel<T>
 
     public virtual void Publish(T message)
     {
+        ThrowIfDisposed();
         ClearPendingHandlers();
         PublishMessage(message);
     }
@@ -127,6 +128,7 @@ public class MessageChannel<T> : IMessageChannel<T>
 
     public virtual IDisposable Subscribe(Action<T> handler)
     {
+        ThrowIfDisposed();
         if (!_pendingHandlers.TryAdd(handler, true))
         {
             var shouldBeRemove = !_pendingHandlers[handler];
@@ -148,6 +150,7 @@ public class MessageChannel<T> : IMessageChannel<T>
 
     public void Unsubscribe(Action<T> handler)
     {
+        ThrowIfDisposed();
         if (!IsSubscribed(handler)) return;
 
         if (!_pendingHandlers.TryAdd(handler, false))
@@ -158,6 +161,11 @@ public class MessageChannel<T> : IMessageChannel<T>
                 _pendingHandlers.Remove(handler);
             }
         }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
     }
 }
 

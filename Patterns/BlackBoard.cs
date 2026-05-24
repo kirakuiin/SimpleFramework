@@ -95,17 +95,22 @@ public class BlackBoard
     public void Set<T>(string key, T value)
     {
         var type = Contains(key) ? BlackBoardEventType.Modify: BlackBoardEventType.Set;
+        EventHandler<BlackBoardEventArgs>? handler;
+        BlackBoardEventArgs args;
         _lock.EnterWriteLock();
         try
         {
             var oldValue = GetInternal<T>(key);
             _data[key] = value!;
-            NotifyDataChanged(key, type, oldValue, value);
+            handler = GetDataChangedHandler(key);
+            args = new BlackBoardEventArgs(key, type, oldValue, value);
         }
         finally
         {
             _lock.ExitWriteLock();
         }
+
+        NotifyDataChanged(handler, args);
     }
 
     /// <summary>
@@ -190,14 +195,19 @@ public class BlackBoard
     public bool Remove(string key)
     {
         _lock.EnterWriteLock();
+        EventHandler<BlackBoardEventArgs>? handler;
+        BlackBoardEventArgs? args;
         try
         {
-            return RemoveWithoutLock(key);
+            if (!RemoveWithoutLock(key, out handler, out args)) return false;
         }
         finally
         {
             _lock.ExitWriteLock();
         }
+
+        NotifyDataChanged(handler, args!);
+        return true;
     }
     
     /// <summary>
@@ -205,25 +215,45 @@ public class BlackBoard
     /// </summary>
     public void Clear()
     {
+        var notifications = new List<(EventHandler<BlackBoardEventArgs>? Handler, BlackBoardEventArgs Args)>();
         _lock.EnterWriteLock();
         try
         {
-            foreach (var key in _data.Keys)
+            foreach (var key in _data.Keys.ToList())
             {
-                RemoveWithoutLock(key);
+                if (RemoveWithoutLock(key, out var handler, out var args))
+                {
+                    notifications.Add((handler, args!));
+                }
             }
         }
         finally
         {
             _lock.ExitWriteLock();
         }
+
+        foreach (var (handler, args) in notifications)
+        {
+            NotifyDataChanged(handler, args);
+        }
     }
 
-    private bool RemoveWithoutLock(string key)
+    private bool RemoveWithoutLock(
+        string key,
+        out EventHandler<BlackBoardEventArgs>? handler,
+        out BlackBoardEventArgs? args)
     {
+        handler = null;
+        args = null;
         if (!_data.Remove(key, out var oldValue)) return false;
-        NotifyDataChanged(key, BlackBoardEventType.Remove, oldValue, null);
+        handler = GetDataChangedHandler(key);
+        args = new BlackBoardEventArgs(key, BlackBoardEventType.Remove, oldValue, null);
         return true;
+    }
+
+    private EventHandler<BlackBoardEventArgs>? GetDataChangedHandler(string key)
+    {
+        return _events.TryGetValue(key, out var handler) ? handler : null;
     }
 
     /// <summary>
@@ -233,12 +263,9 @@ public class BlackBoard
     /// <param name="type">变化类型</param>
     /// <param name="oldValue">旧值</param>
     /// <param name="newValue">新值</param>
-    private void NotifyDataChanged(string key, BlackBoardEventType type, object? oldValue, object? newValue)
+    private void NotifyDataChanged(EventHandler<BlackBoardEventArgs>? handler, BlackBoardEventArgs args)
     {
-        if (_events.TryGetValue(key, out var handler))
-        {
-            handler.Invoke(this, new BlackBoardEventArgs(key, type, oldValue, newValue));
-        }
+        handler?.Invoke(this, args);
     }
 
     /// <summary>
