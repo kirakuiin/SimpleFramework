@@ -9,6 +9,7 @@ Add a small `SystemGroup` API to `SimpleFramework.ECS` for grouping `EcsSystem` 
 - Provide a reusable collection for multiple ECS systems.
 - Allow more than one group to exist at the same time.
 - Let callers update all systems in a group through `SystemGroup.Update()` or `SystemGroup.Update(deltaTime)`.
+- Make `EcsSystem` itself support both no-argument and delta-time updates.
 - Support manual ordering with stable execution for systems that share the same order.
 - Allow systems that need frame time to override a delta-time update method without breaking existing no-argument systems.
 - Keep the feature independent from ECS storage, archetypes, queries, and component migration.
@@ -41,7 +42,7 @@ public sealed class SystemGroup
 }
 ```
 
-`EcsSystem.Update(float deltaTime)` defaults to calling `Update()`. Existing systems that only implement no-argument `Update()` continue to work. Systems that need frame time can override `Update(float deltaTime)` and use the passed value.
+`EcsSystem` is the base update contract. `Update()` remains abstract so existing system implementations stay explicit. `Update(float deltaTime)` is added to the base class and defaults to calling `Update()`. Existing systems that only implement no-argument `Update()` continue to work. Systems that need frame time can override `Update(float deltaTime)` and use the passed value.
 
 `Add(system)` uses order `0`. `Add(system, order)` stores both the explicit order and an internal insertion index. `Update()` and `Update(deltaTime)` execute systems sorted by `order` ascending, then by insertion index ascending.
 
