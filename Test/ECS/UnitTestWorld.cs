@@ -26,10 +26,45 @@ public class UnitTestWorld
         var entity = world.CreateEntity();
 
         Assert.AreEqual(world.WorldId, entity.WorldId);
-        Assert.AreEqual(0, entity.Id);
+        Assert.Greater(entity.Id, 0);
         Assert.AreEqual(1, entity.Version);
         Assert.IsTrue(world.IsAlive(entity));
         Assert.AreEqual(1, world.EntityCount);
+    }
+
+    [Test]
+    public void EntityIdsIncreaseAcrossWorlds()
+    {
+        var firstWorld = new World();
+        var secondWorld = new World();
+
+        var first = firstWorld.CreateEntity();
+        var second = secondWorld.CreateEntity();
+        var third = firstWorld.CreateEntity();
+
+        Assert.Greater(second.Id, first.Id);
+        Assert.Greater(third.Id, second.Id);
+    }
+
+    [Test]
+    public void WorldOperationsUseGlobalEntityIdsThroughLocalSlotMapping()
+    {
+        var world = new World();
+        var first = world.CreateEntity(new TestPosition { X = 1 });
+        _ = new World().CreateEntity();
+        var second = world.CreateEntity(new TestPosition { X = 2 });
+
+        Assert.Greater(second.Id, first.Id + 1);
+        Assert.AreEqual(first, world.GetEntity(first.Id));
+        Assert.AreEqual(second, world.GetEntity(second.Id));
+
+        Assert.IsTrue(world.DestroyEntity(first));
+
+        Assert.IsFalse(world.IsAlive(first));
+        Assert.IsTrue(world.IsAlive(second));
+        Assert.IsNull(world.GetEntity(first.Id));
+        Assert.AreEqual(second, world.GetEntity(second.Id));
+        Assert.AreEqual(2, world.Get<TestPosition>(second).X);
     }
 
     [Test]

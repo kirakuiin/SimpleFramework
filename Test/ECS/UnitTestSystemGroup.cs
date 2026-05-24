@@ -173,7 +173,269 @@ public class TestSystemGroup
         Assert.AreSame(exception, Assert.Throws<TestSystemException>(() => group.Update(0.5f)));
     }
 
-    private sealed class RecordingSystem : EcsSystem
+    [Test]
+    public void DependencyAttributesThrowWhenSystemTypeIsNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => new RunBeforeAttribute(null));
+        Assert.Throws<ArgumentNullException>(() => new RunAfterAttribute(null));
+    }
+
+    [Test]
+    public void DependencyAttributesThrowWhenSystemTypeDoesNotInheritEcsSystem()
+    {
+        Assert.Throws<ArgumentException>(() => new RunBeforeAttribute(typeof(TestPosition)));
+        Assert.Throws<ArgumentException>(() => new RunAfterAttribute(typeof(TestPosition)));
+    }
+
+    [Test]
+    public void UpdateRunsRunAfterSystemAfterReferencedSystem()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new AfterFirstSystem(world, calls, "after"));
+        group.Add(new FirstDependencySystem(world, calls, "first"));
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "first", "after" }, calls);
+    }
+
+    [Test]
+    public void UpdateRunsRunBeforeSystemBeforeReferencedSystem()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new LastDependencySystem(world, calls, "last"));
+        group.Add(new BeforeLastSystem(world, calls, "before"));
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "before", "last" }, calls);
+    }
+
+    [Test]
+    public void DependencyMissingReferencedSystemKeepsStableOrder()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new AfterMissingSystem(world, calls, "first"));
+        group.Add(new RecordingSystem(world, calls, "second"));
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "first", "second" }, calls);
+    }
+
+    [Test]
+    public void DependencyDoesNotOverrideManualOrder()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new CrossOrderAfterSystem(world, calls, "early"), -10);
+        group.Add(new CrossOrderDependencySystem(world, calls, "late"), 10);
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "early", "late" }, calls);
+    }
+
+    [Test]
+    public void DeltaTimeUpdateUsesDependencyOrder()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new AfterFirstSystem(world, calls, "after"));
+        group.Add(new FirstDependencySystem(world, calls, "first"));
+
+        group.Update(0.5f);
+
+        CollectionAssert.AreEqual(new[] { "first", "after" }, calls);
+    }
+
+    [Test]
+    public void DependencyCanReferenceBaseSystemType()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new AfterBaseDependencySystem(world, calls, "after"));
+        group.Add(new ConcreteBaseDependencySystem(world, calls, "base"));
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "base", "after" }, calls);
+    }
+
+    [Test]
+    public void DependencyCycleThrowsWithDependencyChain()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new CycleASystem(world, calls, "a"));
+        group.Add(new CycleBSystem(world, calls, "b"));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => group.Update());
+
+        StringAssert.Contains("SystemGroup dependency cycle detected:", exception.Message);
+        StringAssert.Contains("CycleASystem -> CycleBSystem -> CycleASystem", exception.Message);
+    }
+
+    [Test]
+    public void DependencyCycleThrowsBeforeAnySystemUpdates()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new CycleASystem(world, calls, "a"));
+        group.Add(new CycleBSystem(world, calls, "b"));
+
+        Assert.Throws<InvalidOperationException>(() => group.Update());
+
+        CollectionAssert.IsEmpty(calls);
+    }
+
+    [Test]
+    public void UpdateSkipsDisabledSystems()
+    {
+        var world = new World();
+        var enabled = new RecordingSystem(world);
+        var disabled = new RecordingSystem(world) { Enabled = false };
+        var group = new SystemGroup();
+
+        group.Add(enabled);
+        group.Add(disabled);
+
+        group.Update();
+
+        Assert.AreEqual(1, enabled.UpdateCount);
+        Assert.AreEqual(0, disabled.UpdateCount);
+    }
+
+    [Test]
+    public void DeltaTimeUpdateSkipsDisabledSystems()
+    {
+        var world = new World();
+        var enabled = new RecordingSystem(world);
+        var disabled = new RecordingSystem(world) { Enabled = false };
+        var group = new SystemGroup();
+
+        group.Add(enabled);
+        group.Add(disabled);
+
+        group.Update(0.5f);
+
+        Assert.AreEqual(1, enabled.DeltaUpdateCount);
+        Assert.AreEqual(0, disabled.DeltaUpdateCount);
+    }
+
+    [Test]
+    public void ValidateDetectsDependencyCycleWithoutUpdatingSystems()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new CycleASystem(world, calls, "a"));
+        group.Add(new CycleBSystem(world, calls, "b"));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => group.Validate());
+
+        StringAssert.Contains("CycleASystem -> CycleBSystem -> CycleASystem", exception.Message);
+        CollectionAssert.IsEmpty(calls);
+    }
+
+    [Test]
+    public void ValidateDoesNotUpdateSystems()
+    {
+        var world = new World();
+        var system = new RecordingSystem(world);
+        var group = new SystemGroup();
+
+        group.Add(system);
+
+        group.Validate();
+
+        Assert.AreEqual(0, system.UpdateCount);
+    }
+
+    [Test]
+    public void AddInvalidatesValidatedOrderCache()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new AfterFirstSystem(world, calls, "after"));
+        group.Validate();
+        group.Add(new FirstDependencySystem(world, calls, "first"));
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "first", "after" }, calls);
+    }
+
+    [Test]
+    public void RemoveInvalidatesValidatedOrderCache()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+        var first = new FirstDependencySystem(world, calls, "first");
+
+        group.Add(new AfterFirstSystem(world, calls, "after"));
+        group.Add(first);
+        group.Validate();
+        group.Remove(first);
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "after" }, calls);
+    }
+
+    [Test]
+    public void DisabledSystemsStillParticipateInDependencyCycleDetection()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new CycleASystem(world, calls, "a") { Enabled = false });
+        group.Add(new CycleBSystem(world, calls, "b"));
+
+        Assert.Throws<InvalidOperationException>(() => group.Validate());
+    }
+
+    [Test]
+    public void DisabledSystemsKeepDependencyOrderForEnabledSystems()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+
+        group.Add(new AfterDisabledMiddleSystem(world, calls, "after"));
+        group.Add(new DisabledMiddleSystem(world, calls, "middle") { Enabled = false });
+        group.Add(new BeforeDisabledMiddleSystem(world, calls, "before"));
+
+        group.Update();
+
+        CollectionAssert.AreEqual(new[] { "before", "after" }, calls);
+    }
+
+    private class RecordingSystem : EcsSystem
     {
         private readonly List<string> _calls;
         private readonly string _name;
@@ -239,5 +501,126 @@ public class TestSystemGroup
 
     private sealed class TestSystemException : Exception
     {
+    }
+
+    [RunAfter(typeof(FirstDependencySystem))]
+    private sealed class AfterFirstSystem : RecordingSystem
+    {
+        public AfterFirstSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private sealed class FirstDependencySystem : RecordingSystem
+    {
+        public FirstDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunBefore(typeof(LastDependencySystem))]
+    private sealed class BeforeLastSystem : RecordingSystem
+    {
+        public BeforeLastSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private sealed class LastDependencySystem : RecordingSystem
+    {
+        public LastDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(MissingDependencySystem))]
+    private sealed class AfterMissingSystem : RecordingSystem
+    {
+        public AfterMissingSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private sealed class MissingDependencySystem : RecordingSystem
+    {
+        public MissingDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(CrossOrderDependencySystem))]
+    private sealed class CrossOrderAfterSystem : RecordingSystem
+    {
+        public CrossOrderAfterSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private sealed class CrossOrderDependencySystem : RecordingSystem
+    {
+        public CrossOrderDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(BaseDependencySystem))]
+    private sealed class AfterBaseDependencySystem : RecordingSystem
+    {
+        public AfterBaseDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private abstract class BaseDependencySystem : RecordingSystem
+    {
+        protected BaseDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private sealed class ConcreteBaseDependencySystem : BaseDependencySystem
+    {
+        public ConcreteBaseDependencySystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(CycleBSystem))]
+    private sealed class CycleASystem : RecordingSystem
+    {
+        public CycleASystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(CycleASystem))]
+    private sealed class CycleBSystem : RecordingSystem
+    {
+        public CycleBSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(DisabledMiddleSystem))]
+    private sealed class AfterDisabledMiddleSystem : RecordingSystem
+    {
+        public AfterDisabledMiddleSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    [RunAfter(typeof(BeforeDisabledMiddleSystem))]
+    private sealed class DisabledMiddleSystem : RecordingSystem
+    {
+        public DisabledMiddleSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
+    }
+
+    private sealed class BeforeDisabledMiddleSystem : RecordingSystem
+    {
+        public BeforeDisabledMiddleSystem(World world, List<string> calls, string name) : base(world, calls, name)
+        {
+        }
     }
 }
