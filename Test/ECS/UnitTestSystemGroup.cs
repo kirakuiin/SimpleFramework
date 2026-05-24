@@ -181,6 +181,13 @@ public class TestSystemGroup
     }
 
     [Test]
+    public void DependencyAttributesThrowWhenSystemTypeDoesNotInheritEcsSystem()
+    {
+        Assert.Throws<ArgumentException>(() => new RunBeforeAttribute(typeof(TestPosition)));
+        Assert.Throws<ArgumentException>(() => new RunAfterAttribute(typeof(TestPosition)));
+    }
+
+    [Test]
     public void UpdateRunsRunAfterSystemAfterReferencedSystem()
     {
         var world = new World();

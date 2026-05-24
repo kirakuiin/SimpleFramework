@@ -12,13 +12,24 @@ public sealed class RunBeforeAttribute : Attribute
     /// <param name="systemType">应在其之前运行的系统类型。</param>
     public RunBeforeAttribute(Type systemType)
     {
-        SystemType = systemType ?? throw new ArgumentNullException(nameof(systemType));
+        SystemType = ValidateSystemType(systemType);
     }
 
     /// <summary>
     /// 目标系统类型。
     /// </summary>
     public Type SystemType { get; }
+
+    private static Type ValidateSystemType(Type systemType)
+    {
+        ArgumentNullException.ThrowIfNull(systemType);
+        if (!typeof(EcsSystem).IsAssignableFrom(systemType))
+        {
+            throw new ArgumentException("Dependency type must inherit EcsSystem.", nameof(systemType));
+        }
+
+        return systemType;
+    }
 }
 
 /// <summary>
@@ -33,11 +44,22 @@ public sealed class RunAfterAttribute : Attribute
     /// <param name="systemType">应在其之后运行的系统类型。</param>
     public RunAfterAttribute(Type systemType)
     {
-        SystemType = systemType ?? throw new ArgumentNullException(nameof(systemType));
+        SystemType = ValidateSystemType(systemType);
     }
 
     /// <summary>
     /// 目标系统类型。
     /// </summary>
     public Type SystemType { get; }
+
+    private static Type ValidateSystemType(Type systemType)
+    {
+        ArgumentNullException.ThrowIfNull(systemType);
+        if (!typeof(EcsSystem).IsAssignableFrom(systemType))
+        {
+            throw new ArgumentException("Dependency type must inherit EcsSystem.", nameof(systemType));
+        }
+
+        return systemType;
+    }
 }

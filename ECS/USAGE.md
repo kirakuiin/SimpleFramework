@@ -2,6 +2,12 @@
 
 This document shows the recommended shape for a small ECS loop using `World`, `Query`, `EcsSystem`, and `SystemGroup`.
 
+## Entity Handles
+
+`Entity` is a value handle made of `WorldId`, `Id`, and `Version`.
+
+`Id` is globally allocated and monotonically increases across all `World` instances. It is not a world-local row or array index. Use `World.IsAlive(entity)` to validate a handle, `World.GetEntity(id)` to resolve a live entity by ID inside the same world, and `World.GetEntities()` to enumerate the world's current live handles.
+
 ## Components
 
 Components are plain value types that implement `IComponent`.
@@ -87,7 +93,7 @@ public sealed class RenderSystem : EcsSystem
 }
 ```
 
-`RunAfter` and `RunBefore` can be used multiple times on the same system. Dependencies are applied inside the same manual order value. If two systems have no dependency relationship, `SystemGroup` keeps stable order by manual `order`, then insertion order.
+`RunAfter` and `RunBefore` can be used multiple times on the same system. Their target type must inherit from `EcsSystem`; passing a component type or unrelated type throws an `ArgumentException`. Dependencies are applied inside the same manual order value. If two systems have no dependency relationship, `SystemGroup` keeps stable order by manual `order`, then insertion order.
 
 ## Group Setup
 

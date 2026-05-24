@@ -7,9 +7,11 @@ namespace SimpleFramework.ECS;
 /// </summary>
 public partial class World : IEnumerable<Archetype>, IEquatable<World>
 {
+    private static int _nextEntityId;
     private static int _nextWorldId;
 
     private readonly Dictionary<TypeSignature, Archetype> _archetypes = new();
+    private readonly Dictionary<int, int> _entityIdToSlotIndex = new();
     private readonly List<EntitySlot> _slots = new();
 
     /// <summary>
@@ -131,9 +133,10 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
         var moved = slot.Archetype.RemoveAtSwapBack(slot.Row);
         if (moved.HasValue)
         {
-            _slots[moved.Value.Id].Row = slot.Row;
+            _slots[_entityIdToSlotIndex[moved.Value.Id]].Row = slot.Row;
         }
 
+        _entityIdToSlotIndex.Remove(entity.Id);
         slot.Alive = false;
         slot.Archetype = null!;
         slot.Row = -1;
@@ -282,12 +285,12 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <returns>实体存活时返回实体句柄，否则返回 null。</returns>
     public Entity? GetEntity(int id)
     {
-        if (id < 0 || id >= _slots.Count)
+        if (!_entityIdToSlotIndex.TryGetValue(id, out var slotIndex))
         {
             return null;
         }
 
-        var slot = _slots[id];
+        var slot = _slots[slotIndex];
         return slot.Alive ? new Entity(WorldId, id, slot.Version) : null;
     }
 
@@ -302,7 +305,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
             var slot = _slots[id];
             if (slot.Alive)
             {
-                yield return new Entity(WorldId, id, slot.Version);
+                yield return new Entity(WorldId, slot.EntityId, slot.Version);
             }
         }
     }
@@ -400,6 +403,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
             slot.Row = -1;
         }
 
+        _entityIdToSlotIndex.Clear();
         EntityCount = 0;
         ArchetypeVersion++;
         StructuralVersion++;
@@ -455,11 +459,13 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     {
         var signature = new TypeSignature(values.Keys);
         var archetype = GetOrCreateArchetype(signature);
-        var id = _slots.Count;
-        var slot = new EntitySlot { Version = 1, Alive = true, Archetype = archetype };
+        var id = Interlocked.Increment(ref _nextEntityId);
+        var slotIndex = _slots.Count;
+        var slot = new EntitySlot { EntityId = id, Version = 1, Alive = true, Archetype = archetype };
         var entity = new Entity(WorldId, id, slot.Version);
         slot.Row = archetype.Add(entity, values);
         _slots.Add(slot);
+        _entityIdToSlotIndex[id] = slotIndex;
         EntityCount++;
         StructuralVersion++;
         return entity;
@@ -492,7 +498,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
 
         if (moved.HasValue)
         {
-            _slots[moved.Value.Id].Row = oldRow;
+            _slots[_entityIdToSlotIndex[moved.Value.Id]].Row = oldRow;
         }
 
         slot.Archetype = target;
@@ -513,12 +519,12 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     {
         slot = null!;
 
-        if (entity.WorldId != WorldId || entity.Id < 0 || entity.Id >= _slots.Count)
+        if (entity.WorldId != WorldId || !_entityIdToSlotIndex.TryGetValue(entity.Id, out var slotIndex))
         {
             return false;
         }
 
-        var candidate = _slots[entity.Id];
+        var candidate = _slots[slotIndex];
         if (!candidate.Alive || candidate.Version != entity.Version)
         {
             return false;
@@ -530,6 +536,7 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
 
     private sealed class EntitySlot
     {
+        public int EntityId;
         public int Version;
         public bool Alive;
         public Archetype Archetype = null!;
