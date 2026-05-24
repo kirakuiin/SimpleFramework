@@ -32,8 +32,6 @@ public abstract class EcsSystem
 
 public sealed class SystemGroup
 {
-    public int Count { get; }
-
     public void Add(EcsSystem system);
     public void Add(EcsSystem system, int order);
     public bool Remove(EcsSystem system);

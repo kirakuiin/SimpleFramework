@@ -21,6 +21,17 @@ public class TestEcsSystem
         Assert.AreEqual(3, world.Get<TestPosition>(entity).X);
     }
 
+    [Test]
+    public void DeltaTimeUpdateFallsBackToParameterlessUpdate()
+    {
+        var world = new World();
+        var system = new CountingSystem(world);
+
+        system.Update(0.25f);
+
+        Assert.AreEqual(1, system.UpdateCount);
+    }
+
     private sealed class MovementTestSystem : EcsSystem
     {
         private readonly Query _query;
@@ -39,6 +50,20 @@ public class TestEcsSystem
                 position.X += velocity.X;
                 position.Y += velocity.Y;
             }
+        }
+    }
+
+    private sealed class CountingSystem : EcsSystem
+    {
+        public CountingSystem(World world) : base(world)
+        {
+        }
+
+        public int UpdateCount { get; private set; }
+
+        public override void Update()
+        {
+            UpdateCount++;
         }
     }
 }

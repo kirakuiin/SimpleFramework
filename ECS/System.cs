@@ -23,4 +23,13 @@ public abstract class EcsSystem
     /// 执行系统更新。
     /// </summary>
     public abstract void Update();
+
+    /// <summary>
+    /// 使用帧间隔时间执行系统更新。
+    /// </summary>
+    /// <param name="deltaTime">距离上次更新经过的时间。</param>
+    public virtual void Update(float deltaTime)
+    {
+        Update();
+    }
 }
