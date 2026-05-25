@@ -487,29 +487,62 @@ net.Session.PeerReconnected += peerId =>
 
 `NetDiscovery` 用于局域网房间发现，基于 UDP broadcast 或 multicast，不依赖 Godot。
 
+Discovery 的基础数据结构只保留发现和连接真正必要的数据：
+
+```csharp
+public sealed class LanAdvertiseInfo
+{
+    public string GameId { get; init; }
+    public string RoomId { get; init; }
+    public int Port { get; init; }
+    public int ProtocolVersion { get; init; }
+}
+```
+
+房间名、人数、密码标记、地图、模式等都属于业务展示或筛选信息，应通过公开 metadata 扩展：
+
+```csharp
+public sealed class RoomListMetadata
+{
+    public string RoomName { get; init; }
+    public int CurrentPlayers { get; init; }
+    public int MaxPlayers { get; init; }
+    public bool HasPassword { get; init; }
+    public string MapName { get; init; }
+    public string Mode { get; init; }
+}
+```
+
 服务端广播：
 
 ```csharp
-await net.Discovery.StartAdvertiseAsync(new LanAdvertiseInfo
-{
-    GameId = "my-game",
-    RoomName = "Alice's Room",
-    Port = 7777,
-    MaxPlayers = 4,
-    CurrentPlayers = 1,
-    ProtocolVersion = 1,
-    HasPassword = true
-});
+await net.Discovery.StartAdvertiseAsync(
+    new LanAdvertiseInfo
+    {
+        GameId = "my-game",
+        RoomId = "room-001",
+        Port = 7777,
+        ProtocolVersion = 1
+    },
+    new RoomListMetadata
+    {
+        RoomName = "Alice's Room",
+        CurrentPlayers = 1,
+        MaxPlayers = 4,
+        HasPassword = true,
+        MapName = "Forest",
+        Mode = "Coop"
+    });
 ```
 
 客户端扫描：
 
 ```csharp
-var rooms = await net.Discovery.ScanAsync(TimeSpan.FromSeconds(2));
+var rooms = await net.Discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromSeconds(2));
 
 foreach (var room in rooms)
 {
-    Console.WriteLine($"{room.RoomName} {room.EndPoint} {room.LatencyMs}ms");
+    Console.WriteLine($"{room.Metadata.RoomName} {room.EndPoint} {room.LatencyMs}ms");
 }
 ```
 
@@ -528,7 +561,15 @@ await net.JoinAsync(new JoinOptions
 });
 ```
 
-Discovery 只广播房间基础信息，例如房间名、人数、协议版本、端口和 `HasPassword`。它不能广播真实密码或认证 token。客户端看到 `HasPassword = true` 后由 UI 提示用户输入密码，再通过 `JoinOptions.AuthPayload` 交给 Session 认证流程。
+Discovery 只负责公开广播。metadata 可以包含 `HasPassword` 这类展示字段，但不能包含真实密码、认证 token 或其他敏感信息。客户端看到 metadata 中的 `HasPassword = true` 后由 UI 提示用户输入密码，再通过 `JoinOptions.AuthPayload` 交给 Session 认证流程。
+
+Metadata 规则：
+
+- Metadata 是公开数据，只用于展示和筛选。
+- Metadata 大小受 `MaxDiscoveryPayloadSize` 限制。
+- Metadata 类型由业务定义，默认 codec 负责序列化。
+- 不同游戏通过 `GameId` 隔离；协议版本不匹配的房间可以过滤或标记不可加入。
+- 认证、安全和加入裁决仍由 Session 的 `Authenticator` 处理。
 
 限制：
 
@@ -663,8 +704,9 @@ NetFlow 测试：
 Discovery 和 Stats 测试：
 
 - UDP 广播房间可被扫描到。
-- 扫描结果包含房间信息和端点。
-- 扫描结果包含 `HasPassword`，但不包含真实密码。
+- 扫描结果包含基础连接信息和端点。
+- 扫描结果可以反序列化业务 metadata。
+- 密码房 metadata 可包含 `HasPassword`，但不包含真实密码。
 - 不同 `GameId` 不互相污染。
 - 应用层 ping/pong 返回 RTT。
 - 应用层 ping/pong 超时会计入 `ProbeLoss`。
