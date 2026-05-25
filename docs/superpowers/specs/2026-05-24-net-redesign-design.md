@@ -143,6 +143,28 @@ Stopping
 
 `PeerId` 是会话内稳定玩家 ID；底层 socket 或 transport connection ID 只是当前物理连接，不能作为业务身份。
 
+Session 必须区分两种服务端入口：
+
+```text
+Host
+  本机启动权威服务器，同时本地也作为一个 peer 参与游戏。
+  适合局域网开房、小型联机、房主即玩家的场景。
+
+Dedicated Server
+  只启动权威服务器，不创建本地玩家 peer。
+  适合专用服务器、自动化房间服务或测试服务端。
+```
+
+建议 API：
+
+```csharp
+await net.HostAsync(7777);
+await net.StartServerAsync(7777);
+await net.JoinAsync("127.0.0.1", 7777);
+```
+
+`HostAsync` 和 `StartServerAsync` 可以复用同一套 transport、session、messenger 和 flow 管线；区别只在于是否创建本地玩家身份，以及 `Peers` 是否包含本地 host player。
+
 ## Messenger
 
 消息层提供三种主要模型：
@@ -208,6 +230,88 @@ var response = await net.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
 ```
 
 普通 `RequestAsync` 是短请求语义。断线或超时后请求失败；初版不做普通请求的断线恢复。
+
+### Handler 注册
+
+除了运行时显式绑定，Messenger 也支持 attribute 声明式绑定：
+
+```csharp
+public sealed class RoomHandlers
+{
+    [NetHandler]
+    public void OnPlayerReady(NetContext ctx, PlayerReady msg)
+    {
+    }
+
+    [NetRequestHandler]
+    public JoinRoomResponse OnJoinRoom(NetContext ctx, JoinRoomRequest req)
+    {
+        return new JoinRoomResponse(true, "");
+    }
+
+    [NetFlowHandler]
+    public async Task<LoadSceneAck> OnLoadScene(NetContext ctx, LoadSceneProposal proposal)
+    {
+        var ok = await LoadSceneAsync(proposal.SceneName);
+        return new LoadSceneAck(ok, "");
+    }
+}
+```
+
+启动时注册 handler 容器或程序集：
+
+```csharp
+net.Handlers.Register(new RoomHandlers());
+net.Handlers.RegisterAssembly(typeof(RoomHandlers).Assembly);
+```
+
+Attribute 绑定不是严格的编译期绑定；第一版通过启动时反射扫描实现。后续如果需要更强的构建期校验，可以增加 source generator 生成注册代码。运行时 `net.On<T>` 和 attribute handler 共用同一套 handler registry。
+
+Handler 不直接绑定发送端，而是绑定消息类型。发送者身份由 `NetContext` 提供：
+
+```text
+PlayerReady packet
+  -> message id 解码为 PlayerReady
+  -> 查找 PlayerReady 的所有 handler
+  -> 调用 handler，并通过 ctx.SenderId 暴露发送者
+```
+
+签名规则必须保持严格：
+
+```text
+[NetHandler]
+  void Handle(NetContext ctx, TMessage msg)
+  Task Handle(NetContext ctx, TMessage msg)
+  ValueTask Handle(NetContext ctx, TMessage msg)
+  同一消息类型允许多个 handler，按注册顺序执行。
+
+[NetRequestHandler]
+  TResponse Handle(NetContext ctx, TRequest req)
+  Task<TResponse> Handle(NetContext ctx, TRequest req)
+  ValueTask<TResponse> Handle(NetContext ctx, TRequest req)
+  同一 request 类型只能有一个 handler。
+
+[NetFlowHandler]
+  TAck Handle(NetContext ctx, TProposal proposal)
+  Task<TAck> Handle(NetContext ctx, TProposal proposal)
+  ValueTask<TAck> Handle(NetContext ctx, TProposal proposal)
+  同一 proposal 类型只能有一个 handler。
+```
+
+第一版不支持复杂签名变体，例如直接注入 `GameNet`、`IServiceProvider` 或任意服务参数。网络 handler 默认都要求带 `NetContext`，保证 handler 能明确访问 sender、channel 和当前 session 角色。
+
+无 handler 行为：
+
+```text
+普通 Message 无 handler：
+  忽略或输出 debug 日志，不视为错误。
+
+Request 无 handler：
+  自动返回 RequestError.NoHandler，避免请求方只能等 timeout。
+
+Flow Proposal 无 handler：
+  自动返回 FlowError.NoHandler，服务端将其计入失败响应，由 policy 决定最终结果。
+```
 
 ## Packet 和 Codec
 
@@ -404,10 +508,33 @@ var latency = await net.Stats.GetLatencyAsync(peerId);
 - 当前 RTT。
 - 平均 RTT。
 - jitter。
+- 应用层探测 loss。
+- transport loss，如果底层 transport 支持。
 - 超时次数。
 - 最近一次收到包时间。
 
 Discovery 扫描阶段也可以记录 discovery request/reply 的往返时间，作为房间列表延迟估算。
+
+Loss 指标必须区分来源，避免在 TCP 下误导用户：
+
+```csharp
+public sealed class NetPeerStats
+{
+    public TimeSpan? Rtt { get; init; }
+    public TimeSpan? AverageRtt { get; init; }
+    public TimeSpan? Jitter { get; init; }
+
+    // 应用层 ping/pong 超时率，TCP/UDP 都可支持。
+    public double ProbeLoss { get; init; }
+
+    // 真实传输层丢包率。TCP 下通常为 null；UDP/LiteNetLib 后续可填充。
+    public double? TransportLoss { get; init; }
+
+    public DateTimeOffset LastSeenAt { get; init; }
+}
+```
+
+第一版实现 `ProbeLoss`：按最近窗口内应用层 ping/pong 的超时比例计算。`TcpNetTransport` 不暴露真实 packet loss，因此 `TransportLoss` 为 `null`。未来 UDP transport 可以提供真实发送、确认、重传和丢弃统计。
 
 ## SimpleFramework 集成
 
@@ -447,6 +574,8 @@ Realtime Extension
 Session 测试：
 
 - Host 启动成功。
+- `HostAsync` 创建本地玩家 peer。
+- `StartServerAsync` 不创建本地玩家 peer。
 - Client Join 成功。
 - 多 Client 加入。
 - `PeerJoined` / `PeerLeft` 事件正确。
@@ -459,7 +588,12 @@ Session 测试：
 Messenger 测试：
 
 - 自动扫描 `[NetMessage]`。
+- 自动扫描 `[NetHandler]` / `[NetRequestHandler]` / `[NetFlowHandler]`。
 - 重复 key 报错。
+- 普通消息允许多个 handler 且按注册顺序执行。
+- request/flow 重复 handler 注册报错。
+- request 无 handler 返回 `NoHandler` 错误。
+- flow proposal 无 handler 返回 `NoHandler` 错误。
 - 普通 `SendToServer`。
 - 服务端 `Send(peer)`。
 - 服务端 `Broadcast`。
@@ -486,6 +620,8 @@ Discovery 和 Stats 测试：
 - 扫描结果包含房间信息和端点。
 - 不同 `GameId` 不互相污染。
 - 应用层 ping/pong 返回 RTT。
+- 应用层 ping/pong 超时会计入 `ProbeLoss`。
+- TCP transport 下 `TransportLoss` 为 `null`。
 - 超时 peer 返回失败结果。
 
 TCP loopback 测试：
