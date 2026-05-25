@@ -143,6 +143,38 @@ Stopping
 
 `PeerId` 是会话内稳定玩家 ID；底层 socket 或 transport connection ID 只是当前物理连接，不能作为业务身份。
 
+认证 payload 由业务定义，Session 只负责传输和调用服务端 `Authenticator`。这可以覆盖密码房、版本校验、玩家名重复、黑名单、mod 列表不一致等场景。Join 失败必须返回明确原因，而不是只给通用连接失败。
+
+密码房示例：
+
+```csharp
+await net.HostAsync(new HostOptions
+{
+    Port = 7777,
+    MaxPeers = 4,
+    Authenticator = async ctx =>
+    {
+        var payload = ctx.GetPayload<JoinAuthPayload>();
+
+        if (payload.Password != roomPassword)
+            return AuthResult.Reject(AuthRejectReason.WrongPassword);
+
+        return AuthResult.Accept();
+    }
+});
+
+await net.JoinAsync(new JoinOptions
+{
+    Host = room.EndPoint.Address.ToString(),
+    Port = room.Port,
+    AuthPayload = new JoinAuthPayload
+    {
+        PlayerName = "Alice",
+        Password = inputPassword
+    }
+});
+```
+
 Session 必须区分两种服务端入口：
 
 ```text
@@ -465,7 +497,8 @@ await net.Discovery.StartAdvertiseAsync(new LanAdvertiseInfo
     Port = 7777,
     MaxPlayers = 4,
     CurrentPlayers = 1,
-    ProtocolVersion = 1
+    ProtocolVersion = 1,
+    HasPassword = true
 });
 ```
 
@@ -483,8 +516,19 @@ foreach (var room in rooms)
 发现后仍然走正常连接：
 
 ```csharp
-await net.JoinAsync(room.EndPoint.Address.ToString(), room.Port);
+await net.JoinAsync(new JoinOptions
+{
+    Host = room.EndPoint.Address.ToString(),
+    Port = room.Port,
+    AuthPayload = new JoinAuthPayload
+    {
+        PlayerName = "Alice",
+        Password = inputPassword
+    }
+});
 ```
+
+Discovery 只广播房间基础信息，例如房间名、人数、协议版本、端口和 `HasPassword`。它不能广播真实密码或认证 token。客户端看到 `HasPassword = true` 后由 UI 提示用户输入密码，再通过 `JoinOptions.AuthPayload` 交给 Session 认证流程。
 
 限制：
 
@@ -581,6 +625,8 @@ Session 测试：
 - `PeerJoined` / `PeerLeft` 事件正确。
 - `MaxPeers` 限制。
 - 认证成功和失败。
+- 密码房通过 `AuthPayload` 认证成功。
+- 密码错误时 Join 返回明确 `WrongPassword` 拒绝原因。
 - Kick 后客户端收到断开原因。
 - Client 主动离开。
 - Host 关闭后客户端断开。
@@ -618,6 +664,7 @@ Discovery 和 Stats 测试：
 
 - UDP 广播房间可被扫描到。
 - 扫描结果包含房间信息和端点。
+- 扫描结果包含 `HasPassword`，但不包含真实密码。
 - 不同 `GameId` 不互相污染。
 - 应用层 ping/pong 返回 RTT。
 - 应用层 ping/pong 超时会计入 `ProbeLoss`。
