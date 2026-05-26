@@ -70,6 +70,60 @@ GameNet
 
 `Transport` 不知道业务消息。`Session` 不知道具体业务协议。`NetFlow` 基于 `Messenger` 的 request/response 实现，不自建底层协议。
 
+## Options
+
+`GameNetOptions` 保存整个 Net 实例的项目级配置。`ApplicationId` 和 `ProtocolVersion` 不属于 Discovery，而是所有网络能力共享的兼容性身份。
+
+```csharp
+var net = new GameNet(new TcpNetTransport(), new GameNetOptions
+{
+    Application = new NetApplicationInfo
+    {
+        ApplicationId = Guid.Parse("2f2db4b5-4f54-47c1-b0e8-2f9e2fd7f741"),
+        ProtocolVersion = 1,
+        DisplayName = "My Game"
+    },
+    Discovery = new DiscoveryOptions
+    {
+        Port = 3344,
+        AdvertiseInterval = TimeSpan.FromSeconds(1),
+        RoomTimeout = TimeSpan.FromSeconds(5),
+        MaxPayloadSize = 1024
+    }
+});
+```
+
+项目级配置：
+
+```csharp
+public sealed class NetApplicationInfo
+{
+    public Guid ApplicationId { get; init; }
+    public int ProtocolVersion { get; init; }
+    public string? DisplayName { get; init; }
+}
+```
+
+Discovery 专属配置：
+
+```csharp
+public sealed class DiscoveryOptions
+{
+    public int Port { get; init; } = 3344;
+    public TimeSpan AdvertiseInterval { get; init; } = TimeSpan.FromSeconds(1);
+    public TimeSpan RoomTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public int MaxPayloadSize { get; init; } = 1024;
+}
+```
+
+这些配置的使用规则：
+
+- `ApplicationId` 是项目级唯一 ID，创建项目时生成一次并保存。不同游戏即使都使用同一套框架，也不会互相显示房间或误连。
+- `ProtocolVersion` 用于 Discovery 过滤和 Session handshake。版本不兼容时，客户端应看到明确的 incompatible 结果，而不是认证失败。
+- Discovery 广播包内部自动携带 `ApplicationId` 和 `ProtocolVersion`，但业务调用 `StartAdvertiseAsync` 时不需要重复传入。
+- Session handshake 也必须校验 `ApplicationId` 和 `ProtocolVersion`，避免绕过 Discovery 直接输入 IP 时连到错误游戏或错误版本。
+- `DiscoveryOptions` 只负责 UDP 端口、广播间隔、房间过期时间和 payload 限制。
+
 ## Transport
 
 `INetTransport` 是最薄的底层接口，只认识连接、断开、peer、channel 和原始数据。
@@ -166,7 +220,7 @@ await net.HostAsync(new HostOptions
 await net.JoinAsync(new JoinOptions
 {
     Host = room.EndPoint.Address.ToString(),
-    Port = room.Port,
+    Port = room.Info.GamePort,
     AuthPayload = new JoinAuthPayload
     {
         PlayerName = "Alice",
@@ -492,10 +546,9 @@ Discovery 的基础数据结构只保留发现和连接真正必要的数据：
 ```csharp
 public sealed class LanAdvertiseInfo
 {
-    public string GameId { get; init; }
     public string RoomId { get; init; }
-    public int Port { get; init; }
-    public int ProtocolVersion { get; init; }
+    public int GamePort { get; init; }
+    public uint MetadataSchemaId { get; init; }
 }
 ```
 
@@ -519,10 +572,9 @@ public sealed class RoomListMetadata
 await net.Discovery.StartAdvertiseAsync(
     new LanAdvertiseInfo
     {
-        GameId = "my-game",
         RoomId = "room-001",
-        Port = 7777,
-        ProtocolVersion = 1
+        GamePort = 7777,
+        MetadataSchemaId = RoomListMetadata.SchemaId
     },
     new RoomListMetadata
     {
@@ -538,7 +590,8 @@ await net.Discovery.StartAdvertiseAsync(
 客户端扫描：
 
 ```csharp
-var rooms = await net.Discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromSeconds(2));
+var rooms = await net.Discovery.ScanAsync<RoomListMetadata>(
+    TimeSpan.FromSeconds(2));
 
 foreach (var room in rooms)
 {
@@ -552,7 +605,7 @@ foreach (var room in rooms)
 await net.JoinAsync(new JoinOptions
 {
     Host = room.EndPoint.Address.ToString(),
-    Port = room.Port,
+    Port = room.Info.GamePort,
     AuthPayload = new JoinAuthPayload
     {
         PlayerName = "Alice",
@@ -566,10 +619,47 @@ Discovery 只负责公开广播。metadata 可以包含 `HasPassword` 这类展�
 Metadata 规则：
 
 - Metadata 是公开数据，只用于展示和筛选。
-- Metadata 大小受 `MaxDiscoveryPayloadSize` 限制。
+- Metadata 大小受 `DiscoveryOptions.MaxPayloadSize` 限制。
 - Metadata 类型由业务定义，默认 codec 负责序列化。
-- 不同游戏通过 `GameId` 隔离；协议版本不匹配的房间可以过滤或标记不可加入。
+- 不同游戏通过 `NetApplicationInfo.ApplicationId` 隔离；协议版本不匹配的房间可以过滤或标记不可加入。
+- `MetadataSchemaId` 用于避免用错误 metadata 类型反序列化房间数据。
 - 认证、安全和加入裁决仍由 Session 的 `Authenticator` 处理。
+
+Discovery 提供两种客户端调用方式。
+
+短扫一次，适合刷新按钮和测试：
+
+```csharp
+var rooms = await net.Discovery.ScanAsync<RoomListMetadata>(
+    TimeSpan.FromSeconds(2));
+```
+
+持续浏览，适合大厅房间列表 UI：
+
+```csharp
+await using var browser = await net.Discovery.StartBrowserAsync<RoomListMetadata>(
+    new DiscoveryBrowserOptions
+    {
+        RefreshInterval = TimeSpan.FromSeconds(1),
+        RoomTimeout = TimeSpan.FromSeconds(5)
+    });
+
+browser.RoomFound += room => AddRoom(room);
+browser.RoomUpdated += room => UpdateRoom(room);
+browser.RoomLost += roomId => RemoveRoom(roomId);
+
+var rooms = browser.GetRooms();
+```
+
+服务端广告也是持续过程：
+
+```csharp
+await net.Discovery.StartAdvertiseAsync(info, metadata);
+await net.Discovery.UpdateAdvertiseMetadataAsync(updatedMetadata);
+await net.Discovery.StopAdvertiseAsync();
+```
+
+`StartBrowserAsync` 维护一个本地房间快照：收到新的 room id 触发 `RoomFound`，同一 room id 的 metadata 或 endpoint 更新触发 `RoomUpdated`，超过 `RoomTimeout` 未再收到广播触发 `RoomLost`。离开大厅页面时释放 browser 即停止监听。
 
 限制：
 
@@ -707,7 +797,9 @@ Discovery 和 Stats 测试：
 - 扫描结果包含基础连接信息和端点。
 - 扫描结果可以反序列化业务 metadata。
 - 密码房 metadata 可包含 `HasPassword`，但不包含真实密码。
-- 不同 `GameId` 不互相污染。
+- 不同 `ApplicationId` 不互相污染。
+- 协议版本不兼容的广播不会被当作可加入房间。
+- `StartBrowserAsync` 能触发 `RoomFound`、`RoomUpdated` 和 `RoomLost`。
 - 应用层 ping/pong 返回 RTT。
 - 应用层 ping/pong 超时会计入 `ProbeLoss`。
 - TCP transport 下 `TransportLoss` 为 `null`。
