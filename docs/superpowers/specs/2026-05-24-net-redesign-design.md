@@ -77,11 +77,11 @@ GameNet
 ```csharp
 var net = new GameNet(new TcpNetTransport(), new GameNetOptions
 {
+    DebugName = "Local Server",
     Application = new NetApplicationInfo
     {
         ApplicationId = Guid.Parse("2f2db4b5-4f54-47c1-b0e8-2f9e2fd7f741"),
-        ProtocolVersion = 1,
-        DisplayName = "My Game"
+        ProtocolVersion = 1
     },
     Discovery = new DiscoveryOptions
     {
@@ -100,7 +100,6 @@ public sealed class NetApplicationInfo
 {
     public required Guid ApplicationId { get; init; }
     public int ProtocolVersion { get; init; } = 1;
-    public string? DisplayName { get; init; }
 }
 ```
 
@@ -123,6 +122,7 @@ public sealed class DiscoveryOptions
 - `ApplicationId` 没有默认值，必须显式配置，且不能是 `Guid.Empty`。框架可以提供生成工具，但不能在运行时自动给所有项目同一个默认值。
 - `ProtocolVersion` 默认值为 `1`。
 - `ProtocolVersion` 用于 Discovery 过滤和 Session handshake。版本不兼容时，客户端应看到明确的 incompatible 结果，而不是认证失败。
+- `DebugName` 是可选的本地实例调试名，只用于日志、调试面板和测试区分，不参与协议兼容、Discovery 过滤或房间展示。房间展示名应放在 Discovery metadata 中。
 - Discovery 广播包内部自动携带 `ApplicationId` 和 `ProtocolVersion`，但业务调用 `StartAdvertiseAsync` 时不需要重复传入。
 - Session handshake 也必须校验 `ApplicationId` 和 `ProtocolVersion`，避免绕过 Discovery 直接输入 IP 时连到错误游戏或错误版本。
 - `DiscoveryOptions` 只负责 UDP 端口、广播间隔、房间过期时间和 payload 限制。
