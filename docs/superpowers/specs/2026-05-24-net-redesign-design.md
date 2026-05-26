@@ -98,8 +98,8 @@ var net = new GameNet(new TcpNetTransport(), new GameNetOptions
 ```csharp
 public sealed class NetApplicationInfo
 {
-    public Guid ApplicationId { get; init; }
-    public int ProtocolVersion { get; init; }
+    public required Guid ApplicationId { get; init; }
+    public int ProtocolVersion { get; init; } = 1;
     public string? DisplayName { get; init; }
 }
 ```
@@ -113,16 +113,62 @@ public sealed class DiscoveryOptions
     public TimeSpan AdvertiseInterval { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan RoomTimeout { get; init; } = TimeSpan.FromSeconds(5);
     public int MaxPayloadSize { get; init; } = 1024;
+    public TimeSpan DefaultScanTimeout { get; init; } = TimeSpan.FromSeconds(2);
 }
 ```
 
 这些配置的使用规则：
 
 - `ApplicationId` 是项目级唯一 ID，创建项目时生成一次并保存。不同游戏即使都使用同一套框架，也不会互相显示房间或误连。
+- `ApplicationId` 没有默认值，必须显式配置，且不能是 `Guid.Empty`。框架可以提供生成工具，但不能在运行时自动给所有项目同一个默认值。
+- `ProtocolVersion` 默认值为 `1`。
 - `ProtocolVersion` 用于 Discovery 过滤和 Session handshake。版本不兼容时，客户端应看到明确的 incompatible 结果，而不是认证失败。
 - Discovery 广播包内部自动携带 `ApplicationId` 和 `ProtocolVersion`，但业务调用 `StartAdvertiseAsync` 时不需要重复传入。
 - Session handshake 也必须校验 `ApplicationId` 和 `ProtocolVersion`，避免绕过 Discovery 直接输入 IP 时连到错误游戏或错误版本。
 - `DiscoveryOptions` 只负责 UDP 端口、广播间隔、房间过期时间和 payload 限制。
+- `DiscoveryOptions` 有保守默认值，常规项目只需要配置 `ApplicationId`。
+
+Options 启动校验：
+
+```text
+Application.ApplicationId != Guid.Empty
+Application.ProtocolVersion >= 1
+Discovery.Port is 1..65535
+Discovery.AdvertiseInterval > TimeSpan.Zero
+Discovery.RoomTimeout > Discovery.AdvertiseInterval
+Discovery.MaxPayloadSize > 0
+Discovery.DefaultScanTimeout > TimeSpan.Zero
+```
+
+常规最小配置：
+
+```csharp
+var net = new GameNet(new TcpNetTransport(), new GameNetOptions
+{
+    Application = new NetApplicationInfo
+    {
+        ApplicationId = GameIds.MyGame
+    }
+});
+```
+
+只有需要调整广播端口或频率时才覆盖 Discovery：
+
+```csharp
+var net = new GameNet(new TcpNetTransport(), new GameNetOptions
+{
+    Application = new NetApplicationInfo
+    {
+        ApplicationId = GameIds.MyGame
+    },
+    Discovery = new DiscoveryOptions
+    {
+        Port = 45000,
+        AdvertiseInterval = TimeSpan.FromMilliseconds(500),
+        RoomTimeout = TimeSpan.FromSeconds(3)
+    }
+});
+```
 
 ## Transport
 
