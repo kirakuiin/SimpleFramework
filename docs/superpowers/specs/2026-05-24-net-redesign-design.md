@@ -89,7 +89,8 @@ var net = new GameNet(new TcpNetTransport(), new GameNetOptions
         AdvertiseInterval = TimeSpan.FromSeconds(1),
         RoomTimeout = TimeSpan.FromSeconds(5),
         MaxPayloadSize = 1024
-    }
+    },
+    EventDispatcher = null
 });
 ```
 
@@ -127,6 +128,7 @@ public sealed class DiscoveryOptions
 - Session handshake 也必须校验 `ApplicationId` 和 `ProtocolVersion`，避免绕过 Discovery 直接输入 IP 时连到错误游戏或错误版本。
 - `DiscoveryOptions` 只负责 UDP 端口、广播间隔、房间过期时间和 payload 限制。
 - `DiscoveryOptions` 有保守默认值，常规项目只需要配置 `ApplicationId`。
+- `EventDispatcher` 默认为 `null`，表示事件在网络后台任务上下文中直接触发。需要 UI 或游戏主线程派发时，由业务提供 dispatcher。
 
 Options 启动校验：
 
@@ -169,6 +171,36 @@ var net = new GameNet(new TcpNetTransport(), new GameNetOptions
     }
 });
 ```
+
+## Event Dispatching
+
+Net Core 默认不承诺事件回到主线程。`Discovery`、`Session`、`Messenger`、`NetFlow`、`Stats` 的事件可能在网络后台任务上下文触发。
+
+如果业务需要把事件投递到 UI 线程或游戏主线程，可以配置可选 dispatcher：
+
+```csharp
+public interface INetEventDispatcher
+{
+    void Post(Action action);
+}
+```
+
+配置 dispatcher 后，框架事件通过 dispatcher 触发：
+
+```text
+RoomFound / RoomUpdated / RoomLost
+Session.StateChanged
+Session.PeerJoined / PeerLeft / PeerReconnected
+Messenger.MessageError
+Stats.Updated
+```
+
+规则：
+
+- 核心库不依赖 Godot、Unity、WPF、WinForms 等具体线程模型。
+- 未配置 dispatcher 时，事件直接在当前网络任务上下文触发。
+- 配置 dispatcher 时，事件必须通过 `Post` 投递，避免调用者手动跨线程处理。
+- 发送 API、请求 API 和 Flow API 不依赖 dispatcher；dispatcher 只影响事件回调。
 
 ## Transport
 
@@ -243,7 +275,45 @@ Stopping
 
 `PeerId` 是会话内稳定玩家 ID；底层 socket 或 transport connection ID 只是当前物理连接，不能作为业务身份。
 
+公开 API 使用轻量强类型 peer 标识：
+
+```csharp
+public readonly record struct PeerId(ulong Value)
+{
+    public static readonly PeerId None = new(0);
+    public static readonly PeerId Server = new(1);
+}
+```
+
+`PeerId` 本质是数字 ID，但不能用裸 `long` / `ulong` 暴露给业务层，避免和 `RoomId`、`ConnectionId`、用户账号 ID 混用。`0` 保留为 `None` / invalid。`PeerId.Server = 1` 作为服务端稳定身份；普通客户端 peer id 从服务端分配。
+
 认证 payload 由业务定义，Session 只负责传输和调用服务端 `Authenticator`。这可以覆盖密码房、版本校验、玩家名重复、黑名单、mod 列表不一致等场景。Join 失败必须返回明确原因，而不是只给通用连接失败。
+
+服务端认证返回 `AuthResult`，客户端连接返回结构化 `JoinResult`。核心 API 优先提供 `TryJoinAsync`，`JoinAsync` 可以作为失败时抛异常的便捷包装：
+
+```csharp
+JoinResult result = await net.TryJoinAsync(options);
+
+await net.JoinAsync(options);
+```
+
+Join 失败必须给出明确原因。错误码至少覆盖：
+
+```text
+Timeout
+TransportFailed
+IncompatibleApplication
+IncompatibleProtocol
+ServerFull
+AuthenticationRejected
+WrongPassword
+Kicked
+ServerClosed
+Cancelled
+UnknownError
+```
+
+`WrongPassword` 可以作为常用内置认证拒绝原因，但业务也可以使用自定义 reject code 或 message。
 
 密码房示例：
 
@@ -399,6 +469,8 @@ net.Handlers.RegisterAssembly(typeof(RoomHandlers).Assembly);
 
 Attribute 绑定不是严格的编译期绑定；第一版通过启动时反射扫描实现。后续如果需要更强的构建期校验，可以增加 source generator 生成注册代码。运行时 `net.On<T>` 和 attribute handler 共用同一套 handler registry。
 
+Attribute 扫描注册必须使用稳定顺序，例如按类型全名再按方法名排序。`[NetHandler]` 和 `net.On<T>` 共用同一 registry；谁先注册谁先执行。
+
 Handler 不直接绑定发送端，而是绑定消息类型。发送者身份由 `NetContext` 提供：
 
 ```text
@@ -415,7 +487,7 @@ PlayerReady packet
   void Handle(NetContext ctx, TMessage msg)
   Task Handle(NetContext ctx, TMessage msg)
   ValueTask Handle(NetContext ctx, TMessage msg)
-  同一消息类型允许多个 handler，按注册顺序执行。
+  同一消息类型允许多个 handler，按注册顺序串行执行。
 
 [NetRequestHandler]
   TResponse Handle(NetContext ctx, TRequest req)
@@ -431,6 +503,20 @@ PlayerReady packet
 ```
 
 第一版不支持复杂签名变体，例如直接注入 `GameNet`、`IServiceProvider` 或任意服务参数。网络 handler 默认都要求带 `NetContext`，保证 handler 能明确访问 sender、channel 和当前 session 角色。
+
+Handler 异常规则：
+
+```text
+普通 Message handler 抛异常：
+  记录日志并触发错误事件。
+  不阻止同一消息的后续 handler 执行。
+
+Request handler 抛异常：
+  自动返回 RequestError.HandlerException。
+
+Flow handler 抛异常：
+  自动返回 FlowError.HandlerException，服务端按失败响应交给 policy 聚合。
+```
 
 无 handler 行为：
 
@@ -472,7 +558,24 @@ PayloadLength  变长 int 或 int32
 Payload        byte[]
 ```
 
-开发者维护字符串 key，网络上传输数字 `MessageId`。第一版使用启动时稳定 hash 生成 `uint`，并做冲突检查。未来如果需要跨版本强兼容，可增加 `net-messages.json` manifest 固定 key 到 id 的映射。
+开发者维护字符串 key，网络上传输数字 `MessageId`。`MessageId` 由 `[NetMessage("domain.name")]` 的稳定字符串 key 生成 `uint`。不使用 C# 类型全名作为唯一来源，避免重命名、移动命名空间或拆程序集破坏协议兼容。
+
+Message id 规则：
+
+```text
+[NetMessage("room.player_ready")]
+  -> stable hash uint
+  -> packet MessageId
+```
+
+启动时必须检测：
+
+- 重复 message key。
+- 同一 message type 注册到多个 key。
+- 不同 key 生成相同 id。
+- request/response/flow 使用了未注册消息类型。
+
+冲突直接启动失败。未来如果需要强版本兼容，可增加 `net-messages.json` manifest 固定 key 到 id 的映射。
 
 默认 codec 使用 `System.Text.Json`，因为它是标准库、易调试、依赖少。保留替换接口：
 
@@ -603,6 +706,9 @@ public sealed class LanAdvertiseInfo
 ```csharp
 public sealed class RoomListMetadata
 {
+    public const string SchemaKey = "room.list.v1";
+    public static readonly uint SchemaId = DiscoverySchema.Hash(SchemaKey);
+
     public string RoomName { get; init; }
     public int CurrentPlayers { get; init; }
     public int MaxPlayers { get; init; }
@@ -668,7 +774,9 @@ Metadata 规则：
 - Metadata 大小受 `DiscoveryOptions.MaxPayloadSize` 限制。
 - Metadata 类型由业务定义，默认 codec 负责序列化。
 - 不同游戏通过 `NetApplicationInfo.ApplicationId` 隔离；协议版本不匹配的房间可以过滤或标记不可加入。
-- `MetadataSchemaId` 用于避免用错误 metadata 类型反序列化房间数据。
+- `MetadataSchemaId` 由 metadata 的稳定 schema key 生成 `uint`，例如 `[DiscoveryMetadata("room.list.v1")]` 或类型上的等价常量。它用于避免用错误 metadata 类型反序列化房间数据。
+- 不使用 C# metadata 类型全名作为 schema 唯一来源，避免重命名破坏兼容。
+- 启动或扫描注册时必须检测 schema key/id 冲突，冲突直接失败。
 - 认证、安全和加入裁决仍由 Session 的 `Authenticator` 处理。
 
 Discovery 提供两种客户端调用方式。
@@ -797,13 +905,16 @@ Session 测试：
 - Host 启动成功。
 - `HostAsync` 创建本地玩家 peer。
 - `StartServerAsync` 不创建本地玩家 peer。
+- 公开 peer 标识使用 `PeerId`，`PeerId.None` 和 `PeerId.Server` 语义正确。
 - Client Join 成功。
+- `TryJoinAsync` 返回结构化 `JoinResult`。
 - 多 Client 加入。
 - `PeerJoined` / `PeerLeft` 事件正确。
 - `MaxPeers` 限制。
 - 认证成功和失败。
 - 密码房通过 `AuthPayload` 认证成功。
 - 密码错误时 Join 返回明确 `WrongPassword` 拒绝原因。
+- 应用不兼容和协议不兼容返回明确错误码。
 - Kick 后客户端收到断开原因。
 - Client 主动离开。
 - Host 关闭后客户端断开。
@@ -813,10 +924,16 @@ Messenger 测试：
 - 自动扫描 `[NetMessage]`。
 - 自动扫描 `[NetHandler]` / `[NetRequestHandler]` / `[NetFlowHandler]`。
 - 重复 key 报错。
+- 不同 key 生成相同 message id 时启动失败。
+- 类型重命名不影响显式 message key 生成的 id。
 - 普通消息允许多个 handler 且按注册顺序执行。
+- Attribute handler 扫描顺序稳定。
+- 普通消息 handler 异常不阻止后续 handler。
 - request/flow 重复 handler 注册报错。
 - request 无 handler 返回 `NoHandler` 错误。
+- request handler 异常返回 `HandlerException` 错误。
 - flow proposal 无 handler 返回 `NoHandler` 错误。
+- flow handler 异常返回 `HandlerException` 错误。
 - 普通 `SendToServer`。
 - 服务端 `Send(peer)`。
 - 服务端 `Broadcast`。
@@ -842,6 +959,8 @@ Discovery 和 Stats 测试：
 - UDP 广播房间可被扫描到。
 - 扫描结果包含基础连接信息和端点。
 - 扫描结果可以反序列化业务 metadata。
+- `MetadataSchemaId` 由稳定 schema key 生成。
+- metadata schema key/id 冲突启动失败。
 - 密码房 metadata 可包含 `HasPassword`，但不包含真实密码。
 - 不同 `ApplicationId` 不互相污染。
 - 协议版本不兼容的广播不会被当作可加入房间。
@@ -850,6 +969,12 @@ Discovery 和 Stats 测试：
 - 应用层 ping/pong 超时会计入 `ProbeLoss`。
 - TCP transport 下 `TransportLoss` 为 `null`。
 - 超时 peer 返回失败结果。
+
+Event dispatcher 测试：
+
+- 未配置 dispatcher 时事件可在网络任务上下文触发。
+- 配置 dispatcher 后 `RoomFound`、`RoomUpdated`、`RoomLost` 通过 dispatcher 投递。
+- Session 和 Messenger 错误事件通过 dispatcher 投递。
 
 TCP loopback 测试：
 
