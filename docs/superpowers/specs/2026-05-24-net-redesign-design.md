@@ -237,6 +237,7 @@ await net.HostAsync(new HostOptions
 {
     Port = 7777,
     MaxPeers = 8,
+    ReconnectGrace = TimeSpan.FromSeconds(30),
     Authenticator = async ctx => AuthResult.Accept()
 });
 
@@ -249,6 +250,126 @@ await net.JoinAsync(new JoinOptions
     Reconnect = ReconnectPolicy.FixedRetry(3)
 });
 ```
+
+重连配置：
+
+```csharp
+public sealed class JoinOptions
+{
+    public string Host { get; init; }
+    public int Port { get; init; }
+    public object? AuthPayload { get; init; }
+    public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    // 默认不自动重连，业务必须显式开启。
+    public ReconnectPolicy Reconnect { get; init; } = ReconnectPolicy.None;
+}
+
+public sealed class HostOptions
+{
+    public int Port { get; init; }
+    public int MaxPeers { get; init; } = 8;
+    public TimeSpan ReconnectGrace { get; init; } = TimeSpan.FromSeconds(30);
+    public Func<AuthContext, Task<AuthResult>>? Authenticator { get; init; }
+}
+
+public sealed class ReconnectPolicy
+{
+    public static ReconnectPolicy None { get; }
+    public static ReconnectPolicy FixedRetry(int attempts, TimeSpan interval);
+    public static ReconnectPolicy ExponentialBackoff(
+        int attempts,
+        TimeSpan initialDelay,
+        TimeSpan maxDelay);
+}
+```
+
+重连规则：
+
+- 客户端自动重连默认关闭，需要通过 `JoinOptions.Reconnect` 显式开启。
+- Join 成功后，服务端返回 `PeerId` 和 `ReconnectToken`。
+- 客户端异常断开且断开原因可重连时，Session 进入 `Reconnecting`。
+- 客户端使用 `ReconnectToken` 自动尝试恢复连接。
+- 服务端在 `HostOptions.ReconnectGrace` 内保留断线 peer 的 `PeerId`。
+- 重连成功后恢复原 `PeerId`，客户端触发 `Reconnected`，服务端触发 `PeerReconnected(peerId)`。
+- 重连失败后触发 `Disconnected(ReconnectFailed)`。
+
+不自动重连的原因：
+
+```text
+UserClosed
+Kicked
+AuthenticationRejected
+WrongPassword
+IncompatibleApplication
+IncompatibleProtocol
+ServerClosed
+Cancelled
+```
+
+重连不负责完整玩法状态恢复：
+
+- 普通 `RequestAsync` 不恢复。
+- 普通消息不重放。
+- `NetFlow` pending proposal 不自动重发。
+- 玩法状态同步由业务在 `Reconnected` / `PeerReconnected` 后处理。
+
+Session 事件是低频控制面事件，只用于连接状态、peer 生命周期、重连和服务器生命周期，不用于高频 gameplay 数据。高频业务消息走 `Messenger`，未来实时同步走 Realtime 扩展。
+
+事件分为三类。
+
+本地连接状态事件：
+
+```csharp
+net.Session.StateChanged += e => { };
+net.Session.JoinSucceeded += e => { };
+net.Session.JoinFailed += e => { };
+net.Session.Disconnected += e => { };
+net.Session.Reconnecting += e => { };
+net.Session.Reconnected += e => { };
+net.Session.ReconnectFailed += e => { };
+```
+
+Peer 生命周期事件：
+
+```csharp
+net.Session.PeerJoined += e => { };
+net.Session.PeerDisconnected += e => { };
+net.Session.PeerReconnected += e => { };
+net.Session.PeerLeft += e => { };
+```
+
+`PeerDisconnected` 表示 peer 暂时断线并进入 `ReconnectGrace`，仍可能回来。`PeerLeft` 表示 peer 已确认离开、被踢、超出 grace 或服务器决定移除，已经不再是有效 participant。
+
+Host / server 生命周期事件：
+
+```csharp
+net.Session.HostStarted += e => { };
+net.Session.HostFailed += e => { };
+net.Session.ServerStarted += e => { };
+net.Session.ServerStopped += e => { };
+```
+
+事件 payload 必须结构化且保持轻量：
+
+```csharp
+public readonly record struct SessionStateChangedEvent(
+    SessionState OldState,
+    SessionState NewState,
+    DisconnectReason? Reason);
+
+public readonly record struct PeerSessionEvent(
+    PeerId PeerId,
+    PeerStatus Status,
+    DisconnectReason? Reason);
+
+public readonly record struct ReconnectAttemptEvent(
+    int Attempt,
+    int MaxAttempts,
+    TimeSpan NextDelay);
+```
+
+实现上可以内部统一走 `SessionEvent` 分发，再暴露强类型便利事件。配置 `INetEventDispatcher` 后，这些事件必须通过 dispatcher 投递。
 
 Session 职责：
 
@@ -915,9 +1036,17 @@ Session 测试：
 - 密码房通过 `AuthPayload` 认证成功。
 - 密码错误时 Join 返回明确 `WrongPassword` 拒绝原因。
 - 应用不兼容和协议不兼容返回明确错误码。
+- `JoinOptions.Reconnect` 默认不自动重连。
+- 可重连断线进入 `Reconnecting` 并按策略重试。
+- 重连成功恢复原 `PeerId`。
+- 超过 `ReconnectGrace` 后原 `PeerId` 被释放。
+- 不可重连原因不会触发自动重连。
 - Kick 后客户端收到断开原因。
 - Client 主动离开。
 - Host 关闭后客户端断开。
+- `StateChanged`、`Disconnected`、`Reconnecting`、`Reconnected`、`ReconnectFailed` 事件正确触发。
+- `PeerDisconnected` 和 `PeerLeft` 能区分 grace window 内暂时断线与最终移除。
+- Host/server 生命周期事件正确触发。
 
 Messenger 测试：
 
