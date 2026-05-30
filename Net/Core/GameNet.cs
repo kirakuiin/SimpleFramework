@@ -47,7 +47,7 @@ public sealed class GameNet : IAsyncDisposable
             _options.TimeProvider,
             _options.EventDispatcher);
         Stats = new NetStats(Messages, _options.TimeProvider);
-        Flow = new NetFlow(Messages, () => Session.Role);
+        Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role);
     }
 
     /// <summary>
@@ -77,7 +77,7 @@ public sealed class GameNet : IAsyncDisposable
             _options.TimeProvider,
             _options.EventDispatcher);
         Stats = new NetStats(Messages, _options.TimeProvider);
-        Flow = new NetFlow(Messages, () => Session.Role);
+        Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role);
         _transport.PacketReceived += OnTransportPacketReceived;
         _transport.PeerDisconnected += OnTransportPeerDisconnected;
     }
@@ -383,6 +383,7 @@ public sealed class GameNet : IAsyncDisposable
             if (IsDisposed)
                 return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
+            Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Session stopped.");
             if (_transport is not null && _state == NetLifecycleState.Client)
             {
@@ -434,6 +435,7 @@ public sealed class GameNet : IAsyncDisposable
         {
             _state = NetLifecycleState.Stopped;
             SetSessionRole(NetSessionRole.None);
+            Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "GameNet was disposed.");
             ClearReconnectState();
         }

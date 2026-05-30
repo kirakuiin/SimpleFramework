@@ -70,11 +70,11 @@
 
 - [x] 9.1 Add `NetFlow`, proposal/vote/barrier packet models, proposal handler registration, `FlowPolicy`, `FlowResult<TResponse>`, per-peer responses, and `FlowEndReason`.
 - [x] 9.2 Implement server-only flow initiation and reject client-initiated multiplayer flow attempts.
-- [ ] 9.3 Implement all accepted, any accepted, majority accepted, quorum, custom policy, rejected, timeout, cancelled, no-targets, and session-closed outcomes.
-- [ ] 9.4 Track pending flows by stable `PeerId`, expose pending peer queries, and implement manual `ResendPendingTo(peer)`.
-- [ ] 9.5 Keep flow pending when a peer disconnects until policy, timeout, or manual server action completes it, and ignore late responses after completion.
+- [x] 9.3 Implement all accepted, any accepted, majority accepted, quorum, custom policy, rejected, timeout, cancelled, no-targets, and session-closed outcomes.
+- [x] 9.4 Track pending flows by stable `PeerId`, expose pending peer queries, and implement manual `ResendPendingTo(peer)`.
+- [x] 9.5 Keep flow pending when a peer disconnects until policy, timeout, or manual server action completes it, and ignore late responses after completion.
 - [ ] 9.6 Ensure V1.3 does not add client-side pending recovery, flow persistence, server restart recovery, nested flows, client-initiated flows, or automatic replay after reconnect.
-- [ ] 9.7 Add flow tests for all accepted, any accepted, majority, quorum, no targets, rejection, timeout, disconnect while pending, pending query, manual resend, late response ignored, and client initiation rejection.
+- [x] 9.7 Add flow tests for all accepted, any accepted, majority, quorum, no targets, rejection, timeout, disconnect while pending, pending query, manual resend, late response ignored, and client initiation rejection.
 
 ## 10. Event Dispatching And Error Containment
 

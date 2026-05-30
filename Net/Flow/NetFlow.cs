@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 
 namespace SimpleFramework.Net;
@@ -80,6 +81,11 @@ public sealed record FlowPeerResponse<TResponse>(PeerId PeerId, TResponse? Respo
 public sealed class FlowResult<TResponse>
 {
     /// <summary>
+    /// 本次流程的稳定标识；未真正启动的流程为 0。
+    /// </summary>
+    public long FlowId { get; init; }
+
+    /// <summary>
     /// 流程结束原因。
     /// </summary>
     public required FlowEndReason Reason { get; init; }
@@ -101,12 +107,43 @@ public sealed class FlowResult<TResponse>
 public sealed class NetFlow
 {
     private readonly NetMessenger _messenger;
+    private readonly NetDiagnostics _diagnostics;
     private readonly Func<NetSessionRole> _getRole;
+    private readonly TimeProvider _timeProvider;
+    private readonly ConcurrentDictionary<long, IPendingFlow> _pendingFlows = new();
+    private long _nextFlowId;
 
-    internal NetFlow(NetMessenger messenger, Func<NetSessionRole> getRole)
+    internal NetFlow(NetMessenger messenger, NetDiagnostics diagnostics, TimeProvider timeProvider, Func<NetSessionRole> getRole)
     {
         _messenger = messenger;
+        _diagnostics = diagnostics;
+        _timeProvider = timeProvider;
         _getRole = getRole;
+    }
+
+    /// <summary>
+    /// 当前仍在等待响应的流程标识快照。
+    /// </summary>
+    public IReadOnlyList<long> PendingFlowIds => _pendingFlows.Keys.OrderBy(id => id).ToArray();
+
+    /// <summary>
+    /// 查询指定流程中尚未响应的目标对等体。
+    /// </summary>
+    public IReadOnlyList<PeerId> GetPendingPeers(long flowId)
+    {
+        return _pendingFlows.TryGetValue(flowId, out var flow)
+            ? flow.GetPendingPeers()
+            : Array.Empty<PeerId>();
+    }
+
+    /// <summary>
+    /// 将指定流程的提案手动重发给仍处于 pending 状态的目标对等体。
+    /// </summary>
+    public Task<NetSendResult> ResendPendingToAsync(long flowId, PeerId peerId)
+    {
+        return _pendingFlows.TryGetValue(flowId, out var flow)
+            ? flow.ResendPendingToAsync(peerId)
+            : Task.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable, "Flow is not pending."));
     }
 
     /// <summary>
@@ -140,37 +177,19 @@ public sealed class NetFlow
         if (token.IsCancellationRequested)
             return End<TResponse>(FlowEndReason.Cancelled);
 
-        var tasks = targetList
-            .Select(peer => RequestPeerAsync<TProposal, TResponse>(peer, proposal, timeout, token))
-            .ToArray();
+        var flowId = Interlocked.Increment(ref _nextFlowId);
+        var flow = new PendingFlow<TProposal, TResponse>(this, flowId, targetList, proposal, policy, timeout, token);
+        _pendingFlows[flowId] = flow;
+        _diagnostics.SetPendingFlowCount(_pendingFlows.Count);
 
-        FlowPeerResponse<TResponse>[] responses;
-        try
-        {
-            responses = await Task.WhenAll(tasks).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            return End<TResponse>(FlowEndReason.Cancelled);
-        }
+        flow.Start();
+        return await flow.Completion.Task.ConfigureAwait(false);
+    }
 
-        if (responses.Any(response => response.Message == NetRequestStatus.SessionClosed.ToString()))
-            return End(FlowEndReason.SessionClosed, responses);
-        if (responses.Any(response => response.Message == NetRequestStatus.Timeout.ToString()))
-            return End(FlowEndReason.Timeout, responses);
-
-        var acceptedCount = responses.Count(response => response.Accepted);
-        var accepted = policy.Mode switch
-        {
-            "all" => acceptedCount == targetList.Length,
-            "any" => acceptedCount > 0,
-            "majority" => acceptedCount > targetList.Length / 2,
-            "quorum" => acceptedCount >= policy.Count,
-            "custom" => policy.CustomEvaluator?.Invoke(acceptedCount, targetList.Length) == true,
-            _ => false
-        };
-
-        return End(accepted ? FlowEndReason.Accepted : FlowEndReason.Rejected, responses);
+    internal void CancelPendingFlows(FlowEndReason reason)
+    {
+        foreach (var flow in _pendingFlows.Values.ToArray())
+            flow.Complete(reason);
     }
 
     private async Task<FlowPeerResponse<TResponse>> RequestPeerAsync<TProposal, TResponse>(
@@ -187,6 +206,25 @@ public sealed class NetFlow
         return new FlowPeerResponse<TResponse>(peerId, result.Response, accepted, null);
     }
 
+    private void RemovePendingFlow(long flowId)
+    {
+        _pendingFlows.TryRemove(flowId, out _);
+        _diagnostics.SetPendingFlowCount(_pendingFlows.Count);
+    }
+
+    private static bool EvaluatePolicy(FlowPolicy policy, int acceptedCount, int targetCount)
+    {
+        return policy.Mode switch
+        {
+            "all" => acceptedCount == targetCount,
+            "any" => acceptedCount > 0,
+            "majority" => acceptedCount > targetCount / 2,
+            "quorum" => acceptedCount >= policy.Count,
+            "custom" => policy.CustomEvaluator?.Invoke(acceptedCount, targetCount) == true,
+            _ => false
+        };
+    }
+
     private static bool IsAccepted<TResponse>(TResponse? response)
     {
         if (response is null)
@@ -200,6 +238,7 @@ public sealed class NetFlow
     {
         return new FlowResult<TResponse>
         {
+            FlowId = 0,
             Reason = reason,
             Responses = Array.Empty<FlowPeerResponse<TResponse>>()
         };
@@ -209,8 +248,167 @@ public sealed class NetFlow
     {
         return new FlowResult<TResponse>
         {
+            FlowId = 0,
             Reason = reason,
             Responses = responses
         };
+    }
+
+    private interface IPendingFlow
+    {
+        IReadOnlyList<PeerId> GetPendingPeers();
+        Task<NetSendResult> ResendPendingToAsync(PeerId peerId);
+        void Complete(FlowEndReason reason);
+    }
+
+    private sealed class PendingFlow<TProposal, TResponse> : IPendingFlow
+    {
+        private readonly NetFlow _owner;
+        private readonly Dictionary<PeerId, FlowPeerResponse<TResponse>> _responses = new();
+        private readonly HashSet<PeerId> _pendingPeers;
+        private readonly TProposal _proposal;
+        private readonly FlowPolicy _policy;
+        private readonly TimeSpan _timeout;
+        private readonly CancellationToken _token;
+        private readonly object _gate = new();
+        private bool _completed;
+
+        public PendingFlow(
+            NetFlow owner,
+            long flowId,
+            IReadOnlyCollection<PeerId> targets,
+            TProposal proposal,
+            FlowPolicy policy,
+            TimeSpan timeout,
+            CancellationToken token)
+        {
+            _owner = owner;
+            FlowId = flowId;
+            _pendingPeers = targets.ToHashSet();
+            TargetCount = _pendingPeers.Count;
+            _proposal = proposal;
+            _policy = policy;
+            _timeout = timeout;
+            _token = token;
+        }
+
+        public long FlowId { get; }
+        public int TargetCount { get; }
+        public TaskCompletionSource<FlowResult<TResponse>> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<PeerId> GetPendingPeers()
+        {
+            lock (_gate)
+                return _completed ? Array.Empty<PeerId>() : _pendingPeers.OrderBy(peer => peer.Value).ToArray();
+        }
+
+        public Task<NetSendResult> ResendPendingToAsync(PeerId peerId)
+        {
+            lock (_gate)
+            {
+                if (_completed)
+                    return Task.FromResult(new NetSendResult(NetSendStatus.SessionClosed, "Flow is already completed."));
+                if (!_pendingPeers.Contains(peerId))
+                    return Task.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable, "Peer is not pending in this flow."));
+            }
+
+            LaunchRequest(peerId);
+            return Task.FromResult(NetSendResult.Ok());
+        }
+
+        public void Start()
+        {
+            foreach (var peerId in _pendingPeers.ToArray())
+                LaunchRequest(peerId);
+
+            _ = CompleteAfterTimeoutAsync();
+        }
+
+        public void Complete(FlowEndReason reason)
+        {
+            FlowResult<TResponse>? result = null;
+            lock (_gate)
+            {
+                if (_completed)
+                    return;
+
+                _completed = true;
+                _pendingPeers.Clear();
+                result = new FlowResult<TResponse>
+                {
+                    FlowId = FlowId,
+                    Reason = reason,
+                    Responses = _responses.Values.OrderBy(response => response.PeerId.Value).ToArray()
+                };
+            }
+
+            _owner.RemovePendingFlow(FlowId);
+            Completion.TrySetResult(result);
+        }
+
+        private void LaunchRequest(PeerId peerId)
+        {
+            _ = AwaitPeerAsync(peerId);
+        }
+
+        private async Task AwaitPeerAsync(PeerId peerId)
+        {
+            var response = await _owner.RequestPeerAsync<TProposal, TResponse>(peerId, _proposal, _timeout, _token).ConfigureAwait(false);
+            ApplyResponse(response);
+        }
+
+        private void ApplyResponse(FlowPeerResponse<TResponse> response)
+        {
+            lock (_gate)
+            {
+                if (_completed || !_pendingPeers.Contains(response.PeerId))
+                    return;
+
+                if (response.Message == NetRequestStatus.SessionClosed.ToString() ||
+                    response.Message == NetRequestStatus.TransportFailed.ToString())
+                {
+                    return;
+                }
+
+                if (response.Message == NetRequestStatus.Timeout.ToString())
+                {
+                    Complete(FlowEndReason.Timeout);
+                    return;
+                }
+
+                _pendingPeers.Remove(response.PeerId);
+                _responses[response.PeerId] = response;
+
+                var acceptedCount = _responses.Values.Count(peerResponse => peerResponse.Accepted);
+                if (_policy.Mode == "all" && !response.Accepted)
+                {
+                    Complete(FlowEndReason.Rejected);
+                    return;
+                }
+
+                if (EvaluatePolicy(_policy, acceptedCount, TargetCount))
+                {
+                    Complete(FlowEndReason.Accepted);
+                    return;
+                }
+
+                if (_pendingPeers.Count == 0)
+                    Complete(FlowEndReason.Rejected);
+            }
+        }
+
+        private async Task CompleteAfterTimeoutAsync()
+        {
+            try
+            {
+                await Task.Delay(_timeout, _owner._timeProvider, _token).ConfigureAwait(false);
+                Complete(FlowEndReason.Timeout);
+            }
+            catch (OperationCanceledException) when (_token.IsCancellationRequested)
+            {
+                Complete(FlowEndReason.Cancelled);
+            }
+        }
     }
 }
