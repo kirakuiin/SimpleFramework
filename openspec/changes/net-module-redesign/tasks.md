@@ -51,12 +51,12 @@
 
 ## 7. Discovery And Metadata
 
-- [ ] 7.1 Add `DiscoveryOptions`, discovery packet envelope, `LanAdvertiseInfo`, metadata schema registry, schema key/hash helpers, scan result models, and browser snapshot models.
-- [ ] 7.2 Implement continuous advertise start, metadata update, stop, invalid update-before-start result, oversized packet discard, and diagnostics for dropped discovery packets.
-- [ ] 7.3 Implement one-shot `ScanAsync<TMetadata>` and continuous `StartBrowserAsync<TMetadata>` with room found, updated, lost events and room timeout through the configured time source.
-- [ ] 7.4 Filter or mark rooms by `ApplicationId` and `ProtocolVersion`, keep incompatible rooms non-joinable, and keep discovery metadata separate from authentication.
-- [ ] 7.5 Ensure metadata is public data only, supports `HasPassword` indicators, rejects schema collisions, and never carries real passwords, tokens, or private room keys.
-- [ ] 7.6 Add discovery tests for application filtering, protocol incompatibility, metadata serialization, schema collision, oversized packet discard, advertise lifecycle, scan result content, browser found/updated/lost events, password metadata rules, and manual IP join fallback.
+- [x] 7.1 Add `DiscoveryOptions`, discovery packet envelope, `LanAdvertiseInfo`, metadata schema registry, schema key/hash helpers, scan result models, and browser snapshot models.
+- [x] 7.2 Implement continuous advertise start, metadata update, stop, invalid update-before-start result, oversized packet discard, and diagnostics for dropped discovery packets.
+- [x] 7.3 Implement one-shot `ScanAsync<TMetadata>` and continuous `StartBrowserAsync<TMetadata>` with room found, updated, lost events and room timeout through the configured time source.
+- [x] 7.4 Filter or mark rooms by `ApplicationId` and `ProtocolVersion`, keep incompatible rooms non-joinable, and keep discovery metadata separate from authentication.
+- [x] 7.5 Ensure metadata is public data only, supports `HasPassword` indicators, rejects schema collisions, and never carries real passwords, tokens, or private room keys.
+- [x] 7.6 Add discovery tests for application filtering, protocol incompatibility, metadata serialization, schema collision, oversized packet discard, advertise lifecycle, scan result content, browser found/updated/lost events, password metadata rules, and manual IP join fallback.
 
 ## 8. Application-Layer Stats
 

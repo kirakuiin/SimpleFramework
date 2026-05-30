@@ -42,6 +42,11 @@ public sealed class GameNetOptions
     public INetEventDispatcher? EventDispatcher { get; init; }
 
     /// <summary>
+    /// 局域网发现和房间浏览配置。
+    /// </summary>
+    public DiscoveryOptions Discovery { get; init; } = new();
+
+    /// <summary>
     /// 单个框架包允许的最大字节数。
     /// </summary>
     public int MaxPacketSize { get; init; } = 64 * 1024;

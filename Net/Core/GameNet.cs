@@ -460,6 +460,10 @@ public sealed class GameNet : IAsyncDisposable
             throw new ArgumentException("MaxSendQueuePacketsPerPeer must be > 0.", nameof(options));
         if (options.MaxSendsPerSecondPerPeer <= 0)
             throw new ArgumentException("MaxSendsPerSecondPerPeer must be > 0.", nameof(options));
+        if (options.Discovery.MaxMetadataPayloadSize <= 0)
+            throw new ArgumentException("MaxMetadataPayloadSize must be > 0.", nameof(options));
+        if (options.Discovery.RoomTimeout <= TimeSpan.Zero)
+            throw new ArgumentException("RoomTimeout must be > 0.", nameof(options));
     }
 
     private async Task<NetSessionResult> StartServerCoreAsync(HostOptions options, NetLifecycleState startedState, CancellationToken token)
