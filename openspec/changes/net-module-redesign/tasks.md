@@ -73,7 +73,7 @@
 - [x] 9.3 Implement all accepted, any accepted, majority accepted, quorum, custom policy, rejected, timeout, cancelled, no-targets, and session-closed outcomes.
 - [x] 9.4 Track pending flows by stable `PeerId`, expose pending peer queries, and implement manual `ResendPendingTo(peer)`.
 - [x] 9.5 Keep flow pending when a peer disconnects until policy, timeout, or manual server action completes it, and ignore late responses after completion.
-- [ ] 9.6 Ensure V1.3 does not add client-side pending recovery, flow persistence, server restart recovery, nested flows, client-initiated flows, or automatic replay after reconnect.
+- [x] 9.6 Ensure V1.3 does not add client-side pending recovery, flow persistence, server restart recovery, nested flows, client-initiated flows, or automatic replay after reconnect.
 - [x] 9.7 Add flow tests for all accepted, any accepted, majority, quorum, no targets, rejection, timeout, disconnect while pending, pending query, manual resend, late response ignored, and client initiation rejection.
 
 ## 10. Event Dispatching And Error Containment
@@ -90,7 +90,7 @@
 - [x] 11.2 Remove old lifecycle APIs or move required compatibility pieces under a clearly marked legacy area with `[Obsolete]` attributes when external guarded code still needs them.
 - [x] 11.3 Decide whether `ProtocolHandler`, `PingExecutor`, and `UdpBroadcast` remain supported utilities or are replaced by the new messenger, stats, and discovery code; update tests accordingly.
 - [x] 11.4 Keep Godot-specific code guarded with `#if GODOT` and ensure normal .NET builds do not require Godot runtime behavior.
-- [ ] 11.5 Update `Net/README.md` with minimal `GameNet`, `TcpNetTransport`, host, join, send, discovery, stats, and flow examples.
+- [x] 11.5 Update `Net/README.md` with minimal `GameNet`, `TcpNetTransport`, host, join, send, discovery, stats, and flow examples.
 
 ## 12. Verification
 

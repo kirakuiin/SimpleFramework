@@ -52,6 +52,114 @@ await client.SendToServerAsync(new PlayerReady(true));
 
 消息类型应使用 `[NetMessage("stable.key")]` 标注稳定协议键。重命名 C# 类型时不要改变这个键，否则会破坏协议兼容性。
 
+```csharp
+[NetMessage("chat.line")]
+public sealed record ChatLine(string Text);
+
+server.On<ChatLine>((ctx, message) =>
+{
+    Console.WriteLine($"from {ctx.SenderId.Value}: {message.Text}");
+});
+
+await client.SendToServerAsync(new ChatLine("hello"));
+await server.BroadcastAsync(new ChatLine("welcome"));
+```
+
+请求/响应适合一次性协商，不会在普通断线后自动恢复：
+
+```csharp
+[NetMessage("join.room.request")]
+public sealed record JoinRoomRequest(string RoomId);
+
+[NetMessage("join.room.response")]
+public sealed record JoinRoomResponse(bool Accepted, string Reason);
+
+server.OnRequest<JoinRoomRequest, JoinRoomResponse>((ctx, request) =>
+    new JoinRoomResponse(request.RoomId == "room-1", ""));
+
+var response = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+    PeerId.Server,
+    new JoinRoomRequest("room-1"),
+    TimeSpan.FromSeconds(2));
+```
+
+## 发现
+
+LAN 发现只承载公开展示和筛选信息。不要把真实密码、token、私钥或私有房间 key 放入 metadata；可以放 `HasPassword` 这类公开标识。
+
+```csharp
+public sealed record RoomMetadata(string RoomName, int CurrentPlayers, int MaxPlayers, bool HasPassword);
+
+var discoveryNetwork = new MemoryDiscoveryNetwork();
+await using var advertiser = new NetDiscovery(options, discoveryNetwork);
+await using var browserDiscovery = new NetDiscovery(options, discoveryNetwork);
+
+var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.metadata.v1");
+await advertiser.StartAdvertiseAsync(
+    new LanAdvertiseInfo
+    {
+        RoomId = "room-1",
+        GamePort = 7777,
+        MetadataSchemaId = schemaId
+    },
+    new RoomMetadata("Test Room", 1, 4, false));
+
+var rooms = await browserDiscovery.ScanAsync<RoomMetadata>(TimeSpan.FromMilliseconds(200));
+```
+
+连续浏览器会产生 found、updated、lost 事件；如果 `GameNetOptions.EventDispatcher` 已配置，这些事件会通过 dispatcher 投递。
+
+## 统计
+
+`NetStats` 使用应用层 ping/pong 估算 RTT、平均 RTT、抖动、探测丢失率和最近响应时间，不依赖 ICMP。
+
+```csharp
+var latency = await client.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.FromSeconds(2));
+if (latency.Status == NetStatsStatus.Ok)
+{
+    Console.WriteLine(latency.PeerStats.Rtt);
+}
+```
+
+TCP 和内存传输当前无法提供传输层丢包率，因此 `TransportLoss` 保持为 `null`。
+
+## Flow
+
+Flow 是服务器拥有的多人协商流程。客户端不能发起 Flow；客户端只注册提案处理器并返回确认。
+
+```csharp
+[NetMessage("load.scene.proposal")]
+public sealed record LoadSceneProposal(string SceneName);
+
+[NetMessage("load.scene.ack")]
+public sealed record LoadSceneAck(bool Accepted, string Reason);
+
+client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((ctx, proposal) =>
+    new LoadSceneAck(Accepted: true, Reason: ""));
+
+var result = await server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+    server.Peers.RemoteParticipants(),
+    new LoadSceneProposal("Battle01"),
+    FlowPolicy.AllAccepted(),
+    TimeSpan.FromSeconds(5));
+```
+
+服务器可以查询 pending peer，并手动重发仍在等待的提案：
+
+```csharp
+foreach (var flowId in server.Flow.PendingFlowIds)
+{
+    foreach (var peerId in server.Flow.GetPendingPeers(flowId))
+        await server.Flow.ResendPendingToAsync(flowId, peerId);
+}
+```
+
+V1.3 明确不提供客户端侧 pending 恢复、Flow 持久化、服务器重启恢复、嵌套 Flow、客户端发起 Flow，也不会在客户端重连后自动 replay。需要恢复或重发时，由服务器显式查询 pending 并调用 `ResendPendingToAsync`。
+
 ## 诊断
 
 `GameNet.Diagnostics.GetSnapshot()` 返回只读计数快照，包括连接数、包计数、字节数、丢包数和错误数。
+
+## 安全边界
+
+当前 TCP 传输和发现 metadata 不提供加密或隐私保护。需要保密的数据应放在应用自己的认证载荷或上层安全通道中，不应放入 LAN metadata。
