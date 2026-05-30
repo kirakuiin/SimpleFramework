@@ -24,7 +24,7 @@
 
 - [x] 4.1 Add `HostOptions`, `JoinOptions`, `ReconnectPolicy`, `AuthContext`, `AuthResult`, `JoinResult`, `NetSessionStatus`, and disconnect reason models.
 - [x] 4.2 Implement host and dedicated server roles, including local host participant creation for host mode and no local player participant for dedicated server mode.
-- [ ] 4.3 Implement direct join handshake with `ApplicationId`, `ProtocolVersion`, auth payload, max peer validation, structured rejection results, and assigned `PeerId`.
+- [x] 4.3 Implement direct join handshake with `ApplicationId`, `ProtocolVersion`, auth payload, max peer validation, structured rejection results, and assigned `PeerId`.
 - [x] 4.4 Add `PeerDirectory` with `PeerId.None`, `PeerId.Server`, authoritative server storage, client read-only snapshots, and session-generic `PeerInfo`.
 - [ ] 4.5 Implement peer joined, peer left, peer disconnected, peer reconnected, state changed, and server closed events with dispatcher-safe delivery.
 - [ ] 4.6 Implement server kick and client/host/server disconnect semantics with explicit disconnect reasons.
@@ -33,8 +33,8 @@
 
 ## 5. Messaging Core
 
-- [ ] 5.1 Add message attributes, handler attributes, `NetContext`, `INetCodec`, default `System.Text.Json` codec, internal packet envelope, and `NetMessageRegistry`.
-- [ ] 5.2 Implement stable message keys, derived message IDs, duplicate key detection, ID collision detection, deterministic assembly scanning, and fingerprint policy handling.
+- [x] 5.1 Add message attributes, handler attributes, `NetContext`, `INetCodec`, default `System.Text.Json` codec, internal packet envelope, and `NetMessageRegistry`.
+- [x] 5.2 Implement stable message keys, derived message IDs, duplicate key detection, ID collision detection, deterministic assembly scanning, and fingerprint policy handling.
 - [x] 5.3 Implement normal message handlers with `NetContext`, multiple handlers in registration order, handler exception containment, and structured message errors.
 - [x] 5.4 Implement `SendToServerAsync`, server `SendAsync(peer)`, and server `BroadcastAsync` for registered typed messages.
 - [ ] 5.5 Implement server-validated `RelayAsync` with original sender preservation, allowlist/permission/rate-limit checks, missing target errors, and permission errors.
@@ -86,10 +86,10 @@
 
 ## 11. Integration Cleanup
 
-- [ ] 11.1 Search all production and test references to old `ITransport`, `ITransfer`, `ConnectionModel`, `ProtocolHandler`, `PingExecutor`, and UDP broadcast helpers before deleting or isolating legacy APIs.
-- [ ] 11.2 Remove old lifecycle APIs or move required compatibility pieces under a clearly marked legacy area with `[Obsolete]` attributes when external guarded code still needs them.
-- [ ] 11.3 Decide whether `ProtocolHandler`, `PingExecutor`, and `UdpBroadcast` remain supported utilities or are replaced by the new messenger, stats, and discovery code; update tests accordingly.
-- [ ] 11.4 Keep Godot-specific code guarded with `#if GODOT` and ensure normal .NET builds do not require Godot runtime behavior.
+- [x] 11.1 Search all production and test references to old `ITransport`, `ITransfer`, `ConnectionModel`, `ProtocolHandler`, `PingExecutor`, and UDP broadcast helpers before deleting or isolating legacy APIs.
+- [x] 11.2 Remove old lifecycle APIs or move required compatibility pieces under a clearly marked legacy area with `[Obsolete]` attributes when external guarded code still needs them.
+- [x] 11.3 Decide whether `ProtocolHandler`, `PingExecutor`, and `UdpBroadcast` remain supported utilities or are replaced by the new messenger, stats, and discovery code; update tests accordingly.
+- [x] 11.4 Keep Godot-specific code guarded with `#if GODOT` and ensure normal .NET builds do not require Godot runtime behavior.
 - [ ] 11.5 Update `Net/README.md` with minimal `GameNet`, `TcpNetTransport`, host, join, send, discovery, stats, and flow examples.
 
 ## 12. Verification

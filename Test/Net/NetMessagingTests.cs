@@ -19,10 +19,42 @@ public sealed record BigMessage(string Text);
 [NetMessage("handler.check")]
 public sealed record HandlerCheck(int Value);
 
+[NetMessage("join.room.request")]
+public sealed record JoinRoomRequest(string RoomId);
+
+[NetMessage("join.room.response")]
+public sealed record JoinRoomResponse(bool Accepted, string Reason);
+
+[NetMessage("scan.alpha")]
+public sealed record ScanAlpha(int Value);
+
+[NetMessage("scan.beta")]
+public sealed record ScanBeta(int Value);
+
 public sealed record MissingMessageAttribute(int Value);
 
 [NetMessage("")]
 public sealed record EmptyMessageKey(int Value);
+
+public sealed class ScannedNetHandlers
+{
+    [NetHandler(typeof(ScanBeta))]
+    public static void HandleBeta(NetContext context, ScanBeta message)
+    {
+    }
+
+    [NetRequestHandler(typeof(ScanAlpha), typeof(ScanBeta))]
+    public static ScanBeta HandleRequest(NetContext context, ScanAlpha request)
+    {
+        return new ScanBeta(request.Value);
+    }
+
+    [NetFlowHandler(typeof(ScanAlpha), typeof(ScanBeta))]
+    public static ScanBeta HandleFlow(NetContext context, ScanAlpha proposal)
+    {
+        return new ScanBeta(proposal.Value);
+    }
+}
 
 [TestFixture]
 public class NetMessagingTests
@@ -286,11 +318,133 @@ public class NetMessagingTests
         Assert.That(first.MessageId, Is.EqualTo(new NetMessageRegistry().Register<PlayerReady>().MessageId));
     }
 
+    [Test]
+    public void RegisterAssembly_RegistersMessagesAndAttributedHandlersDeterministically()
+    {
+        var first = new NetMessageRegistry();
+        var second = new NetMessageRegistry();
+
+        first.RegisterAssembly(typeof(ScanAlpha).Assembly, IsScanFixtureType);
+        second.RegisterAssembly(typeof(ScanAlpha).Assembly, IsScanFixtureType);
+
+        Assert.That(first.Get<ScanAlpha>().Key, Is.EqualTo("scan.alpha"));
+        Assert.That(first.Get<ScanBeta>().Key, Is.EqualTo("scan.beta"));
+        Assert.That(
+            first.HandlerDescriptors.Select(h => h.MessageType).ToArray(),
+            Is.EqualTo(second.HandlerDescriptors.Select(h => h.MessageType).ToArray()));
+        Assert.That(first.HandlerDescriptors.Any(h => h.MessageType == typeof(ScanBeta)), Is.True);
+        Assert.That(first.RequestHandlerDescriptors.Any(h => h.RequestType == typeof(ScanAlpha) && h.ResponseType == typeof(ScanBeta)), Is.True);
+        Assert.That(first.FlowHandlerDescriptors.Any(h => h.ProposalType == typeof(ScanAlpha) && h.ResponseType == typeof(ScanBeta)), Is.True);
+    }
+
+    [Test]
+    public void Fingerprint_IsStableAndPolicyControlsMismatch()
+    {
+        var first = new NetMessageRegistry();
+        var second = new NetMessageRegistry();
+        var different = new NetMessageRegistry();
+
+        first.Register<PlayerReady>();
+        second.Register<PlayerReady>();
+        different.Register<BigMessage>();
+
+        Assert.That(first.GetFingerprint(), Is.EqualTo(second.GetFingerprint()));
+        Assert.That(first.GetFingerprint(), Is.Not.EqualTo(different.GetFingerprint()));
+        Assert.That(first.CheckFingerprint(different.GetFingerprint(), NetFingerprintPolicy.Strict).Status, Is.EqualTo(NetFingerprintStatus.Rejected));
+        Assert.That(first.CheckFingerprint(different.GetFingerprint(), NetFingerprintPolicy.Warn).Status, Is.EqualTo(NetFingerprintStatus.Warning));
+        Assert.That(first.CheckFingerprint(different.GetFingerprint(), NetFingerprintPolicy.Ignore).Status, Is.EqualTo(NetFingerprintStatus.Ignored));
+    }
+
+    [Test]
+    public async Task RequestAsync_ReturnsTypedResponse()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, req) =>
+            new JoinRoomResponse(req.RoomId == "room-1", string.Empty));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var response = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(response.Response!.Accepted, Is.True);
+    }
+
+    [Test]
+    public async Task RequestAsync_WithoutHandler_ReturnsNoHandler()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var response = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.NoHandler));
+    }
+
+    [Test]
+    public async Task RequestAsync_HandlerException_ReturnsHandlerException()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+            throw new InvalidOperationException("boom"));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var response = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.HandlerException));
+        Assert.That(response.Message, Does.Contain("boom"));
+    }
+
     private static GameNetOptions Options(Guid appId, INetEventDispatcher dispatcher = null) => new()
     {
         Application = new NetApplicationInfo { ApplicationId = appId },
         EventDispatcher = dispatcher
     };
+
+    private static bool IsScanFixtureType(Type type)
+    {
+        return type == typeof(ScanAlpha) ||
+               type == typeof(ScanBeta) ||
+               type == typeof(ScannedNetHandlers);
+    }
 
     private sealed class InlineCountingDispatcher : INetEventDispatcher
     {

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SimpleFramework.Net;
@@ -25,6 +26,83 @@ public sealed class NetMessageAttribute : Attribute
 }
 
 /// <summary>
+/// 标记一个普通消息处理方法。
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class NetHandlerAttribute : Attribute
+{
+    /// <summary>
+    /// 创建普通消息处理方法标记。
+    /// </summary>
+    /// <param name="messageType">该方法处理的消息类型。</param>
+    public NetHandlerAttribute(Type messageType)
+    {
+        MessageType = messageType;
+    }
+
+    /// <summary>
+    /// 该方法处理的消息类型。
+    /// </summary>
+    public Type MessageType { get; }
+}
+
+/// <summary>
+/// 标记一个请求响应处理方法。
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class NetRequestHandlerAttribute : Attribute
+{
+    /// <summary>
+    /// 创建请求响应处理方法标记。
+    /// </summary>
+    /// <param name="requestType">请求类型。</param>
+    /// <param name="responseType">响应类型。</param>
+    public NetRequestHandlerAttribute(Type requestType, Type responseType)
+    {
+        RequestType = requestType;
+        ResponseType = responseType;
+    }
+
+    /// <summary>
+    /// 请求类型。
+    /// </summary>
+    public Type RequestType { get; }
+
+    /// <summary>
+    /// 响应类型。
+    /// </summary>
+    public Type ResponseType { get; }
+}
+
+/// <summary>
+/// 标记一个流程提案处理方法。
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class NetFlowHandlerAttribute : Attribute
+{
+    /// <summary>
+    /// 创建流程提案处理方法标记。
+    /// </summary>
+    /// <param name="proposalType">提案类型。</param>
+    /// <param name="responseType">响应类型。</param>
+    public NetFlowHandlerAttribute(Type proposalType, Type responseType)
+    {
+        ProposalType = proposalType;
+        ResponseType = responseType;
+    }
+
+    /// <summary>
+    /// 提案类型。
+    /// </summary>
+    public Type ProposalType { get; }
+
+    /// <summary>
+    /// 响应类型。
+    /// </summary>
+    public Type ResponseType { get; }
+}
+
+/// <summary>
 /// 维护类型化消息与稳定协议标识之间的映射。
 /// </summary>
 public sealed class NetMessageRegistry
@@ -32,6 +110,24 @@ public sealed class NetMessageRegistry
     private readonly Dictionary<Type, NetMessageDescriptor> _byType = new();
     private readonly Dictionary<string, NetMessageDescriptor> _byKey = new(StringComparer.Ordinal);
     private readonly Dictionary<ulong, NetMessageDescriptor> _byId = new();
+    private readonly List<NetHandlerDescriptor> _handlerDescriptors = new();
+    private readonly List<NetRequestHandlerDescriptor> _requestHandlerDescriptors = new();
+    private readonly List<NetFlowHandlerDescriptor> _flowHandlerDescriptors = new();
+
+    /// <summary>
+    /// 扫描得到的普通消息处理方法。
+    /// </summary>
+    public IReadOnlyList<NetHandlerDescriptor> HandlerDescriptors => _handlerDescriptors;
+
+    /// <summary>
+    /// 扫描得到的请求响应处理方法。
+    /// </summary>
+    public IReadOnlyList<NetRequestHandlerDescriptor> RequestHandlerDescriptors => _requestHandlerDescriptors;
+
+    /// <summary>
+    /// 扫描得到的流程处理方法。
+    /// </summary>
+    public IReadOnlyList<NetFlowHandlerDescriptor> FlowHandlerDescriptors => _flowHandlerDescriptors;
 
     /// <summary>
     /// 注册一个消息类型。
@@ -86,6 +182,80 @@ public sealed class NetMessageRegistry
     /// </summary>
     public bool TryGet(ulong messageId, out NetMessageDescriptor descriptor) => _byId.TryGetValue(messageId, out descriptor!);
 
+    /// <summary>
+    /// 扫描程序集中的消息类型和处理器标记。
+    /// </summary>
+    /// <param name="assembly">要扫描的程序集。</param>
+    /// <param name="typeFilter">可选类型过滤器，用于测试或局部扫描。</param>
+    public void RegisterAssembly(Assembly assembly, Func<Type, bool>? typeFilter = null)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+
+        var types = assembly.GetTypes()
+            .Where(type => typeFilter?.Invoke(type) ?? true)
+            .OrderBy(type => type.FullName, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var type in types.Where(type => type.GetCustomAttribute<NetMessageAttribute>() is not null))
+            Register(type);
+
+        foreach (var method in types.SelectMany(GetOrderedMethods))
+        {
+            var handler = method.GetCustomAttribute<NetHandlerAttribute>();
+            if (handler is not null)
+            {
+                Register(handler.MessageType);
+                _handlerDescriptors.Add(new NetHandlerDescriptor(handler.MessageType, method));
+            }
+
+            var requestHandler = method.GetCustomAttribute<NetRequestHandlerAttribute>();
+            if (requestHandler is not null)
+            {
+                Register(requestHandler.RequestType);
+                Register(requestHandler.ResponseType);
+                _requestHandlerDescriptors.Add(new NetRequestHandlerDescriptor(requestHandler.RequestType, requestHandler.ResponseType, method));
+            }
+
+            var flowHandler = method.GetCustomAttribute<NetFlowHandlerAttribute>();
+            if (flowHandler is not null)
+            {
+                Register(flowHandler.ProposalType);
+                Register(flowHandler.ResponseType);
+                _flowHandlerDescriptors.Add(new NetFlowHandlerDescriptor(flowHandler.ProposalType, flowHandler.ResponseType, method));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 计算当前消息表的稳定指纹。
+    /// </summary>
+    public string GetFingerprint()
+    {
+        var manifest = string.Join(
+            "\n",
+            _byKey.Values
+                .OrderBy(descriptor => descriptor.Key, StringComparer.Ordinal)
+                .Select(descriptor => $"{descriptor.Key}:{descriptor.MessageId}"));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest)));
+    }
+
+    /// <summary>
+    /// 根据策略比较远端消息表指纹。
+    /// </summary>
+    public NetFingerprintCheckResult CheckFingerprint(string remoteFingerprint, NetFingerprintPolicy policy)
+    {
+        var local = GetFingerprint();
+        if (string.Equals(local, remoteFingerprint, StringComparison.Ordinal))
+            return new NetFingerprintCheckResult(NetFingerprintStatus.Match, null);
+
+        return policy switch
+        {
+            NetFingerprintPolicy.Strict => new NetFingerprintCheckResult(NetFingerprintStatus.Rejected, "Message fingerprint mismatch."),
+            NetFingerprintPolicy.Warn => new NetFingerprintCheckResult(NetFingerprintStatus.Warning, "Message fingerprint mismatch."),
+            _ => new NetFingerprintCheckResult(NetFingerprintStatus.Ignored, "Message fingerprint mismatch.")
+        };
+    }
+
     private static ulong StableHash(string value)
     {
         const ulong offset = 14695981039346656037;
@@ -99,9 +269,58 @@ public sealed class NetMessageRegistry
 
         return hash;
     }
+
+    private static IEnumerable<MethodInfo> GetOrderedMethods(Type type)
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+        return type.GetMethods(flags)
+            .OrderBy(method => method.Name, StringComparer.Ordinal)
+            .ThenBy(method => method.MetadataToken);
+    }
 }
 
 /// <summary>
 /// 已注册消息的协议描述。
 /// </summary>
 public sealed record NetMessageDescriptor(Type MessageType, string Key, ulong MessageId);
+
+/// <summary>
+/// 普通消息处理方法描述。
+/// </summary>
+public sealed record NetHandlerDescriptor(Type MessageType, MethodInfo Method);
+
+/// <summary>
+/// 请求响应处理方法描述。
+/// </summary>
+public sealed record NetRequestHandlerDescriptor(Type RequestType, Type ResponseType, MethodInfo Method);
+
+/// <summary>
+/// 流程提案处理方法描述。
+/// </summary>
+public sealed record NetFlowHandlerDescriptor(Type ProposalType, Type ResponseType, MethodInfo Method);
+
+/// <summary>
+/// 指纹不一致时使用的处理策略。
+/// </summary>
+public enum NetFingerprintPolicy
+{
+    Strict,
+    Warn,
+    Ignore
+}
+
+/// <summary>
+/// 指纹比较结果状态。
+/// </summary>
+public enum NetFingerprintStatus
+{
+    Match,
+    Rejected,
+    Warning,
+    Ignored
+}
+
+/// <summary>
+/// 消息表指纹比较结果。
+/// </summary>
+public readonly record struct NetFingerprintCheckResult(NetFingerprintStatus Status, string? Message);
