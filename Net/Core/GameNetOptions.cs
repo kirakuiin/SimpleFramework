@@ -55,4 +55,9 @@ public sealed class GameNetOptions
     /// 单个对等体发送队列允许的最大包数量。
     /// </summary>
     public int MaxSendQueuePacketsPerPeer { get; init; } = 1024;
+
+    /// <summary>
+    /// 单个对等体每秒允许发起的最大包数量。
+    /// </summary>
+    public int MaxSendsPerSecondPerPeer { get; init; } = int.MaxValue;
 }

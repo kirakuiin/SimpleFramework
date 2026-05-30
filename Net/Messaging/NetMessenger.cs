@@ -16,9 +16,14 @@ public sealed class NetMessenger
     private readonly INetEventDispatcher? _dispatcher;
     private readonly TimeProvider _timeProvider;
     private readonly int _maxPacketSize;
+    private readonly int _maxSendQueueBytesPerPeer;
+    private readonly int _maxSendQueuePacketsPerPeer;
+    private readonly int _maxSendsPerSecondPerPeer;
+    private readonly object _sendLimitGate = new();
     private readonly Dictionary<Type, List<Action<NetContext, object>>> _handlers = new();
     private readonly Dictionary<Type, RequestHandler> _requestHandlers = new();
     private readonly Dictionary<Type, Func<NetRelayContext, object, bool>> _relayPolicies = new();
+    private readonly Dictionary<PeerId, SendLimitState> _sendLimits = new();
     private readonly ConcurrentDictionary<long, PendingRequest> _pendingRequests = new();
     private readonly ConcurrentDictionary<long, TaskCompletionSource<NetSendResult>> _pendingRelays = new();
     private long _nextCorrelationId;
@@ -29,6 +34,9 @@ public sealed class NetMessenger
         Func<IReadOnlyCollection<PeerId>> getBroadcastTargets,
         NetDiagnostics diagnostics,
         int maxPacketSize,
+        int maxSendQueueBytesPerPeer,
+        int maxSendQueuePacketsPerPeer,
+        int maxSendsPerSecondPerPeer,
         TimeProvider? timeProvider = null,
         INetEventDispatcher? dispatcher = null,
         INetCodec? codec = null)
@@ -38,6 +46,9 @@ public sealed class NetMessenger
         _getBroadcastTargets = getBroadcastTargets;
         _diagnostics = diagnostics;
         _maxPacketSize = maxPacketSize;
+        _maxSendQueueBytesPerPeer = maxSendQueueBytesPerPeer;
+        _maxSendQueuePacketsPerPeer = maxSendQueuePacketsPerPeer;
+        _maxSendsPerSecondPerPeer = maxSendsPerSecondPerPeer;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _dispatcher = dispatcher;
         _codec = codec ?? new JsonNetCodec();
@@ -107,7 +118,7 @@ public sealed class NetMessenger
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
-        var send = await _sendToServer(packet.Data!).ConfigureAwait(false);
+        var send = await SendPacketToServerAsync(packet.Data!).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packet.Data!.Length);
 
@@ -123,7 +134,7 @@ public sealed class NetMessenger
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
-        var send = await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
+        var send = await SendPacketToPeerAsync(peerId, packet.Data!).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packet.Data!.Length);
 
@@ -141,7 +152,7 @@ public sealed class NetMessenger
 
         foreach (var peerId in _getBroadcastTargets())
         {
-            var send = await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
+            var send = await SendPacketToPeerAsync(peerId, packet.Data!).ConfigureAwait(false);
             if (!send.Succeeded)
                 return send;
 
@@ -193,7 +204,7 @@ public sealed class NetMessenger
         var pending = new TaskCompletionSource<NetSendResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingRelays[correlationId] = pending;
 
-        var send = await _sendToServer(packetBytes).ConfigureAwait(false);
+        var send = await SendPacketToServerAsync(packetBytes).ConfigureAwait(false);
         if (!send.Succeeded)
         {
             _pendingRelays.TryRemove(correlationId, out _);
@@ -259,7 +270,7 @@ public sealed class NetMessenger
         };
         var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
         if (packetBytes.Length > _maxPacketSize)
-            return new NetRequestResult<TResponse> { Status = NetRequestStatus.TransportFailed, Message = "Packet is too large." };
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.PacketTooLarge, Message = "Packet is too large." };
 
         var pending = new PendingRequest();
         _pendingRequests[correlationId] = pending;
@@ -271,7 +282,7 @@ public sealed class NetMessenger
             RemovePending(correlationId);
             return new NetRequestResult<TResponse>
             {
-                Status = send.Status == NetSendStatus.SessionClosed ? NetRequestStatus.SessionClosed : NetRequestStatus.TransportFailed,
+                Status = MapSendStatusToRequestStatus(send.Status),
                 Message = send.Message
             };
         }
@@ -505,7 +516,7 @@ public sealed class NetMessenger
             return true;
         }
 
-        var send = await _sendToPeer(packet.TargetPeerId, forwardedBytes).ConfigureAwait(false);
+        var send = await SendPacketToPeerAsync(packet.TargetPeerId, forwardedBytes).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(forwardedBytes.Length);
 
@@ -558,9 +569,21 @@ public sealed class NetMessenger
             Error = result.Message
         };
         var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
-        var send = await _sendToPeer(recipient, packetBytes).ConfigureAwait(false);
+        var send = await SendPacketToPeerAsync(recipient, packetBytes).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packetBytes.Length);
+    }
+
+    private static NetRequestStatus MapSendStatusToRequestStatus(NetSendStatus status)
+    {
+        return status switch
+        {
+            NetSendStatus.SessionClosed => NetRequestStatus.SessionClosed,
+            NetSendStatus.PacketTooLarge => NetRequestStatus.PacketTooLarge,
+            NetSendStatus.SendQueueFull => NetRequestStatus.SendQueueFull,
+            NetSendStatus.RateLimited => NetRequestStatus.RateLimited,
+            _ => NetRequestStatus.TransportFailed
+        };
     }
 
     private async Task<PendingResponse> WaitForResponseAsync(long correlationId, PendingRequest pending, TimeSpan timeout, CancellationToken token)
@@ -577,7 +600,92 @@ public sealed class NetMessenger
 
     private ValueTask<NetSendResult> SendPacketToPeerAsync(PeerId peerId, byte[] packet)
     {
-        return peerId == PeerId.Server ? _sendToServer(packet) : _sendToPeer(peerId, packet);
+        return SendPacketWithLimitsAsync(
+            peerId,
+            packet,
+            () => peerId == PeerId.Server ? _sendToServer(packet) : _sendToPeer(peerId, packet));
+    }
+
+    private ValueTask<NetSendResult> SendPacketToServerAsync(byte[] packet)
+    {
+        return SendPacketWithLimitsAsync(PeerId.Server, packet, () => _sendToServer(packet));
+    }
+
+    private async ValueTask<NetSendResult> SendPacketWithLimitsAsync(PeerId peerId, byte[] packet, Func<ValueTask<NetSendResult>> send)
+    {
+        var reservation = TryReserveSend(peerId, packet.Length);
+        if (reservation.Status != NetSendStatus.Ok)
+            return new NetSendResult(reservation.Status);
+
+        try
+        {
+            var result = await send().ConfigureAwait(false);
+            if (!result.Succeeded)
+                _diagnostics.RecordError(new NetError("TransportSendFailed", result.Message ?? result.Status.ToString()));
+
+            return result;
+        }
+        finally
+        {
+            ReleaseSend(peerId, packet.Length);
+        }
+    }
+
+    private NetSendResult TryReserveSend(PeerId peerId, int byteCount)
+    {
+        lock (_sendLimitGate)
+        {
+            var state = GetSendLimitState(peerId);
+            var now = _timeProvider.GetUtcNow();
+            if (now - state.WindowStartedAt >= TimeSpan.FromSeconds(1))
+            {
+                state.WindowStartedAt = now;
+                state.SentInWindow = 0;
+            }
+
+            if (state.SentInWindow >= _maxSendsPerSecondPerPeer)
+            {
+                _diagnostics.AddDroppedPacket();
+                return new NetSendResult(NetSendStatus.RateLimited);
+            }
+
+            if (state.InFlightPackets + 1 > _maxSendQueuePacketsPerPeer ||
+                state.InFlightBytes + byteCount > _maxSendQueueBytesPerPeer)
+            {
+                _diagnostics.AddDroppedPacket();
+                return new NetSendResult(NetSendStatus.SendQueueFull);
+            }
+
+            state.InFlightPackets++;
+            state.InFlightBytes += byteCount;
+            state.SentInWindow++;
+            return NetSendResult.Ok();
+        }
+    }
+
+    private void ReleaseSend(PeerId peerId, int byteCount)
+    {
+        lock (_sendLimitGate)
+        {
+            if (!_sendLimits.TryGetValue(peerId, out var state))
+                return;
+
+            state.InFlightPackets = Math.Max(0, state.InFlightPackets - 1);
+            state.InFlightBytes = Math.Max(0, state.InFlightBytes - byteCount);
+        }
+    }
+
+    private SendLimitState GetSendLimitState(PeerId peerId)
+    {
+        if (_sendLimits.TryGetValue(peerId, out var state))
+            return state;
+
+        state = new SendLimitState
+        {
+            WindowStartedAt = _timeProvider.GetUtcNow()
+        };
+        _sendLimits[peerId] = state;
+        return state;
     }
 
     private void RemovePending(long correlationId)
@@ -634,6 +742,14 @@ public sealed class NetMessenger
     private readonly record struct EncodedPacket(NetSendStatus Status, byte[]? Data, string? Message);
     private readonly record struct PendingResponse(NetRequestStatus Status, byte[] Payload, string? Message);
     private sealed record RequestHandler(Type ResponseType, Func<NetContext, object, object> Invoke);
+
+    private sealed class SendLimitState
+    {
+        public int InFlightPackets { get; set; }
+        public int InFlightBytes { get; set; }
+        public DateTimeOffset WindowStartedAt { get; set; }
+        public int SentInWindow { get; set; }
+    }
 
     private sealed class PendingRequest
     {

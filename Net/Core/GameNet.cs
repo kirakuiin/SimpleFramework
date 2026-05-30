@@ -35,7 +35,17 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize, _options.TimeProvider, _options.EventDispatcher);
+        Messages = new NetMessenger(
+            SendToServerPacketAsync,
+            SendToPeerPacketAsync,
+            GetBroadcastTargets,
+            Diagnostics,
+            _options.MaxPacketSize,
+            _options.MaxSendQueueBytesPerPeer,
+            _options.MaxSendQueuePacketsPerPeer,
+            _options.MaxSendsPerSecondPerPeer,
+            _options.TimeProvider,
+            _options.EventDispatcher);
     }
 
     /// <summary>
@@ -53,7 +63,17 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize, _options.TimeProvider, _options.EventDispatcher);
+        Messages = new NetMessenger(
+            SendToServerPacketAsync,
+            SendToPeerPacketAsync,
+            GetBroadcastTargets,
+            Diagnostics,
+            _options.MaxPacketSize,
+            _options.MaxSendQueueBytesPerPeer,
+            _options.MaxSendQueuePacketsPerPeer,
+            _options.MaxSendsPerSecondPerPeer,
+            _options.TimeProvider,
+            _options.EventDispatcher);
         _transport.PacketReceived += OnTransportPacketReceived;
         _transport.PeerDisconnected += OnTransportPeerDisconnected;
     }
@@ -438,6 +458,8 @@ public sealed class GameNet : IAsyncDisposable
             throw new ArgumentException("MaxSendQueueBytesPerPeer must be > 0.", nameof(options));
         if (options.MaxSendQueuePacketsPerPeer <= 0)
             throw new ArgumentException("MaxSendQueuePacketsPerPeer must be > 0.", nameof(options));
+        if (options.MaxSendsPerSecondPerPeer <= 0)
+            throw new ArgumentException("MaxSendsPerSecondPerPeer must be > 0.", nameof(options));
     }
 
     private async Task<NetSessionResult> StartServerCoreAsync(HostOptions options, NetLifecycleState startedState, CancellationToken token)

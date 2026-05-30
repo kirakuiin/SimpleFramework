@@ -385,6 +385,279 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task SendToServer_WhenSendQueuePacketLimitExceeded_ReturnsSendQueueFull()
+    {
+        var diagnostics = new NetDiagnostics();
+        var sendStarted = new TaskCompletionSource();
+        var releaseSend = new TaskCompletionSource();
+        var messenger = CreateMessenger(
+            diagnostics,
+            async _ =>
+            {
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var first = messenger.SendToServerAsync(new PlayerReady(true)).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var second = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        releaseSend.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(second.Status, Is.EqualTo(NetSendStatus.SendQueueFull));
+        Assert.That(diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SendToServer_WhenSendQueueByteLimitExceeded_ReturnsSendQueueFull()
+    {
+        var diagnostics = new NetDiagnostics();
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            maxSendQueueBytesPerPeer: 8);
+        messenger.RegisterMessage<BigMessage>();
+
+        var result = await messenger.SendToServerAsync(new BigMessage(new string('x', 100)));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.SendQueueFull));
+        Assert.That(diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SendToServer_WhenRateLimitExceeded_ReturnsRateLimitedUntilWindowResets()
+    {
+        var diagnostics = new NetDiagnostics();
+        var clock = new ManualTimeProvider();
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            timeProvider: clock,
+            maxSendsPerSecondPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var first = await messenger.SendToServerAsync(new PlayerReady(true));
+        var second = await messenger.SendToServerAsync(new PlayerReady(true));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var third = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        Assert.That(first.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(second.Status, Is.EqualTo(NetSendStatus.RateLimited));
+        Assert.That(third.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SendToServer_WhenTransportFails_RecordsStructuredError()
+    {
+        var diagnostics = new NetDiagnostics();
+        NetError recorded = null;
+        diagnostics.ErrorRecorded += error => recorded = error;
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(new NetSendResult(NetSendStatus.TransportFailed, "boom")));
+        messenger.RegisterMessage<PlayerReady>();
+
+        var result = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(recorded, Is.Not.Null);
+        Assert.That(recorded!.Code, Is.EqualTo("TransportSendFailed"));
+        Assert.That(diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SendToServer_WhenCodecEncodeFails_ReturnsTransportFailedAndRecordsCodecError()
+    {
+        var diagnostics = new NetDiagnostics();
+        NetError recorded = null;
+        diagnostics.ErrorRecorded += error => recorded = error;
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            codec: new ThrowingCodec(throwOnEncode: true));
+        messenger.RegisterMessage<PlayerReady>();
+
+        var result = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(recorded, Is.Not.Null);
+        Assert.That(recorded!.Code, Is.EqualTo("MessageEncodeFailed"));
+    }
+
+    [Test]
+    public async Task TryHandlePacket_WithUnknownMessage_RecordsStructuredError()
+    {
+        var diagnostics = new NetDiagnostics();
+        NetError recorded = null;
+        diagnostics.ErrorRecorded += error => recorded = error;
+        var messenger = CreateMessenger(diagnostics, _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+        var packet = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Message,
+            MessageId = 999,
+            Payload = Array.Empty<byte>()
+        });
+
+        var handled = await messenger.TryHandlePacket(packet, PeerId.Server);
+
+        Assert.That(handled, Is.True);
+        Assert.That(recorded, Is.Not.Null);
+        Assert.That(recorded!.Code, Is.EqualTo("UnknownMessage"));
+    }
+
+    [Test]
+    public async Task TryHandlePacket_WhenCodecDecodeFails_RecordsCodecErrorAndDoesNotInvokeHandler()
+    {
+        var diagnostics = new NetDiagnostics();
+        NetError recorded = null;
+        var invoked = false;
+        diagnostics.ErrorRecorded += error => recorded = error;
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            codec: new ThrowingCodec(throwOnDecode: true));
+        var descriptor = messenger.RegisterMessage<PlayerReady>();
+        messenger.On<PlayerReady>((_, _) => invoked = true);
+        var packet = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Message,
+            MessageId = descriptor.MessageId,
+            Payload = Array.Empty<byte>()
+        });
+
+        var handled = await messenger.TryHandlePacket(packet, PeerId.Server);
+
+        Assert.That(handled, Is.True);
+        Assert.That(invoked, Is.False);
+        Assert.That(recorded, Is.Not.Null);
+        Assert.That(recorded!.Code, Is.EqualTo("MessageDecodeFailed"));
+    }
+
+    [Test]
+    public async Task SendAsync_WhenTargetQueueIsFull_ReturnsSendQueueFull()
+    {
+        var target = new PeerId(2);
+        var diagnostics = new NetDiagnostics();
+        var sendStarted = new TaskCompletionSource();
+        var releaseSend = new TaskCompletionSource();
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            async (_, _) =>
+            {
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var first = messenger.SendAsync(target, new PlayerReady(true)).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var second = await messenger.SendAsync(target, new PlayerReady(true));
+
+        releaseSend.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(second.Status, Is.EqualTo(NetSendStatus.SendQueueFull));
+    }
+
+    [Test]
+    public async Task BroadcastAsync_WhenTargetQueueIsFull_ReturnsSendQueueFull()
+    {
+        var target = new PeerId(2);
+        var diagnostics = new NetDiagnostics();
+        var sendStarted = new TaskCompletionSource();
+        var releaseSend = new TaskCompletionSource();
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            async (_, _) =>
+            {
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            broadcastTargets: new[] { target },
+            maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var first = messenger.SendAsync(target, new PlayerReady(true)).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var broadcast = await messenger.BroadcastAsync(new PlayerReady(true));
+
+        releaseSend.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(broadcast.Status, Is.EqualTo(NetSendStatus.SendQueueFull));
+    }
+
+    [Test]
+    public async Task RelayAsync_WhenServerQueueIsFull_ReturnsSendQueueFull()
+    {
+        var diagnostics = new NetDiagnostics();
+        var sendStarted = new TaskCompletionSource();
+        var releaseSend = new TaskCompletionSource();
+        var messenger = CreateMessenger(
+            diagnostics,
+            async _ =>
+            {
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var first = messenger.SendToServerAsync(new PlayerReady(true)).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var relay = await messenger.RelayAsync(new PeerId(2), new PlayerReady(true), TimeSpan.FromSeconds(1));
+
+        releaseSend.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(relay.Status, Is.EqualTo(NetSendStatus.SendQueueFull));
+    }
+
+    [Test]
+    public async Task RequestAsync_WhenServerQueueIsFull_ReturnsSendQueueFullAndCleansPending()
+    {
+        var diagnostics = new NetDiagnostics();
+        var sendStarted = new TaskCompletionSource();
+        var releaseSend = new TaskCompletionSource();
+        var messenger = CreateMessenger(
+            diagnostics,
+            async _ =>
+            {
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+        messenger.RegisterMessage<JoinRoomRequest>();
+        messenger.RegisterMessage<JoinRoomResponse>();
+
+        var first = messenger.SendToServerAsync(new PlayerReady(true)).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var request = await messenger.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        releaseSend.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(request.Status, Is.EqualTo(NetRequestStatus.SendQueueFull));
+        Assert.That(diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+    }
+
+    [Test]
     public void MessageRegistry_ExplicitKeyProducesStableId()
     {
         var registry = new NetMessageRegistry();
@@ -670,6 +943,59 @@ public class NetMessagingTests
         return type == typeof(ScanAlpha) ||
                type == typeof(ScanBeta) ||
                type == typeof(ScannedNetHandlers);
+    }
+
+    private static NetMessenger CreateMessenger(
+        NetDiagnostics diagnostics,
+        Func<byte[], ValueTask<NetSendResult>> sendToServer,
+        Func<PeerId, byte[], ValueTask<NetSendResult>> sendToPeer = null,
+        IReadOnlyCollection<PeerId> broadcastTargets = null,
+        TimeProvider timeProvider = null,
+        int maxPacketSize = 64 * 1024,
+        int maxSendQueueBytesPerPeer = 1024 * 1024,
+        int maxSendQueuePacketsPerPeer = 1024,
+        int maxSendsPerSecondPerPeer = int.MaxValue,
+        INetCodec codec = null)
+    {
+        return new NetMessenger(
+            sendToServer,
+            sendToPeer ?? ((_, _) => new ValueTask<NetSendResult>(NetSendResult.Ok())),
+            () => broadcastTargets ?? Array.Empty<PeerId>(),
+            diagnostics,
+            maxPacketSize,
+            maxSendQueueBytesPerPeer,
+            maxSendQueuePacketsPerPeer,
+            maxSendsPerSecondPerPeer,
+            timeProvider,
+            codec: codec);
+    }
+
+    private sealed class ThrowingCodec : INetCodec
+    {
+        private readonly bool _throwOnEncode;
+        private readonly bool _throwOnDecode;
+
+        public ThrowingCodec(bool throwOnEncode = false, bool throwOnDecode = false)
+        {
+            _throwOnEncode = throwOnEncode;
+            _throwOnDecode = throwOnDecode;
+        }
+
+        public byte[] Encode<T>(T message)
+        {
+            if (_throwOnEncode)
+                throw new InvalidOperationException("encode failed");
+
+            return new JsonNetCodec().Encode(message);
+        }
+
+        public object Decode(ReadOnlySpan<byte> payload, Type messageType)
+        {
+            if (_throwOnDecode)
+                throw new InvalidOperationException("decode failed");
+
+            return new JsonNetCodec().Decode(payload, messageType);
+        }
     }
 
     private sealed class InlineCountingDispatcher : INetEventDispatcher

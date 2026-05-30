@@ -68,6 +68,13 @@ public class NetCoreTests
                     MaxSendQueuePacketsPerPeer = 0
                 }))!.Message,
                 Does.Contain("MaxSendQueuePacketsPerPeer"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => GameNet.ValidateOptions(new GameNetOptions
+                {
+                    Application = app,
+                    MaxSendsPerSecondPerPeer = 0
+                }))!.Message,
+                Does.Contain("MaxSendsPerSecondPerPeer"));
         });
     }
 
