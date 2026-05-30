@@ -60,9 +60,9 @@
 
 ## 8. Application-Layer Stats
 
-- [ ] 8.1 Add `NetStats`, internal ping/pong messages, `NetPeerStats`, stats result models, and peer stats snapshots.
-- [ ] 8.2 Implement application-layer RTT, average RTT, jitter, timeout count, last-seen time, and `ProbeLoss` using the configured time source.
-- [ ] 8.3 Keep `TransportLoss` null for TCP and memory transports unless a future transport explicitly supplies transport loss.
+- [x] 8.1 Add `NetStats`, internal ping/pong messages, `NetPeerStats`, stats result models, and peer stats snapshots.
+- [x] 8.2 Implement application-layer RTT, average RTT, jitter, timeout count, last-seen time, and `ProbeLoss` using the configured time source.
+- [x] 8.3 Keep `TransportLoss` null for TCP and memory transports unless a future transport explicitly supplies transport loss.
 - [ ] 8.4 Surface discovery scan request/reply timing as room-list latency when available without requiring ICMP.
 - [ ] 8.5 Add stats tests for ping/pong RTT, timeout, probe loss, last seen, TCP transport loss null, timeout peer failure, fake time behavior, and discovery latency estimation.
 

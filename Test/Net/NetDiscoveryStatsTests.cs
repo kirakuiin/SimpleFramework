@@ -215,6 +215,79 @@ public class NetDiscoveryStatsTests
         Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
     }
 
+    [Test]
+    public async Task Stats_PingPong_UpdatesRtt()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var stats = await client.Stats.GetLatencyAsync(PeerId.Server);
+
+        Assert.That(stats.Status, Is.EqualTo(NetStatsStatus.Ok));
+        Assert.That(stats.PeerStats.Rtt, Is.Not.Null);
+        Assert.That(stats.PeerStats.TransportLoss, Is.Null);
+        Assert.That(stats.PeerStats.LastSeenAt, Is.Not.EqualTo(default(DateTimeOffset)));
+    }
+
+    [Test]
+    public async Task Stats_Timeout_ContributesToProbeLoss()
+    {
+        var clock = new ManualTimeProvider();
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, timeProvider: clock));
+        server.Stats.DropProbeResponses = true;
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var probe = client.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.FromSeconds(5));
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var result = await probe.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetStatsStatus.Timeout));
+        Assert.That(result.PeerStats.ProbeLoss, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task Stats_RepeatedPing_UpdatesAverageRttAndJitter()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await client.Stats.GetLatencyAsync(PeerId.Server);
+        var second = await client.Stats.GetLatencyAsync(PeerId.Server);
+
+        Assert.That(second.Status, Is.EqualTo(NetStatsStatus.Ok));
+        Assert.That(second.PeerStats.AverageRtt, Is.Not.Null);
+        Assert.That(second.PeerStats.Jitter, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task Stats_ToMissingPeer_ReturnsPeerUnavailable()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        var result = await server.Stats.GetLatencyAsync(new PeerId(999), TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetStatsStatus.PeerUnavailable));
+    }
+
     private static GameNetOptions Options(
         Guid appId,
         int protocolVersion = 1,

@@ -46,6 +46,7 @@ public sealed class GameNet : IAsyncDisposable
             _options.MaxSendsPerSecondPerPeer,
             _options.TimeProvider,
             _options.EventDispatcher);
+        Stats = new NetStats(Messages, _options.TimeProvider);
     }
 
     /// <summary>
@@ -74,6 +75,7 @@ public sealed class GameNet : IAsyncDisposable
             _options.MaxSendsPerSecondPerPeer,
             _options.TimeProvider,
             _options.EventDispatcher);
+        Stats = new NetStats(Messages, _options.TimeProvider);
         _transport.PacketReceived += OnTransportPacketReceived;
         _transport.PeerDisconnected += OnTransportPeerDisconnected;
     }
@@ -102,6 +104,11 @@ public sealed class GameNet : IAsyncDisposable
     /// 类型化消息收发组件。
     /// </summary>
     public NetMessenger Messages { get; }
+
+    /// <summary>
+    /// 应用层延迟和探测统计组件。
+    /// </summary>
+    public NetStats Stats { get; }
 
     /// <summary>
     /// 注册类型化消息处理器。
