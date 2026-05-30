@@ -8,6 +8,7 @@ namespace SimpleFramework.Net;
 public enum NetStatsStatus
 {
     Ok,
+    ObjectDisposed,
     Timeout,
     SessionClosed,
     PeerUnavailable,
@@ -80,15 +81,17 @@ public sealed class NetStats
 {
     private readonly NetMessenger _messenger;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<bool> _isDisposed;
     private readonly ConcurrentDictionary<long, PendingProbe> _pending = new();
     private readonly Dictionary<PeerId, MutablePeerStats> _stats = new();
     private readonly object _statsGate = new();
     private long _nextSequence;
 
-    internal NetStats(NetMessenger messenger, TimeProvider timeProvider)
+    internal NetStats(NetMessenger messenger, TimeProvider timeProvider, Func<bool>? isDisposed = null)
     {
         _messenger = messenger;
         _timeProvider = timeProvider;
+        _isDisposed = isDisposed ?? (() => false);
         _messenger.RegisterMessage<NetPing>();
         _messenger.RegisterMessage<NetPong>();
         _messenger.On<NetPing>(HandlePing);
@@ -113,6 +116,9 @@ public sealed class NetStats
     /// </summary>
     public async Task<NetStatsResult> GetLatencyAsync(PeerId peerId, TimeSpan timeout, CancellationToken token = default)
     {
+        if (_isDisposed())
+            return new NetStatsResult { Status = NetStatsStatus.ObjectDisposed, PeerStats = GetPeerStats(peerId) };
+
         var sequence = Interlocked.Increment(ref _nextSequence);
         var sentAt = _timeProvider.GetUtcNow();
         var pending = new PendingProbe(peerId, sentAt);
@@ -229,6 +235,7 @@ public sealed class NetStats
     {
         return status switch
         {
+            NetSendStatus.ObjectDisposed => NetStatsStatus.ObjectDisposed,
             NetSendStatus.SessionClosed => NetStatsStatus.SessionClosed,
             NetSendStatus.PeerUnavailable => NetStatsStatus.PeerUnavailable,
             NetSendStatus.SendQueueFull => NetStatsStatus.SendQueueFull,

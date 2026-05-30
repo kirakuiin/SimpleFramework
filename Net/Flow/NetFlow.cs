@@ -110,15 +110,22 @@ public sealed class NetFlow
     private readonly NetDiagnostics _diagnostics;
     private readonly Func<NetSessionRole> _getRole;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<bool> _isDisposed;
     private readonly ConcurrentDictionary<long, IPendingFlow> _pendingFlows = new();
     private long _nextFlowId;
 
-    internal NetFlow(NetMessenger messenger, NetDiagnostics diagnostics, TimeProvider timeProvider, Func<NetSessionRole> getRole)
+    internal NetFlow(
+        NetMessenger messenger,
+        NetDiagnostics diagnostics,
+        TimeProvider timeProvider,
+        Func<NetSessionRole> getRole,
+        Func<bool>? isDisposed = null)
     {
         _messenger = messenger;
         _diagnostics = diagnostics;
         _timeProvider = timeProvider;
         _getRole = getRole;
+        _isDisposed = isDisposed ?? (() => false);
     }
 
     /// <summary>
@@ -141,6 +148,9 @@ public sealed class NetFlow
     /// </summary>
     public Task<NetSendResult> ResendPendingToAsync(long flowId, PeerId peerId)
     {
+        if (_isDisposed())
+            return Task.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
+
         return _pendingFlows.TryGetValue(flowId, out var flow)
             ? flow.ResendPendingToAsync(peerId)
             : Task.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable, "Flow is not pending."));
@@ -151,6 +161,9 @@ public sealed class NetFlow
     /// </summary>
     public void OnProposal<TProposal, TResponse>(Func<NetContext, TProposal, TResponse> handler)
     {
+        if (_isDisposed())
+            throw new ObjectDisposedException(nameof(NetFlow));
+
         _messenger.OnRequest(handler);
     }
 
@@ -166,6 +179,9 @@ public sealed class NetFlow
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(policy);
+
+        if (_isDisposed())
+            throw new ObjectDisposedException(nameof(NetFlow));
 
         if (_getRole() is not (NetSessionRole.Host or NetSessionRole.DedicatedServer))
             return End<TResponse>(FlowEndReason.NotServer);

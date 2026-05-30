@@ -304,6 +304,7 @@ public sealed class NetDiscovery : IAsyncDisposable
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private Guid? _advertisementId;
     private LanAdvertiseInfo? _advertiseInfo;
+    private int _disposed;
 
     /// <summary>
     /// 创建基于内存发现网络的发现组件。
@@ -328,6 +329,9 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public Task<NetSessionResult> StartAdvertiseAsync<TMetadata>(LanAdvertiseInfo info, TMetadata metadata)
     {
+        if (IsDisposed)
+            return Task.FromResult(new NetSessionResult(NetSessionStatus.ObjectDisposed));
+
         ArgumentNullException.ThrowIfNull(info);
         if (_advertisementId is not null)
             return Task.FromResult(new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running."));
@@ -345,6 +349,9 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public Task<NetSessionResult> UpdateAdvertiseMetadataAsync<TMetadata>(TMetadata metadata)
     {
+        if (IsDisposed)
+            return Task.FromResult(new NetSessionResult(NetSessionStatus.ObjectDisposed));
+
         if (_advertisementId is null || _advertiseInfo is null)
             return Task.FromResult(new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started."));
 
@@ -360,6 +367,9 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public Task<NetSessionResult> StopAdvertiseAsync()
     {
+        if (IsDisposed)
+            return Task.FromResult(new NetSessionResult(NetSessionStatus.ObjectDisposed));
+
         if (_advertisementId is null)
             return Task.FromResult(NetSessionResult.Ok());
 
@@ -374,6 +384,8 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration)
     {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+
         var results = new List<LanScanResult<TMetadata>>();
         foreach (var packet in _network.Snapshot())
         {
@@ -410,16 +422,30 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>()
     {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+
         return Task.FromResult(new LanBrowser<TMetadata>(this, _options.TimeProvider, _options.Discovery.RoomTimeout));
     }
 
     /// <summary>
     /// 释放发现组件并停止当前广告。
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        await StopAdvertiseAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            return ValueTask.CompletedTask;
+
+        if (_advertisementId is not null)
+        {
+            _network.Remove(_advertisementId.Value);
+            _advertisementId = null;
+            _advertiseInfo = null;
+        }
+
+        return ValueTask.CompletedTask;
     }
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 
     private bool TryCreatePacket<TMetadata>(LanAdvertiseInfo info, TMetadata metadata, out DiscoveryPacket packet, out string? error)
     {

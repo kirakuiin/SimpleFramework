@@ -180,6 +180,53 @@ public class NetCoreTests
     }
 
     [Test]
+    public async Task GameNet_StatsAndFlowApisAfterDispose_ReturnObjectDisposedOrThrow()
+    {
+        var network = new MemoryNetNetwork();
+        var net = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        });
+
+        await net.DisposeAsync();
+
+        var stats = await net.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.FromSeconds(1));
+        var resend = await net.Flow.ResendPendingToAsync(123, PeerId.Server);
+
+        Assert.That(stats.Status, Is.EqualTo(NetStatsStatus.ObjectDisposed));
+        Assert.That(resend.Status, Is.EqualTo(NetSendStatus.ObjectDisposed));
+        Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await net.Flow.ProposeAsync<PlayerReady, PlayerReady>(
+                new[] { PeerId.Server },
+                new PlayerReady(true),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(1)));
+    }
+
+    [Test]
+    public async Task NetDiscovery_ApisAfterDispose_ReturnObjectDisposedOrThrow()
+    {
+        var discovery = new NetDiscovery(new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        }, new MemoryDiscoveryNetwork());
+
+        await discovery.DisposeAsync();
+
+        var start = await discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = 1 },
+            new RoomListMetadata("Room", 1, 4, false));
+        var update = await discovery.UpdateAdvertiseMetadataAsync(new RoomListMetadata("Room", 1, 4, false));
+        var stop = await discovery.StopAdvertiseAsync();
+
+        Assert.That(start.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.That(update.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero));
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await discovery.StartBrowserAsync<RoomListMetadata>());
+    }
+
+    [Test]
     public async Task GameNet_ConcurrentHostCalls_OnlyOneStarts()
     {
         var network = new MemoryNetNetwork();

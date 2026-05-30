@@ -46,8 +46,8 @@ public sealed class GameNet : IAsyncDisposable
             _options.MaxSendsPerSecondPerPeer,
             _options.TimeProvider,
             _options.EventDispatcher);
-        Stats = new NetStats(Messages, _options.TimeProvider);
-        Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role);
+        Stats = new NetStats(Messages, _options.TimeProvider, () => IsDisposed);
+        Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role, () => IsDisposed);
     }
 
     /// <summary>
@@ -76,8 +76,8 @@ public sealed class GameNet : IAsyncDisposable
             _options.MaxSendsPerSecondPerPeer,
             _options.TimeProvider,
             _options.EventDispatcher);
-        Stats = new NetStats(Messages, _options.TimeProvider);
-        Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role);
+        Stats = new NetStats(Messages, _options.TimeProvider, () => IsDisposed);
+        Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role, () => IsDisposed);
         _transport.PacketReceived += OnTransportPacketReceived;
         _transport.PeerDisconnected += OnTransportPeerDisconnected;
     }
