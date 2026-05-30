@@ -18,7 +18,7 @@
 - [x] 3.1 Add lifecycle state and an async gate so `HostAsync`, `StartServerAsync`, `JoinAsync`, `LeaveAsync`, `StopAsync`, and `DisposeAsync` are serialized.
 - [x] 3.2 Make `StopAsync` and `DisposeAsync` idempotent and ensure dispose cancels discovery loops, pending requests, pending flows, session work, transport work, and owned resources.
 - [ ] 3.3 Make send, connection, discovery, stats, and flow APIs return `ObjectDisposed` results or throw `ObjectDisposedException` after disposal.
-- [ ] 3.4 Add lifecycle tests for concurrent starts, repeated stop/dispose, API use after dispose, and shutdown cancellation behavior.
+- [x] 3.4 Add lifecycle tests for concurrent starts, repeated stop/dispose, API use after dispose, and shutdown cancellation behavior.
 
 ## 4. Session And Peer Directory
 
@@ -27,7 +27,7 @@
 - [x] 4.3 Implement direct join handshake with `ApplicationId`, `ProtocolVersion`, auth payload, max peer validation, structured rejection results, and assigned `PeerId`.
 - [x] 4.4 Add `PeerDirectory` with `PeerId.None`, `PeerId.Server`, authoritative server storage, client read-only snapshots, and session-generic `PeerInfo`.
 - [ ] 4.5 Implement peer joined, peer left, peer disconnected, peer reconnected, state changed, and server closed events with dispatcher-safe delivery.
-- [ ] 4.6 Implement server kick and client/host/server disconnect semantics with explicit disconnect reasons.
+- [x] 4.6 Implement server kick and client/host/server disconnect semantics with explicit disconnect reasons.
 - [ ] 4.7 Implement opt-in reconnect using unpredictable reconnect tokens, reconnect grace window, original `PeerId` restoration, expiry cleanup, and temporary-disconnect versus final-removal distinction.
 - [ ] 4.8 Add session tests for host, dedicated server, successful join, incompatible application, incompatible protocol, auth success/failure, password auth payload, max peers, kick, shutdown, peer directory updates, and reconnect behavior.
 
@@ -43,11 +43,11 @@
 
 ## 6. Request Response
 
-- [ ] 6.1 Add `OnRequest<TRequest,TResponse>` and `RequestAsync<TRequest,TResponse>` APIs with one handler per request type.
-- [ ] 6.2 Implement request correlation IDs, pending request table, timeout through the configured `TimeProvider`, cancellation cleanup, no-handler errors, handler exception errors, and session-closed errors.
-- [ ] 6.3 Ignore late and duplicate responses without recreating pending state or mutating completed requests.
-- [ ] 6.4 Add deterministic `ManualTimeProvider` test helper for timeout, reconnect, discovery, stats, and flow tests.
-- [ ] 6.5 Add request tests for success, no handler, handler exception, timeout, cancellation cleanup, late response, duplicate response, disconnect/session close failure, and pending diagnostics count.
+- [x] 6.1 Add `OnRequest<TRequest,TResponse>` and `RequestAsync<TRequest,TResponse>` APIs with one handler per request type.
+- [x] 6.2 Implement request correlation IDs, pending request table, timeout through the configured `TimeProvider`, cancellation cleanup, no-handler errors, handler exception errors, and session-closed errors.
+- [x] 6.3 Ignore late and duplicate responses without recreating pending state or mutating completed requests.
+- [x] 6.4 Add deterministic `ManualTimeProvider` test helper for timeout, reconnect, discovery, stats, and flow tests.
+- [x] 6.5 Add request tests for success, no handler, handler exception, timeout, cancellation cleanup, late response, duplicate response, disconnect/session close failure, and pending diagnostics count.
 
 ## 7. Discovery And Metadata
 

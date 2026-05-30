@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using NUnit.Framework;
@@ -127,6 +128,30 @@ public class NetCoreTests
     }
 
     [Test]
+    public async Task GameNet_ConnectionApisAfterDispose_ReturnObjectDisposed()
+    {
+        var network = new MemoryNetNetwork();
+        var net = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        });
+
+        await net.DisposeAsync();
+
+        var host = await net.HostAsync(new HostOptions { Port = 7777 });
+        var dedicated = await net.StartServerAsync(new HostOptions { Port = 7778 });
+        var join = await net.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var leave = await net.LeaveAsync();
+        var stop = await net.StopAsync();
+
+        Assert.That(host.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.That(dedicated.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.That(leave.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.ObjectDisposed));
+    }
+
+    [Test]
     public async Task GameNet_MessageApisAfterDispose_ReturnObjectDisposed()
     {
         var network = new MemoryNetNetwork();
@@ -182,5 +207,24 @@ public class NetCoreTests
         Assert.That(firstStop.Status, Is.EqualTo(NetSessionStatus.Ok));
         Assert.That(secondStop.Status, Is.EqualTo(NetSessionStatus.Ok));
         Assert.That(restart.Status, Is.EqualTo(NetSessionStatus.Ok));
+    }
+
+    [Test]
+    public async Task GameNet_Stop_WithCancelledToken_ReturnsCancelled_AndKeepsSessionActive()
+    {
+        var network = new MemoryNetNetwork();
+        await using var net = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        });
+        using var cancellation = new CancellationTokenSource();
+
+        await net.HostAsync(new HostOptions { Port = 7777 });
+        cancellation.Cancel();
+
+        var stop = await net.StopAsync(cancellation.Token);
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Cancelled));
+        Assert.That(net.Session.Role, Is.EqualTo(NetSessionRole.Host));
     }
 }

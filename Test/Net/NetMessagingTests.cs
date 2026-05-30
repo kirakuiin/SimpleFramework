@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Net;
+using Test.Net.TestDoubles;
 
 namespace Test.Net;
 
@@ -132,10 +135,11 @@ public class NetMessagingTests
         await server.HostAsync(new HostOptions { Port = 7777 });
         await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
 
+        var postsBeforeMessage = dispatcher.PostCount;
         await client.SendToServerAsync(new PlayerReady(true));
 
         Assert.That((await received.Task.WaitAsync(TimeSpan.FromSeconds(1))).Ready, Is.True);
-        Assert.That(dispatcher.PostCount, Is.EqualTo(1));
+        Assert.That(dispatcher.PostCount, Is.GreaterThan(postsBeforeMessage));
     }
 
     [Test]
@@ -433,10 +437,158 @@ public class NetMessagingTests
         Assert.That(response.Message, Does.Contain("boom"));
     }
 
-    private static GameNetOptions Options(Guid appId, INetEventDispatcher dispatcher = null) => new()
+    [Test]
+    public async Task RequestAsync_Timeout_RemovesPendingEntry_AndIgnoresLateResponse()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, timeProvider: clock));
+        var handlerStarted = new TaskCompletionSource();
+        var releaseHandler = new TaskCompletionSource();
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            releaseHandler.Task.GetAwaiter().GetResult();
+            return new JoinRoomResponse(true, string.Empty);
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var request = client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(5));
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(1));
+
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var result = await request.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Timeout));
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+
+        releaseHandler.SetResult();
+        await Task.Delay(50);
+
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task RequestAsync_DuplicateResponse_DoesNotMutateCompletedRequest()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+            new JoinRoomResponse(true, "original"));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var result = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+        var duplicatePayload = new JsonNetCodec().Encode(new JoinRoomResponse(false, "duplicate"));
+        var duplicatePacket = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Response,
+            MessageId = client.Messages.Registry.Get<JoinRoomResponse>().MessageId,
+            ResponseMessageId = client.Messages.Registry.Get<JoinRoomResponse>().MessageId,
+            CorrelationId = 1,
+            SenderId = PeerId.Server,
+            Payload = duplicatePayload,
+            RequestStatus = NetRequestStatus.Ok
+        });
+
+        var handled = await client.Messages.TryHandlePacket(duplicatePacket, PeerId.Server);
+
+        Assert.That(handled, Is.True);
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(result.Response!.Accepted, Is.True);
+        Assert.That(result.Response.Reason, Is.EqualTo("original"));
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task RequestAsync_Cancellation_RemovesPendingEntry()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        using var cancellation = new CancellationTokenSource();
+        var handlerStarted = new TaskCompletionSource();
+        var releaseHandler = new TaskCompletionSource();
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            releaseHandler.Task.GetAwaiter().GetResult();
+            return new JoinRoomResponse(true, string.Empty);
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var request = client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(30),
+            cancellation.Token);
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        var result = await request.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Cancelled));
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+
+        releaseHandler.SetResult();
+    }
+
+    [Test]
+    public async Task RequestAsync_BeforeJoin_ReturnsSessionClosed()
+    {
+        var network = new MemoryNetNetwork();
+        await using var client = new GameNet(network.CreateTransport("client"), Options(Guid.NewGuid()));
+
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+
+        var result = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.SessionClosed));
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+    }
+
+    private static GameNetOptions Options(Guid appId, INetEventDispatcher dispatcher = null, TimeProvider timeProvider = null) => new()
     {
         Application = new NetApplicationInfo { ApplicationId = appId },
-        EventDispatcher = dispatcher
+        EventDispatcher = dispatcher,
+        TimeProvider = timeProvider ?? TimeProvider.System
     };
 
     private static bool IsScanFixtureType(Type type)

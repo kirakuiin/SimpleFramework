@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -175,6 +176,54 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task ServerKick_DisconnectsClientWithKickedReason_AndRemovesPeer()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var clientDisconnected = new TaskCompletionSource<NetPeerDisconnected>();
+
+        client.Session.PeerDisconnected += e =>
+        {
+            if (e.PeerId == PeerId.Server)
+                clientDisconnected.TrySetResult(e);
+        };
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var kick = await server.KickAsync(join.PeerId);
+        var disconnected = await clientDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(kick.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(disconnected.Reason, Is.EqualTo(DisconnectReason.Kicked));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.None));
+        await WaitUntilAsync(() => server.Peers.Peers.All(p => p.PeerId != join.PeerId));
+    }
+
+    [Test]
+    public async Task ClientLeave_ReportsLocalClosedReasonToServer()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var left = new TaskCompletionSource<NetPeerLeft>();
+
+        server.Session.PeerLeft += e => left.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await client.LeaveAsync();
+        var leftEvent = await left.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(leftEvent.PeerId, Is.EqualTo(join.PeerId));
+        Assert.That(leftEvent.Reason, Is.EqualTo(DisconnectReason.RemoteClosed));
+    }
+
+    [Test]
     public async Task Join_WhenServerDoesNotReply_TimesOutAndCanRetry()
     {
         var appId = Guid.NewGuid();
@@ -227,6 +276,66 @@ public class NetSessionTests
         Assert.That(join.Status, Is.EqualTo(NetSessionStatus.InvalidState));
     }
 
+    [Test]
+    public async Task SessionEvents_PeerJoinAndLeave_AreRaisedInOrderOnServer()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var events = new List<string>();
+        var left = new TaskCompletionSource();
+
+        server.Session.PeerJoined += e => events.Add($"joined:{e.Peer.PeerId.Value}");
+        server.Session.PeerDisconnected += e => events.Add($"disconnected:{e.PeerId.Value}");
+        server.Session.PeerLeft += e =>
+        {
+            events.Add($"left:{e.PeerId.Value}");
+            left.TrySetResult();
+        };
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await client.LeaveAsync();
+        await left.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(events, Is.EqualTo(new[]
+        {
+            $"joined:{join.PeerId.Value}",
+            $"disconnected:{join.PeerId.Value}",
+            $"left:{join.PeerId.Value}"
+        }));
+    }
+
+    [Test]
+    public async Task SessionEvents_StateChangedAndServerClosed_UseConfiguredDispatcher()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var dispatcher = new InlineCountingDispatcher();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, dispatcher: dispatcher));
+        var stateChanged = new TaskCompletionSource<NetSessionStateChanged>();
+        var serverClosed = new TaskCompletionSource<NetServerClosed>();
+
+        client.Session.StateChanged += e =>
+        {
+            if (e.NewRole == NetSessionRole.Client)
+                stateChanged.TrySetResult(e);
+        };
+        client.Session.ServerClosed += e => serverClosed.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await stateChanged.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await server.StopAsync();
+        await serverClosed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(dispatcher.PostCount, Is.GreaterThanOrEqualTo(2));
+        Assert.That(serverClosed.Task.Result.Reason, Is.EqualTo(DisconnectReason.ServerClosed));
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
@@ -236,12 +345,24 @@ public class NetSessionTests
         }
     }
 
-    private static GameNetOptions Options(Guid appId, int protocolVersion = 1) => new()
+    private static GameNetOptions Options(Guid appId, int protocolVersion = 1, INetEventDispatcher dispatcher = null) => new()
     {
         Application = new NetApplicationInfo
         {
             ApplicationId = appId,
             ProtocolVersion = protocolVersion
-        }
+        },
+        EventDispatcher = dispatcher
     };
+
+    private sealed class InlineCountingDispatcher : INetEventDispatcher
+    {
+        public int PostCount { get; private set; }
+
+        public void Post(Action action)
+        {
+            PostCount++;
+            action();
+        }
+    }
 }

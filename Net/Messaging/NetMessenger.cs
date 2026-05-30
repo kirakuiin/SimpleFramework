@@ -1,9 +1,10 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace SimpleFramework.Net;
 
 /// <summary>
-/// 负责类型化消息注册、编码、发送和处理。
+/// 负责类型化消息注册、编码、发送、请求响应和接收处理。
 /// </summary>
 public sealed class NetMessenger
 {
@@ -13,8 +14,12 @@ public sealed class NetMessenger
     private readonly NetDiagnostics _diagnostics;
     private readonly INetCodec _codec;
     private readonly INetEventDispatcher? _dispatcher;
+    private readonly TimeProvider _timeProvider;
     private readonly int _maxPacketSize;
     private readonly Dictionary<Type, List<Action<NetContext, object>>> _handlers = new();
+    private readonly Dictionary<Type, RequestHandler> _requestHandlers = new();
+    private readonly ConcurrentDictionary<long, PendingRequest> _pendingRequests = new();
+    private long _nextCorrelationId;
 
     internal NetMessenger(
         Func<byte[], ValueTask<NetSendResult>> sendToServer,
@@ -22,6 +27,7 @@ public sealed class NetMessenger
         Func<IReadOnlyCollection<PeerId>> getBroadcastTargets,
         NetDiagnostics diagnostics,
         int maxPacketSize,
+        TimeProvider? timeProvider = null,
         INetEventDispatcher? dispatcher = null,
         INetCodec? codec = null)
     {
@@ -30,6 +36,7 @@ public sealed class NetMessenger
         _getBroadcastTargets = getBroadcastTargets;
         _diagnostics = diagnostics;
         _maxPacketSize = maxPacketSize;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _dispatcher = dispatcher;
         _codec = codec ?? new JsonNetCodec();
     }
@@ -62,40 +69,45 @@ public sealed class NetMessenger
     }
 
     /// <summary>
-    /// 从客户端向服务器发送消息。
+    /// 注册请求处理器；每个请求类型只允许一个处理器。
+    /// </summary>
+    public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, TResponse> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        Registry.Register<TRequest>();
+        Registry.Register<TResponse>();
+
+        var requestType = typeof(TRequest);
+        if (_requestHandlers.ContainsKey(requestType))
+            throw new InvalidOperationException($"A request handler for '{requestType.FullName}' has already been registered.");
+
+        _requestHandlers[requestType] = new RequestHandler(
+            typeof(TResponse),
+            (ctx, request) => handler(ctx, (TRequest)request)!);
+    }
+
+    /// <summary>
+    /// 从客户端向服务器发送类型化消息。
     /// </summary>
     public async ValueTask<NetSendResult> SendToServerAsync<T>(T message)
     {
-        var descriptor = Registry.Get<T>();
-        byte[] payload;
-        try
-        {
-            payload = _codec.Encode(message);
-        }
-        catch (Exception ex)
-        {
-            _diagnostics.RecordError(new NetError("MessageEncodeFailed", ex.Message, ex));
-            return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
-        }
+        var packet = EncodeMessagePacket(message);
+        if (packet.Status != NetSendStatus.Ok)
+            return new NetSendResult(packet.Status, packet.Message);
 
-        var packet = new NetPacket(NetPacket.Message, descriptor.MessageId, PeerId.None, payload);
-        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
-        if (packetBytes.Length > _maxPacketSize)
-            return new NetSendResult(NetSendStatus.PacketTooLarge);
-
-        var send = await _sendToServer(packetBytes).ConfigureAwait(false);
+        var send = await _sendToServer(packet.Data!).ConfigureAwait(false);
         if (send.Succeeded)
-            _diagnostics.AddPacketSent(packetBytes.Length);
+            _diagnostics.AddPacketSent(packet.Data!.Length);
 
         return send;
     }
 
     /// <summary>
-    /// 从服务器向指定对等体发送消息。
+    /// 从服务器向指定对等体发送类型化消息。
     /// </summary>
     public async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
     {
-        var packet = EncodePacket(message);
+        var packet = EncodeMessagePacket(message);
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
@@ -107,11 +119,11 @@ public sealed class NetMessenger
     }
 
     /// <summary>
-    /// 从服务器向所有远端对等体广播消息。
+    /// 从服务器向所有远端对等体广播类型化消息。
     /// </summary>
     public async ValueTask<NetSendResult> BroadcastAsync<T>(T message)
     {
-        var packet = EncodePacket(message);
+        var packet = EncodeMessagePacket(message);
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
@@ -127,7 +139,96 @@ public sealed class NetMessenger
         return NetSendResult.Ok();
     }
 
-    internal bool TryHandlePacket(ReadOnlyMemory<byte> data, PeerId senderId)
+    /// <summary>
+    /// 向指定对等体发送请求，并等待与相关 ID 匹配的响应。
+    /// </summary>
+    public async Task<NetRequestResult<TResponse>> RequestAsync<TRequest, TResponse>(
+        PeerId peerId,
+        TRequest request,
+        TimeSpan timeout,
+        CancellationToken token = default)
+    {
+        if (token.IsCancellationRequested)
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Cancelled };
+        if (timeout <= TimeSpan.Zero)
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Timeout };
+
+        var requestDescriptor = Registry.Get<TRequest>();
+        var responseDescriptor = Registry.Get<TResponse>();
+        byte[] payload;
+        try
+        {
+            payload = _codec.Encode(request);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("RequestEncodeFailed", ex.Message, ex));
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.TransportFailed, Message = ex.Message };
+        }
+
+        var correlationId = Interlocked.Increment(ref _nextCorrelationId);
+        var packet = new NetPacket
+        {
+            Kind = NetPacket.Request,
+            MessageId = requestDescriptor.MessageId,
+            ResponseMessageId = responseDescriptor.MessageId,
+            CorrelationId = correlationId,
+            SenderId = PeerId.None,
+            Payload = payload
+        };
+        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        if (packetBytes.Length > _maxPacketSize)
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.TransportFailed, Message = "Packet is too large." };
+
+        var pending = new PendingRequest();
+        _pendingRequests[correlationId] = pending;
+        _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+
+        var send = await SendPacketToPeerAsync(peerId, packetBytes).ConfigureAwait(false);
+        if (!send.Succeeded)
+        {
+            RemovePending(correlationId);
+            return new NetRequestResult<TResponse>
+            {
+                Status = send.Status == NetSendStatus.SessionClosed ? NetRequestStatus.SessionClosed : NetRequestStatus.TransportFailed,
+                Message = send.Message
+            };
+        }
+
+        _diagnostics.AddPacketSent(packetBytes.Length);
+
+        PendingResponse response;
+        try
+        {
+            response = await WaitForResponseAsync(correlationId, pending, timeout, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            RemovePending(correlationId);
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Cancelled };
+        }
+        catch (TimeoutException)
+        {
+            RemovePending(correlationId);
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Timeout };
+        }
+
+        if (response.Status != NetRequestStatus.Ok)
+            return new NetRequestResult<TResponse> { Status = response.Status, Message = response.Message };
+
+        try
+        {
+            var decoded = (TResponse?)_codec.Decode(response.Payload, typeof(TResponse));
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Ok, Response = decoded };
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("ResponseDecodeFailed", ex.Message, ex));
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.TransportFailed, Message = ex.Message };
+        }
+    }
+
+    internal async Task<bool> TryHandlePacket(ReadOnlyMemory<byte> data, PeerId senderId)
     {
         NetPacket? packet;
         try
@@ -139,9 +240,32 @@ public sealed class NetMessenger
             return false;
         }
 
-        if (packet?.Kind != NetPacket.Message)
+        if (packet is null)
             return false;
-        _diagnostics.AddPacketReceived(data.Length);
+
+        return packet.Kind switch
+        {
+            NetPacket.Message => HandleMessagePacket(data.Length, packet, senderId),
+            NetPacket.Request => await HandleRequestPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
+            NetPacket.Response => HandleResponsePacket(data.Length, packet),
+            _ => false
+        };
+    }
+
+    internal void CancelPendingRequests(NetRequestStatus status, string? message = null)
+    {
+        foreach (var pair in _pendingRequests.ToArray())
+        {
+            if (_pendingRequests.TryRemove(pair.Key, out var pending))
+                pending.Completion.TrySetResult(new PendingResponse(status, Array.Empty<byte>(), message));
+        }
+
+        _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+    }
+
+    private bool HandleMessagePacket(int byteCount, NetPacket packet, PeerId senderId)
+    {
+        _diagnostics.AddPacketReceived(byteCount);
         if (!Registry.TryGet(packet.MessageId, out var descriptor))
         {
             _diagnostics.RecordError(new NetError("UnknownMessage", $"Unknown message id '{packet.MessageId}'."));
@@ -183,6 +307,108 @@ public sealed class NetMessenger
         return true;
     }
 
+    private async Task<bool> HandleRequestPacketAsync(int byteCount, NetPacket packet, PeerId senderId)
+    {
+        _diagnostics.AddPacketReceived(byteCount);
+        if (!Registry.TryGet(packet.MessageId, out var requestDescriptor))
+        {
+            _diagnostics.RecordError(new NetError("UnknownRequest", $"Unknown request message id '{packet.MessageId}'."));
+            return true;
+        }
+
+        if (!_requestHandlers.TryGetValue(requestDescriptor.MessageType, out var handler))
+        {
+            await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.NoHandler, Array.Empty<byte>(), null).ConfigureAwait(false);
+            return true;
+        }
+
+        if (!Registry.TryGet(packet.ResponseMessageId, out var responseDescriptor) || responseDescriptor.MessageType != handler.ResponseType)
+        {
+            await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.NoHandler, Array.Empty<byte>(), "Response type is not registered for this request.").ConfigureAwait(false);
+            return true;
+        }
+
+        try
+        {
+            var request = _codec.Decode(packet.Payload, requestDescriptor.MessageType);
+            if (request is null)
+            {
+                await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.HandlerException, Array.Empty<byte>(), "Request payload decoded to null.").ConfigureAwait(false);
+                return true;
+            }
+
+            var response = handler.Invoke(new NetContext(senderId), request);
+            var responsePayload = _codec.Encode(response);
+            await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.Ok, responsePayload, null).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("RequestHandlerError", ex.Message, ex));
+            await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.HandlerException, Array.Empty<byte>(), ex.Message).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    private bool HandleResponsePacket(int byteCount, NetPacket packet)
+    {
+        _diagnostics.AddPacketReceived(byteCount);
+        if (!_pendingRequests.TryRemove(packet.CorrelationId, out var pending))
+            return true;
+
+        _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+        pending.Completion.TrySetResult(new PendingResponse(packet.RequestStatus, packet.Payload, packet.Error));
+        return true;
+    }
+
+    private async Task SendRequestResponseAsync(PeerId recipient, long correlationId, ulong responseMessageId, NetRequestStatus status, byte[] payload, string? error)
+    {
+        var packet = new NetPacket
+        {
+            Kind = NetPacket.Response,
+            MessageId = responseMessageId,
+            ResponseMessageId = responseMessageId,
+            CorrelationId = correlationId,
+            SenderId = PeerId.None,
+            Payload = payload,
+            RequestStatus = status,
+            Error = error
+        };
+        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        if (packetBytes.Length > _maxPacketSize)
+        {
+            _diagnostics.RecordError(new NetError("ResponsePacketTooLarge", "Response packet exceeds MaxPacketSize."));
+            return;
+        }
+
+        var send = await SendPacketToPeerAsync(recipient, packetBytes).ConfigureAwait(false);
+        if (send.Succeeded)
+            _diagnostics.AddPacketSent(packetBytes.Length);
+    }
+
+    private async Task<PendingResponse> WaitForResponseAsync(long correlationId, PendingRequest pending, TimeSpan timeout, CancellationToken token)
+    {
+        var delay = Task.Delay(timeout, _timeProvider, token);
+        var completed = await Task.WhenAny(pending.Completion.Task, delay).ConfigureAwait(false);
+        if (completed == pending.Completion.Task)
+            return await pending.Completion.Task.ConfigureAwait(false);
+
+        await delay.ConfigureAwait(false);
+        RemovePending(correlationId);
+        throw new TimeoutException();
+    }
+
+    private ValueTask<NetSendResult> SendPacketToPeerAsync(PeerId peerId, byte[] packet)
+    {
+        return peerId == PeerId.Server ? _sendToServer(packet) : _sendToPeer(peerId, packet);
+    }
+
+    private void RemovePending(long correlationId)
+    {
+        _pendingRequests.TryRemove(correlationId, out _);
+        _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+    }
+
     private void DispatchHandler(Action action)
     {
         if (_dispatcher is null)
@@ -201,7 +427,7 @@ public sealed class NetMessenger
         }
     }
 
-    private EncodedPacket EncodePacket<T>(T message)
+    private EncodedPacket EncodeMessagePacket<T>(T message)
     {
         var descriptor = Registry.Get<T>();
         byte[] payload;
@@ -215,7 +441,13 @@ public sealed class NetMessenger
             return new EncodedPacket(NetSendStatus.TransportFailed, null, ex.Message);
         }
 
-        var packet = new NetPacket(NetPacket.Message, descriptor.MessageId, PeerId.None, payload);
+        var packet = new NetPacket
+        {
+            Kind = NetPacket.Message,
+            MessageId = descriptor.MessageId,
+            SenderId = PeerId.None,
+            Payload = payload
+        };
         var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
         return packetBytes.Length > _maxPacketSize
             ? new EncodedPacket(NetSendStatus.PacketTooLarge, null, null)
@@ -223,4 +455,12 @@ public sealed class NetMessenger
     }
 
     private readonly record struct EncodedPacket(NetSendStatus Status, byte[]? Data, string? Message);
+    private readonly record struct PendingResponse(NetRequestStatus Status, byte[] Payload, string? Message);
+    private sealed record RequestHandler(Type ResponseType, Func<NetContext, object, object> Invoke);
+
+    private sealed class PendingRequest
+    {
+        public TaskCompletionSource<PendingResponse> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 }
