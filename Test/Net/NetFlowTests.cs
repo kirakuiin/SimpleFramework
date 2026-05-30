@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -371,6 +372,44 @@ public class NetFlowTests
         }
     }
 
+    [Test]
+    public async Task Flow_OversizedProposal_ReturnsRejectedWithPacketTooLargeResponse()
+    {
+        var fixture = await TwoPeerFixture.StartAsync(appId => Options(appId, maxPacketSize: 16));
+        await using (fixture)
+        {
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal(new string('x', 200)),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Rejected));
+            Assert.That(result.Responses.Single().Message, Is.EqualTo(NetRequestStatus.PacketTooLarge.ToString()));
+        }
+    }
+
+    [Test]
+    public async Task Flow_SendQueueFull_ReturnsRejectedWithSendQueueFullResponse()
+    {
+        var fixture = await TwoPeerFixture.StartAsync(appId => Options(
+            appId,
+            maxPacketSize: 4096,
+            maxSendQueueBytesPerPeer: 8));
+        await using (fixture)
+        {
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Rejected));
+            Assert.That(result.Responses.Single().Message, Is.EqualTo(NetRequestStatus.SendQueueFull.ToString()));
+            Assert.That(fixture.Server.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+        }
+    }
+
     private sealed class TwoPeerFixture : IAsyncDisposable
     {
         private TwoPeerFixture(GameNet server, GameNet client)
@@ -382,12 +421,19 @@ public class NetFlowTests
         public GameNet Server { get; }
         public GameNet Client { get; }
 
-        public static async Task<TwoPeerFixture> StartAsync()
+        public static Task<TwoPeerFixture> StartAsync()
+        {
+            return StartAsync(appId => Options(appId));
+        }
+
+        public static async Task<TwoPeerFixture> StartAsync(Func<Guid, GameNetOptions> createOptions)
         {
             var appId = Guid.NewGuid();
             var network = new MemoryNetNetwork();
-            var server = new GameNet(network.CreateTransport("server"), Options(appId));
-            var client = new GameNet(network.CreateTransport("client"), Options(appId));
+            var serverOptions = createOptions(appId);
+            var clientOptions = createOptions(appId);
+            var server = new GameNet(network.CreateTransport("server"), serverOptions);
+            var client = new GameNet(network.CreateTransport("client"), clientOptions);
 
             await server.HostAsync(new HostOptions { Port = 7777 });
             await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
@@ -436,8 +482,13 @@ public class NetFlowTests
         }
     }
 
-    private static GameNetOptions Options(Guid appId) => new()
+    private static GameNetOptions Options(
+        Guid appId,
+        int maxPacketSize = 64 * 1024,
+        int maxSendQueueBytesPerPeer = 1024 * 1024) => new()
     {
-        Application = new NetApplicationInfo { ApplicationId = appId }
+        Application = new NetApplicationInfo { ApplicationId = appId },
+        MaxPacketSize = maxPacketSize,
+        MaxSendQueueBytesPerPeer = maxSendQueueBytesPerPeer
     };
 }
