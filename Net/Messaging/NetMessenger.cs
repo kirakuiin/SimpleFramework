@@ -5,14 +5,26 @@ namespace SimpleFramework.Net;
 public sealed class NetMessenger
 {
     private readonly Func<byte[], ValueTask<NetSendResult>> _sendToServer;
+    private readonly Func<PeerId, byte[], ValueTask<NetSendResult>> _sendToPeer;
+    private readonly Func<IReadOnlyCollection<PeerId>> _getBroadcastTargets;
     private readonly NetDiagnostics _diagnostics;
     private readonly INetCodec _codec;
+    private readonly int _maxPacketSize;
     private readonly Dictionary<Type, List<Action<NetContext, object>>> _handlers = new();
 
-    internal NetMessenger(Func<byte[], ValueTask<NetSendResult>> sendToServer, NetDiagnostics diagnostics, INetCodec? codec = null)
+    internal NetMessenger(
+        Func<byte[], ValueTask<NetSendResult>> sendToServer,
+        Func<PeerId, byte[], ValueTask<NetSendResult>> sendToPeer,
+        Func<IReadOnlyCollection<PeerId>> getBroadcastTargets,
+        NetDiagnostics diagnostics,
+        int maxPacketSize,
+        INetCodec? codec = null)
     {
         _sendToServer = sendToServer;
+        _sendToPeer = sendToPeer;
+        _getBroadcastTargets = getBroadcastTargets;
         _diagnostics = diagnostics;
+        _maxPacketSize = maxPacketSize;
         _codec = codec ?? new JsonNetCodec();
     }
 
@@ -49,7 +61,36 @@ public sealed class NetMessenger
         }
 
         var packet = new NetPacket(NetPacket.Message, descriptor.MessageId, PeerId.None, payload);
-        return await _sendToServer(JsonSerializer.SerializeToUtf8Bytes(packet)).ConfigureAwait(false);
+        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        if (packetBytes.Length > _maxPacketSize)
+            return new NetSendResult(NetSendStatus.PacketTooLarge);
+
+        return await _sendToServer(packetBytes).ConfigureAwait(false);
+    }
+
+    public async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
+    {
+        var packet = EncodePacket(message);
+        if (packet.Status != NetSendStatus.Ok)
+            return new NetSendResult(packet.Status, packet.Message);
+
+        return await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
+    }
+
+    public async ValueTask<NetSendResult> BroadcastAsync<T>(T message)
+    {
+        var packet = EncodePacket(message);
+        if (packet.Status != NetSendStatus.Ok)
+            return new NetSendResult(packet.Status, packet.Message);
+
+        foreach (var peerId in _getBroadcastTargets())
+        {
+            var send = await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
+            if (!send.Succeeded)
+                return send;
+        }
+
+        return NetSendResult.Ok();
     }
 
     internal bool TryHandlePacket(ReadOnlyMemory<byte> data, PeerId senderId)
@@ -103,4 +144,27 @@ public sealed class NetMessenger
 
         return true;
     }
+
+    private EncodedPacket EncodePacket<T>(T message)
+    {
+        var descriptor = Registry.Get<T>();
+        byte[] payload;
+        try
+        {
+            payload = _codec.Encode(message);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("MessageEncodeFailed", ex.Message, ex));
+            return new EncodedPacket(NetSendStatus.TransportFailed, null, ex.Message);
+        }
+
+        var packet = new NetPacket(NetPacket.Message, descriptor.MessageId, PeerId.None, payload);
+        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        return packetBytes.Length > _maxPacketSize
+            ? new EncodedPacket(NetSendStatus.PacketTooLarge, null, null)
+            : new EncodedPacket(NetSendStatus.Ok, packetBytes, null);
+    }
+
+    private readonly record struct EncodedPacket(NetSendStatus Status, byte[]? Data, string? Message);
 }

@@ -8,6 +8,7 @@ public sealed class GameNet : IAsyncDisposable
     private readonly INetTransport? _transport;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly Dictionary<TransportConnectionId, PeerId> _connectionPeers = new();
+    private readonly Dictionary<PeerId, TransportConnectionId> _peerConnections = new();
     private NetLifecycleState _state;
     private int _disposed;
     private ulong _nextPeerId = PeerId.Server.Value;
@@ -23,7 +24,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Messages = new NetMessenger(SendToServerPacketAsync, Diagnostics);
+        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize);
     }
 
     public GameNet(INetTransport transport, GameNetOptions options)
@@ -36,7 +37,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Messages = new NetMessenger(SendToServerPacketAsync, Diagnostics);
+        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize);
         _transport.PacketReceived += OnTransportPacketReceived;
     }
 
@@ -49,6 +50,10 @@ public sealed class GameNet : IAsyncDisposable
     public void On<T>(Action<NetContext, T> handler) => Messages.On(handler);
 
     public ValueTask<NetSendResult> SendToServerAsync<T>(T message) => Messages.SendToServerAsync(message);
+
+    public ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message) => Messages.SendAsync(peerId, message);
+
+    public ValueTask<NetSendResult> BroadcastAsync<T>(T message) => Messages.BroadcastAsync(message);
 
     public Task<NetSessionResult> HostAsync(HostOptions options, CancellationToken token = default)
     {
@@ -117,6 +122,8 @@ public sealed class GameNet : IAsyncDisposable
             if (join.Succeeded)
             {
                 _serverConnectionId = connect.ConnectionId;
+                lock (_connectionPeers)
+                    _connectionPeers[connect.ConnectionId] = PeerId.Server;
                 _state = NetLifecycleState.Client;
                 Session.SetState(NetSessionRole.Client);
             }
@@ -326,7 +333,10 @@ public sealed class GameNet : IAsyncDisposable
         var peerId = new PeerId(++_nextPeerId);
         var peer = new PeerInfo(peerId, IsServer: false, IsLocal: false, JoinedAt: _options.TimeProvider.GetUtcNow());
         lock (_connectionPeers)
+        {
             _connectionPeers[connectionId] = peerId;
+            _peerConnections[peerId] = connectionId;
+        }
         Peers.Upsert(peer);
         Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
 
@@ -385,6 +395,29 @@ public sealed class GameNet : IAsyncDisposable
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
 
         return _transport.SendAsync(_serverConnectionId, packet, NetChannel.Reliable);
+    }
+
+    private ValueTask<NetSendResult> SendToPeerPacketAsync(PeerId peerId, byte[] packet)
+    {
+        if (IsDisposed)
+            return ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
+        if (_transport is null)
+            return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
+
+        TransportConnectionId connectionId;
+        lock (_connectionPeers)
+        {
+            if (!_peerConnections.TryGetValue(peerId, out connectionId))
+                return ValueTask.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable));
+        }
+
+        return _transport.SendAsync(connectionId, packet, NetChannel.Reliable);
+    }
+
+    private IReadOnlyCollection<PeerId> GetBroadcastTargets()
+    {
+        lock (_connectionPeers)
+            return _peerConnections.Keys.ToArray();
     }
 
     private enum NetLifecycleState
