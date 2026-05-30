@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Net;
@@ -55,6 +56,24 @@ public class NetDiscoveryStatsTests
         Assert.That(rooms[0].IsJoinable, Is.True);
         Assert.That(rooms[0].Metadata.RoomName, Is.EqualTo("Room"));
         Assert.That(rooms[0].Metadata.HasPassword, Is.True);
+    }
+
+    [Test]
+    public async Task DiscoveryScan_ExposesEstimatedLatencyWhenAvailable()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(Options(appId), network);
+        await using var browser = new NetDiscovery(Options(appId), network);
+
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        var rooms = await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(100));
+
+        Assert.That(rooms.Single().EstimatedLatency, Is.Not.Null);
     }
 
     [Test]
@@ -286,6 +305,24 @@ public class NetDiscoveryStatsTests
         var result = await server.Stats.GetLatencyAsync(new PeerId(999), TimeSpan.FromSeconds(1));
 
         Assert.That(result.Status, Is.EqualTo(NetStatsStatus.PeerUnavailable));
+    }
+
+    [Test]
+    public async Task Stats_TcpTransportLoss_IsNull()
+    {
+        var appId = Guid.NewGuid();
+        await using var serverTransport = new TcpNetTransport();
+        await using var clientTransport = new TcpNetTransport();
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(clientTransport, Options(appId));
+
+        await server.HostAsync(new HostOptions { BindAddress = IPAddress.Loopback, Port = 0 });
+        await client.JoinAsync(new JoinOptions { Host = "127.0.0.1", Port = serverTransport.LocalEndPoint!.Port });
+
+        var result = await client.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.FromSeconds(2));
+
+        Assert.That(result.Status, Is.EqualTo(NetStatsStatus.Ok));
+        Assert.That(result.PeerStats.TransportLoss, Is.Null);
     }
 
     private static GameNetOptions Options(

@@ -397,7 +397,8 @@ public sealed class NetDiscovery : IAsyncDisposable
                 ApplicationId = packet.ApplicationId,
                 ProtocolVersion = packet.ProtocolVersion,
                 MetadataSchemaId = packet.MetadataSchemaId,
-                Metadata = metadata
+                Metadata = metadata,
+                EstimatedLatency = TimeSpan.Zero
             });
         }
 
