@@ -7,9 +7,9 @@
 
 ## 2. Transport Layer
 
-- [ ] 2.1 Add the new low-level `INetTransport` abstraction with listen, connect, disconnect, send, transport connection IDs, raw packet events, transport errors, and `NetChannel` handling.
-- [ ] 2.2 Implement deterministic `MemoryNetNetwork` and `MemoryNetTransport` for unit tests, including server registration, paired connection IDs, async event dispatch, disconnect events, and default `Unreliable` channel rejection.
-- [ ] 2.3 Add memory transport tests for connect, packet delivery, disconnect notification, unsupported unreliable channel, object disposal, and transport result codes.
+- [x] 2.1 Add the new low-level `INetTransport` abstraction with listen, connect, disconnect, send, transport connection IDs, raw packet events, transport errors, and `NetChannel` handling.
+- [x] 2.2 Implement deterministic `MemoryNetNetwork` and `MemoryNetTransport` for unit tests, including server registration, paired connection IDs, async event dispatch, disconnect events, and default `Unreliable` channel rejection.
+- [x] 2.3 Add memory transport tests for connect, packet delivery, disconnect notification, unsupported unreliable channel, object disposal, and transport result codes.
 - [ ] 2.4 Implement `TcpNetTransport` using `System.Net.Sockets`, bind address support, ephemeral port support for tests, and `[FrameLength][NetPacket bytes]` framing.
 - [ ] 2.5 Add TCP loopback tests for connect, multiple packet framing, larger packet delivery, bind address, abnormal disconnect detection, and default `Unreliable` channel rejection.
 
