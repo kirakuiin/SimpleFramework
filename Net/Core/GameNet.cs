@@ -1,12 +1,18 @@
 namespace SimpleFramework.Net;
 
+using System.Text.Json;
+
 public sealed class GameNet : IAsyncDisposable
 {
     private readonly GameNetOptions _options;
     private readonly INetTransport? _transport;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly Dictionary<TransportConnectionId, PeerId> _connectionPeers = new();
     private NetLifecycleState _state;
     private int _disposed;
+    private ulong _nextPeerId = PeerId.Server.Value;
+    private HostOptions? _hostOptions;
+    private TaskCompletionSource<JoinResult>? _pendingJoin;
 
     public GameNet(GameNetOptions options)
     {
@@ -15,6 +21,7 @@ public sealed class GameNet : IAsyncDisposable
         _options = options;
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
+        Peers = new PeerDirectory();
     }
 
     public GameNet(INetTransport transport, GameNetOptions options)
@@ -26,11 +33,14 @@ public sealed class GameNet : IAsyncDisposable
         _options = options;
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
+        Peers = new PeerDirectory();
+        _transport.PacketReceived += OnTransportPacketReceived;
     }
 
     public GameNetOptions Options => _options;
     public NetDiagnostics Diagnostics { get; }
     public NetSession Session { get; }
+    public PeerDirectory Peers { get; }
 
     public Task<NetSessionResult> HostAsync(HostOptions options, CancellationToken token = default)
     {
@@ -67,9 +77,42 @@ public sealed class GameNet : IAsyncDisposable
             if (connect.Status != NetTransportStatus.Ok)
                 return new JoinResult(MapTransportStatus(connect.Status), PeerId.None, connect.Message);
 
-            _state = NetLifecycleState.Client;
-            Session.SetState(NetSessionRole.Client);
-            return new JoinResult(NetSessionStatus.Ok, PeerId.None);
+            var pendingJoin = new TaskCompletionSource<JoinResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingJoin = pendingJoin;
+            var request = new SessionPacket(
+                SessionPacket.JoinRequest,
+                _options.Application.ApplicationId,
+                _options.Application.ProtocolVersion,
+                options.AuthPayload,
+                PeerId.None,
+                null,
+                NetSessionStatus.Ok,
+                null);
+            var send = await _transport.SendAsync(connect.ConnectionId, SerializePacket(request), NetChannel.System, token).ConfigureAwait(false);
+            if (!send.Succeeded)
+            {
+                _pendingJoin = null;
+                return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, send.Message);
+            }
+
+            JoinResult join;
+            try
+            {
+                join = await pendingJoin.Task.WaitAsync(options.Timeout, _options.TimeProvider, token).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _pendingJoin = null;
+                return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Join timed out.");
+            }
+
+            if (join.Succeeded)
+            {
+                _state = NetLifecycleState.Client;
+                Session.SetState(NetSessionRole.Client);
+            }
+
+            return join;
         }
         finally
         {
@@ -167,8 +210,15 @@ public sealed class GameNet : IAsyncDisposable
             if (start.Status != NetTransportStatus.Ok)
                 return new NetSessionResult(MapTransportStatus(start.Status), start.Message);
 
+            _hostOptions = options;
             _state = startedState;
             Session.SetState(startedState == NetLifecycleState.Hosting ? NetSessionRole.Host : NetSessionRole.DedicatedServer);
+            Peers.SetLocalPeer(PeerId.Server);
+            Peers.Upsert(new PeerInfo(
+                PeerId.Server,
+                IsServer: true,
+                IsLocal: startedState == NetLifecycleState.Hosting,
+                JoinedAt: _options.TimeProvider.GetUtcNow()));
             return NetSessionResult.Ok();
         }
         finally
@@ -185,6 +235,133 @@ public sealed class GameNet : IAsyncDisposable
     };
 
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
+
+    private void OnTransportPacketReceived(TransportPacketReceived packet)
+    {
+        _ = Task.Run(() => HandleTransportPacketAsync(packet));
+    }
+
+    private async Task HandleTransportPacketAsync(TransportPacketReceived packet)
+    {
+        SessionPacket? sessionPacket;
+        try
+        {
+            sessionPacket = JsonSerializer.Deserialize<SessionPacket>(packet.Data.Span);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("SessionPacketDecodeFailed", ex.Message, ex));
+            return;
+        }
+
+        if (sessionPacket is null)
+            return;
+
+        switch (sessionPacket.Kind)
+        {
+            case SessionPacket.JoinRequest:
+                await HandleJoinRequestAsync(packet.ConnectionId, sessionPacket).ConfigureAwait(false);
+                break;
+            case SessionPacket.JoinAccepted:
+                HandleJoinAccepted(sessionPacket);
+                break;
+            case SessionPacket.JoinRejected:
+                HandleJoinRejected(sessionPacket);
+                break;
+        }
+    }
+
+    private async Task HandleJoinRequestAsync(TransportConnectionId connectionId, SessionPacket packet)
+    {
+        if (_transport is null || _hostOptions is null || _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer))
+            return;
+
+        if (packet.ApplicationId != _options.Application.ApplicationId)
+        {
+            await SendJoinRejectedAsync(connectionId, NetSessionStatus.IncompatibleApplication, "ApplicationId is incompatible.").ConfigureAwait(false);
+            return;
+        }
+
+        if (packet.ProtocolVersion != _options.Application.ProtocolVersion)
+        {
+            await SendJoinRejectedAsync(connectionId, NetSessionStatus.IncompatibleProtocol, "ProtocolVersion is incompatible.").ConfigureAwait(false);
+            return;
+        }
+
+        if (Peers.Peers.Count(p => !p.IsServer) >= _hostOptions.MaxPeers)
+        {
+            await SendJoinRejectedAsync(connectionId, NetSessionStatus.CapacityFull, "Server is full.").ConfigureAwait(false);
+            return;
+        }
+
+        if (_hostOptions.Authenticator is not null)
+        {
+            var auth = await _hostOptions.Authenticator(new AuthContext
+            {
+                ConnectionId = connectionId,
+                AuthPayload = packet.AuthPayload
+            }).ConfigureAwait(false);
+
+            if (!auth.Succeeded)
+            {
+                await SendJoinRejectedAsync(connectionId, NetSessionStatus.AuthenticationFailed, auth.Message ?? "Authentication failed.").ConfigureAwait(false);
+                return;
+            }
+        }
+
+        var peerId = new PeerId(++_nextPeerId);
+        var peer = new PeerInfo(peerId, IsServer: false, IsLocal: false, JoinedAt: _options.TimeProvider.GetUtcNow());
+        lock (_connectionPeers)
+            _connectionPeers[connectionId] = peerId;
+        Peers.Upsert(peer);
+        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
+
+        var accepted = new SessionPacket(
+            SessionPacket.JoinAccepted,
+            _options.Application.ApplicationId,
+            _options.Application.ProtocolVersion,
+            null,
+            peerId,
+            Peers.Peers.ToArray(),
+            NetSessionStatus.Ok,
+            null);
+        await _transport.SendAsync(connectionId, SerializePacket(accepted), NetChannel.System).ConfigureAwait(false);
+    }
+
+    private async Task SendJoinRejectedAsync(TransportConnectionId connectionId, NetSessionStatus status, string message)
+    {
+        if (_transport is null)
+            return;
+
+        var rejected = new SessionPacket(
+            SessionPacket.JoinRejected,
+            _options.Application.ApplicationId,
+            _options.Application.ProtocolVersion,
+            null,
+            PeerId.None,
+            null,
+            status,
+            message);
+        await _transport.SendAsync(connectionId, SerializePacket(rejected), NetChannel.System).ConfigureAwait(false);
+    }
+
+    private void HandleJoinAccepted(SessionPacket packet)
+    {
+        var peers = packet.Peers ?? Array.Empty<PeerInfo>();
+        Peers.SetLocalPeer(packet.PeerId);
+        Peers.Replace(peers.Select(p => p.PeerId == packet.PeerId ? p with { IsLocal = true } : p));
+        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
+        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message));
+        _pendingJoin = null;
+    }
+
+    private void HandleJoinRejected(SessionPacket packet)
+    {
+        _pendingJoin?.TrySetResult(new JoinResult(packet.Status, PeerId.None, packet.Message));
+        _pendingJoin = null;
+    }
+
+    private static byte[] SerializePacket(SessionPacket packet) => JsonSerializer.SerializeToUtf8Bytes(packet);
 
     private enum NetLifecycleState
     {

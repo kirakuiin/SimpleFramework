@@ -5,6 +5,8 @@ public sealed class HostOptions
     public System.Net.IPAddress? BindAddress { get; init; }
     public int Port { get; init; }
     public int MaxPeers { get; init; } = 8;
+    public Func<AuthContext, Task<AuthResult>>? Authenticator { get; init; }
+    public ReconnectPolicy ReconnectPolicy { get; init; } = ReconnectPolicy.Disabled;
 }
 
 public sealed class JoinOptions
@@ -41,6 +43,7 @@ public readonly record struct AuthResult(bool Succeeded, string? Message = null)
 {
     public static AuthResult Ok() => new(true);
     public static AuthResult Fail(string message) => new(false, message);
+    public static AuthResult Reject(string message) => new(false, message);
 }
 
 public readonly record struct JoinResult(NetSessionStatus Status, PeerId PeerId, string? Message = null)

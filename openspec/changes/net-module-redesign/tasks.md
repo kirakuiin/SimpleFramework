@@ -22,10 +22,10 @@
 
 ## 4. Session And Peer Directory
 
-- [ ] 4.1 Add `HostOptions`, `JoinOptions`, `ReconnectPolicy`, `AuthContext`, `AuthResult`, `JoinResult`, `NetSessionStatus`, and disconnect reason models.
-- [ ] 4.2 Implement host and dedicated server roles, including local host participant creation for host mode and no local player participant for dedicated server mode.
+- [x] 4.1 Add `HostOptions`, `JoinOptions`, `ReconnectPolicy`, `AuthContext`, `AuthResult`, `JoinResult`, `NetSessionStatus`, and disconnect reason models.
+- [x] 4.2 Implement host and dedicated server roles, including local host participant creation for host mode and no local player participant for dedicated server mode.
 - [ ] 4.3 Implement direct join handshake with `ApplicationId`, `ProtocolVersion`, auth payload, max peer validation, structured rejection results, and assigned `PeerId`.
-- [ ] 4.4 Add `PeerDirectory` with `PeerId.None`, `PeerId.Server`, authoritative server storage, client read-only snapshots, and session-generic `PeerInfo`.
+- [x] 4.4 Add `PeerDirectory` with `PeerId.None`, `PeerId.Server`, authoritative server storage, client read-only snapshots, and session-generic `PeerInfo`.
 - [ ] 4.5 Implement peer joined, peer left, peer disconnected, peer reconnected, state changed, and server closed events with dispatcher-safe delivery.
 - [ ] 4.6 Implement server kick and client/host/server disconnect semantics with explicit disconnect reasons.
 - [ ] 4.7 Implement opt-in reconnect using unpredictable reconnect tokens, reconnect grace window, original `PeerId` restoration, expiry cleanup, and temporary-disconnect versus final-removal distinction.
