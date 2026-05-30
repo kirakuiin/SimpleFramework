@@ -1,0 +1,102 @@
+## 1. Core Foundation
+
+- [x] 1.1 Add Net core identifiers, channels, shared result enums/records, `GameNetOptions`, `NetApplicationInfo`, and `INetEventDispatcher` under `Net/Core`.
+- [x] 1.2 Add `NetDiagnostics` and read-only diagnostics snapshots with counters for peers, pending operations, packets, bytes, drops, and errors.
+- [x] 1.3 Add NUnit coverage for option validation, invalid `ApplicationId`, invalid `ProtocolVersion`, diagnostics snapshots, and target framework staying `net8.0`.
+- [x] 1.4 Add a minimal `GameNet` facade that validates options and exposes diagnostics, session, messaging, discovery, stats, and flow entry points as they become available.
+
+## 2. Transport Layer
+
+- [ ] 2.1 Add the new low-level `INetTransport` abstraction with listen, connect, disconnect, send, transport connection IDs, raw packet events, transport errors, and `NetChannel` handling.
+- [ ] 2.2 Implement deterministic `MemoryNetNetwork` and `MemoryNetTransport` for unit tests, including server registration, paired connection IDs, async event dispatch, disconnect events, and default `Unreliable` channel rejection.
+- [ ] 2.3 Add memory transport tests for connect, packet delivery, disconnect notification, unsupported unreliable channel, object disposal, and transport result codes.
+- [ ] 2.4 Implement `TcpNetTransport` using `System.Net.Sockets`, bind address support, ephemeral port support for tests, and `[FrameLength][NetPacket bytes]` framing.
+- [ ] 2.5 Add TCP loopback tests for connect, multiple packet framing, larger packet delivery, bind address, abnormal disconnect detection, and default `Unreliable` channel rejection.
+
+## 3. GameNet Lifecycle
+
+- [ ] 3.1 Add lifecycle state and an async gate so `HostAsync`, `StartServerAsync`, `JoinAsync`, `LeaveAsync`, `StopAsync`, and `DisposeAsync` are serialized.
+- [ ] 3.2 Make `StopAsync` and `DisposeAsync` idempotent and ensure dispose cancels discovery loops, pending requests, pending flows, session work, transport work, and owned resources.
+- [ ] 3.3 Make send, connection, discovery, stats, and flow APIs return `ObjectDisposed` results or throw `ObjectDisposedException` after disposal.
+- [ ] 3.4 Add lifecycle tests for concurrent starts, repeated stop/dispose, API use after dispose, and shutdown cancellation behavior.
+
+## 4. Session And Peer Directory
+
+- [ ] 4.1 Add `HostOptions`, `JoinOptions`, `ReconnectPolicy`, `AuthContext`, `AuthResult`, `JoinResult`, `NetSessionStatus`, and disconnect reason models.
+- [ ] 4.2 Implement host and dedicated server roles, including local host participant creation for host mode and no local player participant for dedicated server mode.
+- [ ] 4.3 Implement direct join handshake with `ApplicationId`, `ProtocolVersion`, auth payload, max peer validation, structured rejection results, and assigned `PeerId`.
+- [ ] 4.4 Add `PeerDirectory` with `PeerId.None`, `PeerId.Server`, authoritative server storage, client read-only snapshots, and session-generic `PeerInfo`.
+- [ ] 4.5 Implement peer joined, peer left, peer disconnected, peer reconnected, state changed, and server closed events with dispatcher-safe delivery.
+- [ ] 4.6 Implement server kick and client/host/server disconnect semantics with explicit disconnect reasons.
+- [ ] 4.7 Implement opt-in reconnect using unpredictable reconnect tokens, reconnect grace window, original `PeerId` restoration, expiry cleanup, and temporary-disconnect versus final-removal distinction.
+- [ ] 4.8 Add session tests for host, dedicated server, successful join, incompatible application, incompatible protocol, auth success/failure, password auth payload, max peers, kick, shutdown, peer directory updates, and reconnect behavior.
+
+## 5. Messaging Core
+
+- [ ] 5.1 Add message attributes, handler attributes, `NetContext`, `INetCodec`, default `System.Text.Json` codec, internal packet envelope, and `NetMessageRegistry`.
+- [ ] 5.2 Implement stable message keys, derived message IDs, duplicate key detection, ID collision detection, deterministic assembly scanning, and fingerprint policy handling.
+- [ ] 5.3 Implement normal message handlers with `NetContext`, multiple handlers in registration order, handler exception containment, and structured message errors.
+- [ ] 5.4 Implement `SendToServerAsync`, server `SendAsync(peer)`, and server `BroadcastAsync` for registered typed messages.
+- [ ] 5.5 Implement server-validated `RelayAsync` with original sender preservation, allowlist/permission/rate-limit checks, missing target errors, and permission errors.
+- [ ] 5.6 Enforce `MaxPacketSize`, send queue byte/packet limits, `SendQueueFull`, `PacketTooLarge`, `RateLimited`, and structured transport send failures across send, broadcast, relay, request, and flow paths.
+- [ ] 5.7 Add messaging tests for registration, duplicate keys, type rename stability through explicit keys, deterministic handler scanning, handler order, handler exceptions, codec errors, unknown messages, send-to-server, server send, broadcast, relay, relay denial, packet limits, and queue limits.
+
+## 6. Request Response
+
+- [ ] 6.1 Add `OnRequest<TRequest,TResponse>` and `RequestAsync<TRequest,TResponse>` APIs with one handler per request type.
+- [ ] 6.2 Implement request correlation IDs, pending request table, timeout through the configured `TimeProvider`, cancellation cleanup, no-handler errors, handler exception errors, and session-closed errors.
+- [ ] 6.3 Ignore late and duplicate responses without recreating pending state or mutating completed requests.
+- [ ] 6.4 Add deterministic `ManualTimeProvider` test helper for timeout, reconnect, discovery, stats, and flow tests.
+- [ ] 6.5 Add request tests for success, no handler, handler exception, timeout, cancellation cleanup, late response, duplicate response, disconnect/session close failure, and pending diagnostics count.
+
+## 7. Discovery And Metadata
+
+- [ ] 7.1 Add `DiscoveryOptions`, discovery packet envelope, `LanAdvertiseInfo`, metadata schema registry, schema key/hash helpers, scan result models, and browser snapshot models.
+- [ ] 7.2 Implement continuous advertise start, metadata update, stop, invalid update-before-start result, oversized packet discard, and diagnostics for dropped discovery packets.
+- [ ] 7.3 Implement one-shot `ScanAsync<TMetadata>` and continuous `StartBrowserAsync<TMetadata>` with room found, updated, lost events and room timeout through the configured time source.
+- [ ] 7.4 Filter or mark rooms by `ApplicationId` and `ProtocolVersion`, keep incompatible rooms non-joinable, and keep discovery metadata separate from authentication.
+- [ ] 7.5 Ensure metadata is public data only, supports `HasPassword` indicators, rejects schema collisions, and never carries real passwords, tokens, or private room keys.
+- [ ] 7.6 Add discovery tests for application filtering, protocol incompatibility, metadata serialization, schema collision, oversized packet discard, advertise lifecycle, scan result content, browser found/updated/lost events, password metadata rules, and manual IP join fallback.
+
+## 8. Application-Layer Stats
+
+- [ ] 8.1 Add `NetStats`, internal ping/pong messages, `NetPeerStats`, stats result models, and peer stats snapshots.
+- [ ] 8.2 Implement application-layer RTT, average RTT, jitter, timeout count, last-seen time, and `ProbeLoss` using the configured time source.
+- [ ] 8.3 Keep `TransportLoss` null for TCP and memory transports unless a future transport explicitly supplies transport loss.
+- [ ] 8.4 Surface discovery scan request/reply timing as room-list latency when available without requiring ICMP.
+- [ ] 8.5 Add stats tests for ping/pong RTT, timeout, probe loss, last seen, TCP transport loss null, timeout peer failure, fake time behavior, and discovery latency estimation.
+
+## 9. Server-Owned Flow
+
+- [ ] 9.1 Add `NetFlow`, proposal/vote/barrier packet models, proposal handler registration, `FlowPolicy`, `FlowResult<TResponse>`, per-peer responses, and `FlowEndReason`.
+- [ ] 9.2 Implement server-only flow initiation and reject client-initiated multiplayer flow attempts.
+- [ ] 9.3 Implement all accepted, any accepted, majority accepted, quorum, custom policy, rejected, timeout, cancelled, no-targets, and session-closed outcomes.
+- [ ] 9.4 Track pending flows by stable `PeerId`, expose pending peer queries, and implement manual `ResendPendingTo(peer)`.
+- [ ] 9.5 Keep flow pending when a peer disconnects until policy, timeout, or manual server action completes it, and ignore late responses after completion.
+- [ ] 9.6 Ensure V1.3 does not add client-side pending recovery, flow persistence, server restart recovery, nested flows, client-initiated flows, or automatic replay after reconnect.
+- [ ] 9.7 Add flow tests for all accepted, any accepted, majority, quorum, no targets, rejection, timeout, disconnect while pending, pending query, manual resend, late response ignored, and client initiation rejection.
+
+## 10. Event Dispatching And Error Containment
+
+- [ ] 10.1 Route session, messaging, discovery, stats, flow, and diagnostics events through `INetEventDispatcher` when configured.
+- [ ] 10.2 Keep default event delivery on the current network task context when no dispatcher is configured.
+- [ ] 10.3 Convert dispatcher `Post` failures and callback exceptions into structured diagnostics errors without stopping transport loops or later events.
+- [ ] 10.4 Preserve event ordering for events produced by the same background task, including peer disconnect and peer removal ordering.
+- [ ] 10.5 Add dispatcher tests for default context delivery, dispatcher delivery, dispatcher failure, callback exception containment, diagnostics error creation, and same-peer event ordering.
+
+## 11. Integration Cleanup
+
+- [ ] 11.1 Search all production and test references to old `ITransport`, `ITransfer`, `ConnectionModel`, `ProtocolHandler`, `PingExecutor`, and UDP broadcast helpers before deleting or isolating legacy APIs.
+- [ ] 11.2 Remove old lifecycle APIs or move required compatibility pieces under a clearly marked legacy area with `[Obsolete]` attributes when external guarded code still needs them.
+- [ ] 11.3 Decide whether `ProtocolHandler`, `PingExecutor`, and `UdpBroadcast` remain supported utilities or are replaced by the new messenger, stats, and discovery code; update tests accordingly.
+- [ ] 11.4 Keep Godot-specific code guarded with `#if GODOT` and ensure normal .NET builds do not require Godot runtime behavior.
+- [ ] 11.5 Update `Net/README.md` with minimal `GameNet`, `TcpNetTransport`, host, join, send, discovery, stats, and flow examples.
+
+## 12. Verification
+
+- [ ] 12.1 Run `dotnet restore .\SimpleFramework.sln` and resolve restore issues without changing target framework from `net8.0`.
+- [ ] 12.2 Run `dotnet build .\SimpleFramework.sln` and fix compile errors across Net, GDExt guarded code, and tests.
+- [ ] 12.3 Run `dotnet test .\Test\Test.csproj --filter "FullyQualifiedName~Net"` and fix focused Net test failures.
+- [ ] 12.4 Run `dotnet test .\SimpleFramework.sln` and fix full solution test failures.
+- [ ] 12.5 Run `openspec validate net-module-redesign --type change --strict --no-interactive` and fix artifact validation issues.
+- [ ] 12.6 Review implementation against `proposal.md`, `design.md`, all five specs, and `implementation-plan.md`; close any coverage gaps before archiving.
