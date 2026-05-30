@@ -5,6 +5,7 @@ internal sealed record SessionPacket(
     Guid ApplicationId,
     int ProtocolVersion,
     byte[]? AuthPayload,
+    string? ReconnectToken,
     PeerId PeerId,
     PeerInfo[]? Peers,
     NetSessionStatus Status,

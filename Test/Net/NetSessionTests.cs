@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Net;
+using Test.Net.TestDoubles;
 
 namespace Test.Net;
 
@@ -95,6 +96,39 @@ public class NetSessionTests
 
         Assert.That(join.Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
         Assert.That(join.Message, Does.Contain("WrongPassword"));
+    }
+
+    [Test]
+    public async Task Join_WithAcceptedPasswordAuthPayload_Succeeds()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var expectedPassword = new byte[] { 1, 2, 3, 4 };
+        byte[] receivedPayload = null;
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            Authenticator = ctx =>
+            {
+                receivedPayload = ctx.AuthPayload;
+                return Task.FromResult(ctx.AuthPayload is not null && ctx.AuthPayload.SequenceEqual(expectedPassword)
+                    ? AuthResult.Ok()
+                    : AuthResult.Reject("WrongPassword"));
+            }
+        });
+
+        var join = await client.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            AuthPayload = expectedPassword
+        });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(receivedPayload, Is.EqualTo(expectedPassword));
     }
 
     [Test]
@@ -336,6 +370,114 @@ public class NetSessionTests
         Assert.That(serverClosed.Task.Result.Reason, Is.EqualTo(DisconnectReason.ServerClosed));
     }
 
+    [Test]
+    public async Task Reconnect_DisabledByDefault_RemovesDisconnectedPeer()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await client.LeaveAsync();
+
+        await WaitUntilAsync(() => server.Peers.Peers.All(p => p.PeerId != join.PeerId));
+    }
+
+    [Test]
+    public async Task Reconnect_WithValidToken_RestoresOriginalPeerId()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var reconnected = new TaskCompletionSource<NetPeerReconnected>();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var firstClient = new GameNet(network.CreateTransport("client-a"), Options(appId));
+        await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId));
+
+        server.Session.PeerReconnected += e => reconnected.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => server.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
+
+        var secondJoin = await secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+        var eventArgs = await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(firstJoin.ReconnectToken, Is.Not.Null.And.Not.Empty);
+        Assert.That(secondJoin.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(secondJoin.PeerId, Is.EqualTo(firstJoin.PeerId));
+        Assert.That(eventArgs.PeerId, Is.EqualTo(firstJoin.PeerId));
+        Assert.That(server.Peers.Peers.Single(p => p.PeerId == firstJoin.PeerId).IsConnected, Is.True);
+    }
+
+    [Test]
+    public async Task Reconnect_IssuesDifferentTokensForDifferentPeers()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var firstClient = new GameNet(network.CreateTransport("client-a"), Options(appId));
+        await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var secondJoin = await secondClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(firstJoin.ReconnectToken, Is.Not.Null.And.Not.Empty);
+        Assert.That(secondJoin.ReconnectToken, Is.Not.Null.And.Not.Empty);
+        Assert.That(secondJoin.ReconnectToken, Is.Not.EqualTo(firstJoin.ReconnectToken));
+    }
+
+    [Test]
+    public async Task Reconnect_ExpiredToken_RemovesPeerAndRejectsRestore()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+        await using var firstClient = new GameNet(network.CreateTransport("client-a"), Options(appId, timeProvider: clock));
+        await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId, timeProvider: clock));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(5))
+        });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => server.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await WaitUntilAsync(() => server.Peers.Peers.All(p => p.PeerId != firstJoin.PeerId));
+
+        var secondJoin = await secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+
+        Assert.That(secondJoin.Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
@@ -345,14 +487,15 @@ public class NetSessionTests
         }
     }
 
-    private static GameNetOptions Options(Guid appId, int protocolVersion = 1, INetEventDispatcher dispatcher = null) => new()
+    private static GameNetOptions Options(Guid appId, int protocolVersion = 1, INetEventDispatcher dispatcher = null, TimeProvider timeProvider = null) => new()
     {
         Application = new NetApplicationInfo
         {
             ApplicationId = appId,
             ProtocolVersion = protocolVersion
         },
-        EventDispatcher = dispatcher
+        EventDispatcher = dispatcher,
+        TimeProvider = timeProvider ?? TimeProvider.System
     };
 
     private sealed class InlineCountingDispatcher : INetEventDispatcher

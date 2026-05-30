@@ -3,7 +3,7 @@ namespace SimpleFramework.Net;
 /// <summary>
 /// 会话中的通用对等体信息。
 /// </summary>
-public sealed record PeerInfo(PeerId PeerId, bool IsServer, bool IsLocal, DateTimeOffset JoinedAt);
+public sealed record PeerInfo(PeerId PeerId, bool IsServer, bool IsLocal, DateTimeOffset JoinedAt, bool IsConnected = true);
 
 /// <summary>
 /// 维护当前会话可见的对等体目录。

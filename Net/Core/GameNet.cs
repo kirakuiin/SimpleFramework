@@ -1,5 +1,6 @@
 namespace SimpleFramework.Net;
 
+using System.Security.Cryptography;
 using System.Text.Json;
 
 /// <summary>
@@ -18,6 +19,9 @@ public sealed class GameNet : IAsyncDisposable
     private HostOptions? _hostOptions;
     private TaskCompletionSource<JoinResult>? _pendingJoin;
     private TransportConnectionId _serverConnectionId = TransportConnectionId.None;
+    private readonly Dictionary<string, ReconnectEntry> _reconnectTokens = new();
+    private readonly Dictionary<PeerId, string> _peerReconnectTokens = new();
+    private readonly Dictionary<PeerId, CancellationTokenSource> _reconnectExpiry = new();
 
     /// <summary>
     /// 创建不带传输的 GameNet 实例，适用于只使用注册、验证或离线组件的场景。
@@ -219,6 +223,7 @@ public sealed class GameNet : IAsyncDisposable
                 _options.Application.ApplicationId,
                 _options.Application.ProtocolVersion,
                 options.AuthPayload,
+                options.ReconnectToken,
                 PeerId.None,
                 null,
                 NetSessionStatus.Ok,
@@ -353,6 +358,7 @@ public sealed class GameNet : IAsyncDisposable
                 _connectionPeers.Clear();
                 _peerConnections.Clear();
             }
+            ClearReconnectState();
             _serverConnectionId = TransportConnectionId.None;
             return NetSessionResult.Ok();
         }
@@ -376,6 +382,7 @@ public sealed class GameNet : IAsyncDisposable
             _state = NetLifecycleState.Stopped;
             SetSessionRole(NetSessionRole.None);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "GameNet was disposed.");
+            ClearReconnectState();
         }
         finally
         {
@@ -557,6 +564,12 @@ public sealed class GameNet : IAsyncDisposable
             return;
         }
 
+        if (!string.IsNullOrWhiteSpace(packet.ReconnectToken))
+        {
+            await HandleReconnectRequestAsync(connectionId, packet.ReconnectToken).ConfigureAwait(false);
+            return;
+        }
+
         if (Peers.Peers.Count(p => !p.IsServer) >= _hostOptions.MaxPeers)
         {
             await SendJoinRejectedAsync(connectionId, NetSessionStatus.CapacityFull, "Server is full.").ConfigureAwait(false);
@@ -579,6 +592,7 @@ public sealed class GameNet : IAsyncDisposable
         }
 
         var peerId = new PeerId(++_nextPeerId);
+        var reconnectToken = _hostOptions.ReconnectPolicy.IsEnabled ? CreateReconnectToken(peerId) : null;
         var peer = new PeerInfo(peerId, IsServer: false, IsLocal: false, JoinedAt: _options.TimeProvider.GetUtcNow());
         lock (_connectionPeers)
         {
@@ -586,7 +600,7 @@ public sealed class GameNet : IAsyncDisposable
             _peerConnections[peerId] = connectionId;
         }
         Peers.Upsert(peer);
-        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
+        Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
         DispatchFrameworkEvent(() => Session.RaisePeerJoined(new NetPeerJoined(peer)));
 
         var accepted = new SessionPacket(
@@ -594,7 +608,59 @@ public sealed class GameNet : IAsyncDisposable
             _options.Application.ApplicationId,
             _options.Application.ProtocolVersion,
             null,
+            reconnectToken,
             peerId,
+            Peers.Peers.ToArray(),
+            NetSessionStatus.Ok,
+            null);
+        await _transport.SendAsync(connectionId, SerializePacket(accepted), NetChannel.System).ConfigureAwait(false);
+    }
+
+    private async Task HandleReconnectRequestAsync(TransportConnectionId connectionId, string reconnectToken)
+    {
+        if (_transport is null || _hostOptions is null || !_hostOptions.ReconnectPolicy.IsEnabled)
+        {
+            await SendJoinRejectedAsync(connectionId, NetSessionStatus.AuthenticationFailed, "Reconnect is not enabled.").ConfigureAwait(false);
+            return;
+        }
+
+        ReconnectEntry entry;
+        lock (_connectionPeers)
+        {
+            if (!_reconnectTokens.TryGetValue(reconnectToken, out entry))
+            {
+                entry = default;
+            }
+        }
+
+        if (entry.PeerId == PeerId.None || entry.ExpiresAt <= _options.TimeProvider.GetUtcNow())
+        {
+            await SendJoinRejectedAsync(connectionId, NetSessionStatus.AuthenticationFailed, "Reconnect token is invalid or expired.").ConfigureAwait(false);
+            return;
+        }
+
+        CancelReconnectExpiry(entry.PeerId);
+        lock (_connectionPeers)
+        {
+            _connectionPeers[connectionId] = entry.PeerId;
+            _peerConnections[entry.PeerId] = connectionId;
+        }
+
+        var existing = Peers.Peers.FirstOrDefault(p => p.PeerId == entry.PeerId);
+        var peer = existing is null
+            ? new PeerInfo(entry.PeerId, IsServer: false, IsLocal: false, JoinedAt: _options.TimeProvider.GetUtcNow())
+            : existing with { IsConnected = true };
+        Peers.Upsert(peer);
+        Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
+        DispatchFrameworkEvent(() => Session.RaisePeerReconnected(new NetPeerReconnected(entry.PeerId)));
+
+        var accepted = new SessionPacket(
+            SessionPacket.JoinAccepted,
+            _options.Application.ApplicationId,
+            _options.Application.ProtocolVersion,
+            null,
+            reconnectToken,
+            entry.PeerId,
             Peers.Peers.ToArray(),
             NetSessionStatus.Ok,
             null);
@@ -611,6 +677,7 @@ public sealed class GameNet : IAsyncDisposable
             _options.Application.ApplicationId,
             _options.Application.ProtocolVersion,
             null,
+            null,
             PeerId.None,
             null,
             status,
@@ -624,7 +691,7 @@ public sealed class GameNet : IAsyncDisposable
         Peers.SetLocalPeer(packet.PeerId);
         Peers.Replace(peers.Select(p => p.PeerId == packet.PeerId ? p with { IsLocal = true } : p));
         Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
-        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message));
+        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message, packet.ReconnectToken));
         _pendingJoin = null;
     }
 
@@ -690,17 +757,55 @@ public sealed class GameNet : IAsyncDisposable
 
     private void RemoveRemotePeer(PeerId peerId, DisconnectReason reason)
     {
+        if (TryMarkPeerTemporarilyDisconnected(peerId, reason))
+            return;
+
+        RemoveRemotePeerFinal(peerId, reason, raiseDisconnected: true);
+    }
+
+    private bool TryMarkPeerTemporarilyDisconnected(PeerId peerId, DisconnectReason reason)
+    {
+        if (_hostOptions?.ReconnectPolicy.IsEnabled != true)
+            return false;
+        if (reason is DisconnectReason.Kicked or DisconnectReason.ServerClosed or DisconnectReason.RateLimited)
+            return false;
+
+        var existing = Peers.Peers.FirstOrDefault(p => p.PeerId == peerId);
+        if (existing is null)
+            return false;
+
+        var token = GetOrCreateReconnectToken(peerId);
+        var expiresAt = _options.TimeProvider.GetUtcNow() + _hostOptions.ReconnectPolicy.GraceWindow;
+        lock (_connectionPeers)
+            _reconnectTokens[token] = new ReconnectEntry(peerId, expiresAt);
+
+        Peers.Upsert(existing with { IsConnected = false });
+        Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
+        DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peerId, reason)));
+        ScheduleReconnectExpiry(peerId, _hostOptions.ReconnectPolicy.GraceWindow, reason);
+        return true;
+    }
+
+    private void RemoveRemotePeerFinal(PeerId peerId, DisconnectReason reason, bool raiseDisconnected)
+    {
+        CancelReconnectExpiry(peerId);
+        string? token = null;
         lock (_connectionPeers)
         {
+            if (_peerReconnectTokens.Remove(peerId, out var existingToken))
+                token = existingToken;
             _peerConnections.Remove(peerId);
             foreach (var pair in _connectionPeers.Where(pair => pair.Value == peerId).ToArray())
                 _connectionPeers.Remove(pair.Key);
+            if (token is not null)
+                _reconnectTokens.Remove(token);
         }
 
         Peers.Remove(peerId);
-        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
+        Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
         Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Peer connection was closed.");
-        DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peerId, reason)));
+        if (raiseDisconnected)
+            DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peerId, reason)));
         DispatchFrameworkEvent(() => Session.RaisePeerLeft(new NetPeerLeft(peerId, reason)));
     }
 
@@ -746,6 +851,98 @@ public sealed class GameNet : IAsyncDisposable
             Diagnostics.RecordError(new NetError("EventDispatchError", ex.Message, ex));
         }
     }
+
+    private string CreateReconnectToken(PeerId peerId)
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        var token = Convert.ToBase64String(bytes);
+        lock (_connectionPeers)
+        {
+            _reconnectTokens[token] = new ReconnectEntry(peerId, DateTimeOffset.MaxValue);
+            _peerReconnectTokens[peerId] = token;
+        }
+
+        return token;
+    }
+
+    private string GetOrCreateReconnectToken(PeerId peerId)
+    {
+        lock (_connectionPeers)
+        {
+            if (_peerReconnectTokens.TryGetValue(peerId, out var token))
+                return token;
+        }
+
+        return CreateReconnectToken(peerId);
+    }
+
+    private void ScheduleReconnectExpiry(PeerId peerId, TimeSpan graceWindow, DisconnectReason reason)
+    {
+        CancelReconnectExpiry(peerId);
+        var cancellation = new CancellationTokenSource();
+        lock (_connectionPeers)
+            _reconnectExpiry[peerId] = cancellation;
+
+        _ = ExpireReconnectAsync(peerId, graceWindow, reason, cancellation.Token);
+    }
+
+    private async Task ExpireReconnectAsync(PeerId peerId, TimeSpan graceWindow, DisconnectReason reason, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(graceWindow, _options.TimeProvider, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (token.IsCancellationRequested)
+            return;
+
+        RemoveRemotePeerFinal(peerId, reason, raiseDisconnected: false);
+    }
+
+    private void CancelReconnectExpiry(PeerId peerId)
+    {
+        CancellationTokenSource? cancellation = null;
+        lock (_connectionPeers)
+        {
+            if (_reconnectExpiry.Remove(peerId, out var existing))
+                cancellation = existing;
+        }
+
+        if (cancellation is null)
+            return;
+
+        cancellation.Cancel();
+        cancellation.Dispose();
+    }
+
+    private void ClearReconnectState()
+    {
+        CancellationTokenSource[] expirations;
+        lock (_connectionPeers)
+        {
+            expirations = _reconnectExpiry.Values.ToArray();
+            _reconnectExpiry.Clear();
+            _reconnectTokens.Clear();
+            _peerReconnectTokens.Clear();
+        }
+
+        foreach (var expiration in expirations)
+        {
+            expiration.Cancel();
+            expiration.Dispose();
+        }
+    }
+
+    private int CountConnectedPeers()
+    {
+        return Peers.Peers.Count(peer => peer.IsConnected);
+    }
+
+    private readonly record struct ReconnectEntry(PeerId PeerId, DateTimeOffset ExpiresAt);
 
     private enum NetLifecycleState
     {

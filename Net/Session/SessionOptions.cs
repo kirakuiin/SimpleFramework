@@ -134,7 +134,7 @@ public readonly record struct AuthResult(bool Succeeded, string? Message = null)
 /// <summary>
 /// 客户端加入服务器的结果。
 /// </summary>
-public readonly record struct JoinResult(NetSessionStatus Status, PeerId PeerId, string? Message = null)
+public readonly record struct JoinResult(NetSessionStatus Status, PeerId PeerId, string? Message = null, string? ReconnectToken = null)
 {
     /// <summary>
     /// 是否加入成功。

@@ -26,10 +26,10 @@
 - [x] 4.2 Implement host and dedicated server roles, including local host participant creation for host mode and no local player participant for dedicated server mode.
 - [x] 4.3 Implement direct join handshake with `ApplicationId`, `ProtocolVersion`, auth payload, max peer validation, structured rejection results, and assigned `PeerId`.
 - [x] 4.4 Add `PeerDirectory` with `PeerId.None`, `PeerId.Server`, authoritative server storage, client read-only snapshots, and session-generic `PeerInfo`.
-- [ ] 4.5 Implement peer joined, peer left, peer disconnected, peer reconnected, state changed, and server closed events with dispatcher-safe delivery.
+- [x] 4.5 Implement peer joined, peer left, peer disconnected, peer reconnected, state changed, and server closed events with dispatcher-safe delivery.
 - [x] 4.6 Implement server kick and client/host/server disconnect semantics with explicit disconnect reasons.
-- [ ] 4.7 Implement opt-in reconnect using unpredictable reconnect tokens, reconnect grace window, original `PeerId` restoration, expiry cleanup, and temporary-disconnect versus final-removal distinction.
-- [ ] 4.8 Add session tests for host, dedicated server, successful join, incompatible application, incompatible protocol, auth success/failure, password auth payload, max peers, kick, shutdown, peer directory updates, and reconnect behavior.
+- [x] 4.7 Implement opt-in reconnect using unpredictable reconnect tokens, reconnect grace window, original `PeerId` restoration, expiry cleanup, and temporary-disconnect versus final-removal distinction.
+- [x] 4.8 Add session tests for host, dedicated server, successful join, incompatible application, incompatible protocol, auth success/failure, password auth payload, max peers, kick, shutdown, peer directory updates, and reconnect behavior.
 
 ## 5. Messaging Core
 
