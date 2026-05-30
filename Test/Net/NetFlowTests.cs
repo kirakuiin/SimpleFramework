@@ -132,6 +132,25 @@ public class NetFlowTests
     }
 
     [Test]
+    public async Task Flow_CustomPolicy_UsesAcceptedAndTargetCounts()
+    {
+        var fixture = await ThreePeerFixture.StartAsync();
+        await using (fixture)
+        {
+            fixture.ClientA.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
+            fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
+
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.Custom((accepted, total) => accepted == 1 && total == 2),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Accepted));
+        }
+    }
+
+    [Test]
     public async Task Flow_Timeout_CompletesTimeout()
     {
         var fixture = await TwoPeerFixture.StartAsync();

@@ -13,6 +13,12 @@ public sealed class FlowPolicy
         Count = count;
     }
 
+    private FlowPolicy(Func<int, int, bool> customEvaluator)
+    {
+        Mode = "custom";
+        CustomEvaluator = customEvaluator;
+    }
+
     /// <summary>
     /// 策略模式。
     /// </summary>
@@ -22,6 +28,8 @@ public sealed class FlowPolicy
     /// 策略阈值。
     /// </summary>
     public int Count { get; }
+
+    internal Func<int, int, bool>? CustomEvaluator { get; }
 
     /// <summary>
     /// 所有目标都接受才成功。
@@ -47,6 +55,15 @@ public sealed class FlowPolicy
             throw new ArgumentOutOfRangeException(nameof(count), "Quorum count must be greater than zero.");
 
         return new FlowPolicy("quorum", count);
+    }
+
+    /// <summary>
+    /// 使用接受数量和目标数量自定义是否成功。
+    /// </summary>
+    public static FlowPolicy Custom(Func<int, int, bool> evaluator)
+    {
+        ArgumentNullException.ThrowIfNull(evaluator);
+        return new FlowPolicy(evaluator);
     }
 }
 
@@ -149,6 +166,7 @@ public sealed class NetFlow
             "any" => acceptedCount > 0,
             "majority" => acceptedCount > targetList.Length / 2,
             "quorum" => acceptedCount >= policy.Count,
+            "custom" => policy.CustomEvaluator?.Invoke(acceptedCount, targetList.Length) == true,
             _ => false
         };
 
