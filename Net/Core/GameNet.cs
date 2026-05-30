@@ -13,6 +13,7 @@ public sealed class GameNet : IAsyncDisposable
     private ulong _nextPeerId = PeerId.Server.Value;
     private HostOptions? _hostOptions;
     private TaskCompletionSource<JoinResult>? _pendingJoin;
+    private TransportConnectionId _serverConnectionId = TransportConnectionId.None;
 
     public GameNet(GameNetOptions options)
     {
@@ -22,6 +23,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
+        Messages = new NetMessenger(SendToServerPacketAsync, Diagnostics);
     }
 
     public GameNet(INetTransport transport, GameNetOptions options)
@@ -34,6 +36,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
+        Messages = new NetMessenger(SendToServerPacketAsync, Diagnostics);
         _transport.PacketReceived += OnTransportPacketReceived;
     }
 
@@ -41,6 +44,11 @@ public sealed class GameNet : IAsyncDisposable
     public NetDiagnostics Diagnostics { get; }
     public NetSession Session { get; }
     public PeerDirectory Peers { get; }
+    public NetMessenger Messages { get; }
+
+    public void On<T>(Action<NetContext, T> handler) => Messages.On(handler);
+
+    public ValueTask<NetSendResult> SendToServerAsync<T>(T message) => Messages.SendToServerAsync(message);
 
     public Task<NetSessionResult> HostAsync(HostOptions options, CancellationToken token = default)
     {
@@ -108,6 +116,7 @@ public sealed class GameNet : IAsyncDisposable
 
             if (join.Succeeded)
             {
+                _serverConnectionId = connect.ConnectionId;
                 _state = NetLifecycleState.Client;
                 Session.SetState(NetSessionRole.Client);
             }
@@ -261,14 +270,19 @@ public sealed class GameNet : IAsyncDisposable
         {
             case SessionPacket.JoinRequest:
                 await HandleJoinRequestAsync(packet.ConnectionId, sessionPacket).ConfigureAwait(false);
-                break;
+                return;
             case SessionPacket.JoinAccepted:
                 HandleJoinAccepted(sessionPacket);
-                break;
+                return;
             case SessionPacket.JoinRejected:
                 HandleJoinRejected(sessionPacket);
-                break;
+                return;
         }
+
+        var senderId = PeerId.None;
+        lock (_connectionPeers)
+            _connectionPeers.TryGetValue(packet.ConnectionId, out senderId);
+        Messages.TryHandlePacket(packet.Data, senderId);
     }
 
     private async Task HandleJoinRequestAsync(TransportConnectionId connectionId, SessionPacket packet)
@@ -362,6 +376,16 @@ public sealed class GameNet : IAsyncDisposable
     }
 
     private static byte[] SerializePacket(SessionPacket packet) => JsonSerializer.SerializeToUtf8Bytes(packet);
+
+    private ValueTask<NetSendResult> SendToServerPacketAsync(byte[] packet)
+    {
+        if (IsDisposed)
+            return ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
+        if (_transport is null || _serverConnectionId == TransportConnectionId.None)
+            return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
+
+        return _transport.SendAsync(_serverConnectionId, packet, NetChannel.Reliable);
+    }
 
     private enum NetLifecycleState
     {

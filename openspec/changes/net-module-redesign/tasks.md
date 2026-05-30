@@ -35,7 +35,7 @@
 
 - [ ] 5.1 Add message attributes, handler attributes, `NetContext`, `INetCodec`, default `System.Text.Json` codec, internal packet envelope, and `NetMessageRegistry`.
 - [ ] 5.2 Implement stable message keys, derived message IDs, duplicate key detection, ID collision detection, deterministic assembly scanning, and fingerprint policy handling.
-- [ ] 5.3 Implement normal message handlers with `NetContext`, multiple handlers in registration order, handler exception containment, and structured message errors.
+- [x] 5.3 Implement normal message handlers with `NetContext`, multiple handlers in registration order, handler exception containment, and structured message errors.
 - [ ] 5.4 Implement `SendToServerAsync`, server `SendAsync(peer)`, and server `BroadcastAsync` for registered typed messages.
 - [ ] 5.5 Implement server-validated `RelayAsync` with original sender preservation, allowlist/permission/rate-limit checks, missing target errors, and permission errors.
 - [ ] 5.6 Enforce `MaxPacketSize`, send queue byte/packet limits, `SendQueueFull`, `PacketTooLarge`, `RateLimited`, and structured transport send failures across send, broadcast, relay, request, and flow paths.
