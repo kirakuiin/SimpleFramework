@@ -68,8 +68,8 @@
 
 ## 9. Server-Owned Flow
 
-- [ ] 9.1 Add `NetFlow`, proposal/vote/barrier packet models, proposal handler registration, `FlowPolicy`, `FlowResult<TResponse>`, per-peer responses, and `FlowEndReason`.
-- [ ] 9.2 Implement server-only flow initiation and reject client-initiated multiplayer flow attempts.
+- [x] 9.1 Add `NetFlow`, proposal/vote/barrier packet models, proposal handler registration, `FlowPolicy`, `FlowResult<TResponse>`, per-peer responses, and `FlowEndReason`.
+- [x] 9.2 Implement server-only flow initiation and reject client-initiated multiplayer flow attempts.
 - [ ] 9.3 Implement all accepted, any accepted, majority accepted, quorum, custom policy, rejected, timeout, cancelled, no-targets, and session-closed outcomes.
 - [ ] 9.4 Track pending flows by stable `PeerId`, expose pending peer queries, and implement manual `ResendPendingTo(peer)`.
 - [ ] 9.5 Keep flow pending when a peer disconnects until policy, timeout, or manual server action completes it, and ignore late responses after completion.
