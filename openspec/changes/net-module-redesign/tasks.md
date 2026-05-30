@@ -94,9 +94,9 @@
 
 ## 12. Verification
 
-- [ ] 12.1 Run `dotnet restore .\SimpleFramework.sln` and resolve restore issues without changing target framework from `net8.0`.
-- [ ] 12.2 Run `dotnet build .\SimpleFramework.sln` and fix compile errors across Net, GDExt guarded code, and tests.
-- [ ] 12.3 Run `dotnet test .\Test\Test.csproj --filter "FullyQualifiedName~Net"` and fix focused Net test failures.
-- [ ] 12.4 Run `dotnet test .\SimpleFramework.sln` and fix full solution test failures.
-- [ ] 12.5 Run `openspec validate net-module-redesign --type change --strict --no-interactive` and fix artifact validation issues.
-- [ ] 12.6 Review implementation against `proposal.md`, `design.md`, all five specs, and `implementation-plan.md`; close any coverage gaps before archiving.
+- [x] 12.1 Run `dotnet restore .\SimpleFramework.sln` and resolve restore issues without changing target framework from `net8.0`.
+- [x] 12.2 Run `dotnet build .\SimpleFramework.sln` and fix compile errors across Net, GDExt guarded code, and tests.
+- [x] 12.3 Run `dotnet test .\Test\Test.csproj --filter "FullyQualifiedName~Net"` and fix focused Net test failures.
+- [x] 12.4 Run `dotnet test .\SimpleFramework.sln` and fix full solution test failures.
+- [x] 12.5 Run `openspec validate net-module-redesign --type change --strict --no-interactive` and fix artifact validation issues.
+- [x] 12.6 Review implementation against `proposal.md`, `design.md`, all five specs, and `implementation-plan.md`; close any coverage gaps before archiving.
