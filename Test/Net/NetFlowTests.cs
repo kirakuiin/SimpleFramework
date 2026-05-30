@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Net;
@@ -48,6 +49,129 @@ public class NetFlowTests
                 TimeSpan.FromSeconds(1));
 
             Assert.That(result.Reason, Is.EqualTo(FlowEndReason.NotServer));
+        }
+    }
+
+    [Test]
+    public async Task Flow_NoTargets_ReturnsNoTargets()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                Array.Empty<PeerId>(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.NoTargets));
+        }
+    }
+
+    [Test]
+    public async Task Flow_Rejection_CompletesRejected()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            fixture.Client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
+
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Rejected));
+            Assert.That(result.Accepted, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task Flow_AnyAccepted_CompletesAccepted()
+    {
+        var fixture = await ThreePeerFixture.StartAsync();
+        await using (fixture)
+        {
+            fixture.ClientA.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
+            fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
+
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AnyAccepted(),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Accepted));
+        }
+    }
+
+    [Test]
+    public async Task Flow_MajorityAndQuorum_UseAcceptedCounts()
+    {
+        var fixture = await ThreePeerFixture.StartAsync();
+        await using (fixture)
+        {
+            fixture.ClientA.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
+            fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
+
+            var majority = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.MajorityAccepted(),
+                TimeSpan.FromSeconds(1));
+            var quorum = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.Quorum(1),
+                TimeSpan.FromSeconds(1));
+
+            Assert.That(majority.Reason, Is.EqualTo(FlowEndReason.Rejected));
+            Assert.That(quorum.Reason, Is.EqualTo(FlowEndReason.Accepted));
+        }
+    }
+
+    [Test]
+    public async Task Flow_Timeout_CompletesTimeout()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            var release = new TaskCompletionSource();
+            fixture.Client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) =>
+            {
+                release.Task.GetAwaiter().GetResult();
+                return new LoadSceneAck(true, string.Empty);
+            });
+
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromMilliseconds(50));
+            release.SetResult();
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Timeout));
+        }
+    }
+
+    [Test]
+    public async Task Flow_CancelledBeforeStart_CompletesCancelled()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(1),
+                cancellation.Token);
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Cancelled));
         }
     }
 
