@@ -9,4 +9,7 @@ internal sealed record NetPacket(
     public const string Message = "message";
 }
 
+/// <summary>
+/// 消息处理器收到消息时的上下文。
+/// </summary>
 public sealed record NetContext(PeerId SenderId);

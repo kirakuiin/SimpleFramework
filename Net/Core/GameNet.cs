@@ -2,6 +2,9 @@ namespace SimpleFramework.Net;
 
 using System.Text.Json;
 
+/// <summary>
+/// Net 模块的主入口，负责组合传输、会话、消息、诊断等组件。
+/// </summary>
 public sealed class GameNet : IAsyncDisposable
 {
     private readonly GameNetOptions _options;
@@ -16,6 +19,10 @@ public sealed class GameNet : IAsyncDisposable
     private TaskCompletionSource<JoinResult>? _pendingJoin;
     private TransportConnectionId _serverConnectionId = TransportConnectionId.None;
 
+    /// <summary>
+    /// 创建不带传输的 GameNet 实例，适用于只使用注册、验证或离线组件的场景。
+    /// </summary>
+    /// <param name="options">共享网络配置。</param>
     public GameNet(GameNetOptions options)
     {
         ValidateOptions(options);
@@ -27,6 +34,11 @@ public sealed class GameNet : IAsyncDisposable
         Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize);
     }
 
+    /// <summary>
+    /// 创建带底层传输的 GameNet 实例。
+    /// </summary>
+    /// <param name="transport">底层网络传输实现。</param>
+    /// <param name="options">共享网络配置。</param>
     public GameNet(INetTransport transport, GameNetOptions options)
     {
         ArgumentNullException.ThrowIfNull(transport);
@@ -41,30 +53,85 @@ public sealed class GameNet : IAsyncDisposable
         _transport.PacketReceived += OnTransportPacketReceived;
     }
 
+    /// <summary>
+    /// 当前实例的共享配置。
+    /// </summary>
     public GameNetOptions Options => _options;
+
+    /// <summary>
+    /// 网络诊断计数器和错误事件。
+    /// </summary>
     public NetDiagnostics Diagnostics { get; }
+
+    /// <summary>
+    /// 当前会话状态。
+    /// </summary>
     public NetSession Session { get; }
+
+    /// <summary>
+    /// 当前会话中的对等体目录。
+    /// </summary>
     public PeerDirectory Peers { get; }
+
+    /// <summary>
+    /// 类型化消息收发组件。
+    /// </summary>
     public NetMessenger Messages { get; }
 
+    /// <summary>
+    /// 注册类型化消息处理器。
+    /// </summary>
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="handler">收到消息时执行的处理器。</param>
     public void On<T>(Action<NetContext, T> handler) => Messages.On(handler);
 
+    /// <summary>
+    /// 从客户端向服务器发送类型化消息。
+    /// </summary>
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="message">要发送的消息。</param>
     public ValueTask<NetSendResult> SendToServerAsync<T>(T message) => Messages.SendToServerAsync(message);
 
+    /// <summary>
+    /// 从服务器向指定对等体发送类型化消息。
+    /// </summary>
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="peerId">目标对等体。</param>
+    /// <param name="message">要发送的消息。</param>
     public ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message) => Messages.SendAsync(peerId, message);
 
+    /// <summary>
+    /// 从服务器向所有远端对等体广播类型化消息。
+    /// </summary>
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="message">要广播的消息。</param>
     public ValueTask<NetSendResult> BroadcastAsync<T>(T message) => Messages.BroadcastAsync(message);
 
+    /// <summary>
+    /// 以主机模式启动会话，主机同时是权威服务器和本地参与者。
+    /// </summary>
+    /// <param name="options">主机启动选项。</param>
+    /// <param name="token">取消标记。</param>
     public Task<NetSessionResult> HostAsync(HostOptions options, CancellationToken token = default)
     {
         return StartServerCoreAsync(options, NetLifecycleState.Hosting, token);
     }
 
+    /// <summary>
+    /// 以专用服务器模式启动会话，不创建本地玩家参与者。
+    /// </summary>
+    /// <param name="options">服务器启动选项。</param>
+    /// <param name="token">取消标记。</param>
     public Task<NetSessionResult> StartServerAsync(HostOptions options, CancellationToken token = default)
     {
         return StartServerCoreAsync(options, NetLifecycleState.DedicatedServer, token);
     }
 
+    /// <summary>
+    /// 加入远端服务器并等待握手结果。
+    /// </summary>
+    /// <param name="options">加入选项。</param>
+    /// <param name="token">取消标记。</param>
     public async Task<JoinResult> JoinAsync(JoinOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -136,11 +203,19 @@ public sealed class GameNet : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 离开当前会话。
+    /// </summary>
+    /// <param name="token">取消标记。</param>
     public async Task<NetSessionResult> LeaveAsync(CancellationToken token = default)
     {
         return await StopAsync(token).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 停止当前会话。该操作可重复调用。
+    /// </summary>
+    /// <param name="token">取消标记。</param>
     public async Task<NetSessionResult> StopAsync(CancellationToken token = default)
     {
         if (IsDisposed)
@@ -162,6 +237,9 @@ public sealed class GameNet : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 异步释放 GameNet 和其拥有的传输资源。该操作可重复调用。
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
@@ -184,6 +262,11 @@ public sealed class GameNet : IAsyncDisposable
         _lifecycleGate.Dispose();
     }
 
+    /// <summary>
+    /// 校验 GameNet 配置是否满足启动要求。
+    /// </summary>
+    /// <param name="options">待校验配置。</param>
+    /// <exception cref="ArgumentException">配置值无效时抛出。</exception>
     public static void ValidateOptions(GameNetOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);

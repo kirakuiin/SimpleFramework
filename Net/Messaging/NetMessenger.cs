@@ -2,6 +2,9 @@ using System.Text.Json;
 
 namespace SimpleFramework.Net;
 
+/// <summary>
+/// 负责类型化消息注册、编码、发送和处理。
+/// </summary>
 public sealed class NetMessenger
 {
     private readonly Func<byte[], ValueTask<NetSendResult>> _sendToServer;
@@ -28,10 +31,19 @@ public sealed class NetMessenger
         _codec = codec ?? new JsonNetCodec();
     }
 
+    /// <summary>
+    /// 当前消息注册表。
+    /// </summary>
     public NetMessageRegistry Registry { get; } = new();
 
+    /// <summary>
+    /// 注册消息类型。
+    /// </summary>
     public NetMessageDescriptor RegisterMessage<T>() => Registry.Register<T>();
 
+    /// <summary>
+    /// 注册普通消息处理器。
+    /// </summary>
     public void On<T>(Action<NetContext, T> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
@@ -46,6 +58,9 @@ public sealed class NetMessenger
         handlers.Add((ctx, message) => handler(ctx, (T)message));
     }
 
+    /// <summary>
+    /// 从客户端向服务器发送消息。
+    /// </summary>
     public async ValueTask<NetSendResult> SendToServerAsync<T>(T message)
     {
         var descriptor = Registry.Get<T>();
@@ -68,6 +83,9 @@ public sealed class NetMessenger
         return await _sendToServer(packetBytes).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 从服务器向指定对等体发送消息。
+    /// </summary>
     public async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
     {
         var packet = EncodePacket(message);
@@ -77,6 +95,9 @@ public sealed class NetMessenger
         return await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 从服务器向所有远端对等体广播消息。
+    /// </summary>
     public async ValueTask<NetSendResult> BroadcastAsync<T>(T message)
     {
         var packet = EncodePacket(message);

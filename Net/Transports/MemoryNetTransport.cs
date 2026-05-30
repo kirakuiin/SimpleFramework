@@ -2,12 +2,19 @@ using System.Collections.Concurrent;
 
 namespace SimpleFramework.Net;
 
+/// <summary>
+/// 用于单元测试的内存网络，负责在同一进程内配对传输端。
+/// </summary>
 public sealed class MemoryNetNetwork
 {
     private readonly object _gate = new();
     private readonly Dictionary<(string Host, int Port), MemoryNetTransport> _servers = new();
     private ulong _nextConnectionId;
 
+    /// <summary>
+    /// 创建一个命名的内存传输端。
+    /// </summary>
+    /// <param name="name">传输端名称，客户端连接时作为主机名使用。</param>
     public MemoryNetTransport CreateTransport(string name) => new(this, name);
 
     internal TransportStartResult RegisterServer(MemoryNetTransport transport, int port)
@@ -55,6 +62,9 @@ public sealed class MemoryNetNetwork
     }
 }
 
+/// <summary>
+/// 确定性的内存传输实现，适合无 Socket 的会话和消息测试。
+/// </summary>
 public sealed class MemoryNetTransport : INetTransport
 {
     private readonly MemoryNetNetwork _network;
@@ -70,11 +80,19 @@ public sealed class MemoryNetTransport : INetTransport
 
     internal string Name { get; }
 
+    /// <inheritdoc />
     public event Action<TransportPeerConnected>? PeerConnected;
+
+    /// <inheritdoc />
     public event Action<TransportPeerDisconnected>? PeerDisconnected;
+
+    /// <inheritdoc />
     public event Action<TransportPacketReceived>? PacketReceived;
+
+    /// <inheritdoc />
     public event Action<TransportError>? Error;
 
+    /// <inheritdoc />
     public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -93,6 +111,7 @@ public sealed class MemoryNetTransport : INetTransport
         return Task.FromResult(result);
     }
 
+    /// <inheritdoc />
     public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -108,6 +127,7 @@ public sealed class MemoryNetTransport : INetTransport
         return Task.FromResult(_network.Connect(this, options.Host, options.Port));
     }
 
+    /// <inheritdoc />
     public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed)
     {
         if (_connections.TryRemove(connectionId, out var connection))
@@ -116,6 +136,7 @@ public sealed class MemoryNetTransport : INetTransport
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -132,6 +153,7 @@ public sealed class MemoryNetTransport : INetTransport
         return ValueTask.FromResult(NetSendResult.Ok());
     }
 
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)

@@ -4,6 +4,9 @@ using System.Net.Sockets;
 
 namespace SimpleFramework.Net;
 
+/// <summary>
+/// 基于 TCP 的传输实现，使用长度前缀帧拆分网络包。
+/// </summary>
 public sealed class TcpNetTransport : INetTransport
 {
     private readonly ConcurrentDictionary<TransportConnectionId, TcpConnection> _connections = new();
@@ -14,13 +17,24 @@ public sealed class TcpNetTransport : INetTransport
     private int _disposed;
     private int _running;
 
+    /// <summary>
+    /// 监听成功后的本地终结点；端口为 0 时可从这里读取实际端口。
+    /// </summary>
     public IPEndPoint? LocalEndPoint { get; private set; }
 
+    /// <inheritdoc />
     public event Action<TransportPeerConnected>? PeerConnected;
+
+    /// <inheritdoc />
     public event Action<TransportPeerDisconnected>? PeerDisconnected;
+
+    /// <inheritdoc />
     public event Action<TransportPacketReceived>? PacketReceived;
+
+    /// <inheritdoc />
     public event Action<TransportError>? Error;
 
+    /// <inheritdoc />
     public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -49,6 +63,7 @@ public sealed class TcpNetTransport : INetTransport
         }
     }
 
+    /// <inheritdoc />
     public async Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -92,6 +107,7 @@ public sealed class TcpNetTransport : INetTransport
         }
     }
 
+    /// <inheritdoc />
     public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed)
     {
         if (_connections.TryRemove(connectionId, out var connection))
@@ -103,6 +119,7 @@ public sealed class TcpNetTransport : INetTransport
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
     public async ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -140,6 +157,7 @@ public sealed class TcpNetTransport : INetTransport
         }
     }
 
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
