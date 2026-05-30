@@ -18,7 +18,9 @@ public sealed class NetMessenger
     private readonly int _maxPacketSize;
     private readonly Dictionary<Type, List<Action<NetContext, object>>> _handlers = new();
     private readonly Dictionary<Type, RequestHandler> _requestHandlers = new();
+    private readonly Dictionary<Type, Func<NetRelayContext, object, bool>> _relayPolicies = new();
     private readonly ConcurrentDictionary<long, PendingRequest> _pendingRequests = new();
+    private readonly ConcurrentDictionary<long, TaskCompletionSource<NetSendResult>> _pendingRelays = new();
     private long _nextCorrelationId;
 
     internal NetMessenger(
@@ -87,6 +89,16 @@ public sealed class NetMessenger
     }
 
     /// <summary>
+    /// 注册服务器端中继许可策略。
+    /// </summary>
+    public void AllowRelay<T>(Func<NetRelayContext, T, bool> policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        Registry.Register<T>();
+        _relayPolicies[typeof(T)] = (context, message) => policy(context, (T)message);
+    }
+
+    /// <summary>
     /// 从客户端向服务器发送类型化消息。
     /// </summary>
     public async ValueTask<NetSendResult> SendToServerAsync<T>(T message)
@@ -137,6 +149,75 @@ public sealed class NetMessenger
         }
 
         return NetSendResult.Ok();
+    }
+
+    /// <summary>
+    /// 通过服务器向另一个对等体中继消息，并等待服务器校验结果。
+    /// </summary>
+    public async Task<NetSendResult> RelayAsync<T>(
+        PeerId targetPeerId,
+        T message,
+        TimeSpan timeout,
+        CancellationToken token = default)
+    {
+        if (token.IsCancellationRequested)
+            return new NetSendResult(NetSendStatus.TransportFailed, "Relay was cancelled.");
+        if (timeout <= TimeSpan.Zero)
+            return new NetSendResult(NetSendStatus.TransportFailed, "Relay timed out.");
+
+        var descriptor = Registry.Get<T>();
+        byte[] payload;
+        try
+        {
+            payload = _codec.Encode(message);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("RelayEncodeFailed", ex.Message, ex));
+            return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
+        }
+
+        var correlationId = Interlocked.Increment(ref _nextCorrelationId);
+        var packet = new NetPacket
+        {
+            Kind = NetPacket.Relay,
+            MessageId = descriptor.MessageId,
+            TargetPeerId = targetPeerId,
+            CorrelationId = correlationId,
+            Payload = payload
+        };
+        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        if (packetBytes.Length > _maxPacketSize)
+            return new NetSendResult(NetSendStatus.PacketTooLarge);
+
+        var pending = new TaskCompletionSource<NetSendResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingRelays[correlationId] = pending;
+
+        var send = await _sendToServer(packetBytes).ConfigureAwait(false);
+        if (!send.Succeeded)
+        {
+            _pendingRelays.TryRemove(correlationId, out _);
+            return send;
+        }
+
+        _diagnostics.AddPacketSent(packetBytes.Length);
+
+        try
+        {
+            var delay = Task.Delay(timeout, _timeProvider, token);
+            var completed = await Task.WhenAny(pending.Task, delay).ConfigureAwait(false);
+            if (completed == pending.Task)
+                return await pending.Task.ConfigureAwait(false);
+
+            await delay.ConfigureAwait(false);
+            _pendingRelays.TryRemove(correlationId, out _);
+            return new NetSendResult(NetSendStatus.TransportFailed, "Relay timed out.");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _pendingRelays.TryRemove(correlationId, out _);
+            return new NetSendResult(NetSendStatus.TransportFailed, "Relay was cancelled.");
+        }
     }
 
     /// <summary>
@@ -248,6 +329,8 @@ public sealed class NetMessenger
             NetPacket.Message => HandleMessagePacket(data.Length, packet, senderId),
             NetPacket.Request => await HandleRequestPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
             NetPacket.Response => HandleResponsePacket(data.Length, packet),
+            NetPacket.Relay => await HandleRelayPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
+            NetPacket.RelayResult => HandleRelayResultPacket(data.Length, packet),
             _ => false
         };
     }
@@ -288,7 +371,7 @@ public sealed class NetMessenger
         if (!_handlers.TryGetValue(descriptor.MessageType, out var handlers))
             return true;
 
-        var context = new NetContext(senderId);
+        var context = new NetContext(packet.SenderId == PeerId.None ? senderId : packet.SenderId);
         foreach (var handler in handlers.ToArray())
         {
             DispatchHandler(() =>
@@ -361,6 +444,85 @@ public sealed class NetMessenger
         return true;
     }
 
+    private async Task<bool> HandleRelayPacketAsync(int byteCount, NetPacket packet, PeerId senderId)
+    {
+        _diagnostics.AddPacketReceived(byteCount);
+        if (!Registry.TryGet(packet.MessageId, out var descriptor))
+        {
+            _diagnostics.RecordError(new NetError("UnknownRelayMessage", $"Unknown relay message id '{packet.MessageId}'."));
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.TransportFailed, "Unknown relay message.")).ConfigureAwait(false);
+            return true;
+        }
+
+        object? message;
+        try
+        {
+            message = _codec.Decode(packet.Payload, descriptor.MessageType);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("RelayDecodeFailed", ex.Message, ex));
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.TransportFailed, ex.Message)).ConfigureAwait(false);
+            return true;
+        }
+
+        if (message is null || !_relayPolicies.TryGetValue(descriptor.MessageType, out var policy))
+        {
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PermissionDenied)).ConfigureAwait(false);
+            return true;
+        }
+
+        var relayContext = new NetRelayContext(senderId, packet.TargetPeerId);
+        bool allowed;
+        try
+        {
+            allowed = policy(relayContext, message);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("RelayPolicyError", ex.Message, ex));
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PermissionDenied, ex.Message)).ConfigureAwait(false);
+            return true;
+        }
+
+        if (!allowed)
+        {
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PermissionDenied)).ConfigureAwait(false);
+            return true;
+        }
+
+        var forwarded = new NetPacket
+        {
+            Kind = NetPacket.Message,
+            MessageId = packet.MessageId,
+            SenderId = senderId,
+            Payload = packet.Payload
+        };
+        var forwardedBytes = JsonSerializer.SerializeToUtf8Bytes(forwarded);
+        if (forwardedBytes.Length > _maxPacketSize)
+        {
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PacketTooLarge)).ConfigureAwait(false);
+            return true;
+        }
+
+        var send = await _sendToPeer(packet.TargetPeerId, forwardedBytes).ConfigureAwait(false);
+        if (send.Succeeded)
+            _diagnostics.AddPacketSent(forwardedBytes.Length);
+
+        await SendRelayResultAsync(senderId, packet.CorrelationId, send).ConfigureAwait(false);
+        return true;
+    }
+
+    private bool HandleRelayResultPacket(int byteCount, NetPacket packet)
+    {
+        _diagnostics.AddPacketReceived(byteCount);
+        if (!_pendingRelays.TryRemove(packet.CorrelationId, out var pending))
+            return true;
+
+        pending.TrySetResult(new NetSendResult(packet.SendStatus, packet.Error));
+        return true;
+    }
+
     private async Task SendRequestResponseAsync(PeerId recipient, long correlationId, ulong responseMessageId, NetRequestStatus status, byte[] payload, string? error)
     {
         var packet = new NetPacket
@@ -382,6 +544,21 @@ public sealed class NetMessenger
         }
 
         var send = await SendPacketToPeerAsync(recipient, packetBytes).ConfigureAwait(false);
+        if (send.Succeeded)
+            _diagnostics.AddPacketSent(packetBytes.Length);
+    }
+
+    private async Task SendRelayResultAsync(PeerId recipient, long correlationId, NetSendResult result)
+    {
+        var packet = new NetPacket
+        {
+            Kind = NetPacket.RelayResult,
+            CorrelationId = correlationId,
+            SendStatus = result.Status,
+            Error = result.Message
+        };
+        var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        var send = await _sendToPeer(recipient, packetBytes).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packetBytes.Length);
     }

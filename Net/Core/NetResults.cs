@@ -14,6 +14,7 @@ public enum NetSendStatus
     PacketTooLarge,
     SendQueueFull,
     RateLimited,
+    PermissionDenied,
     TransportFailed
 }
 

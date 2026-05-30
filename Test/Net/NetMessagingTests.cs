@@ -257,6 +257,80 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RelayAsync_PreservesOriginalSender()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var clientA = new GameNet(network.CreateTransport("client-a"), Options(appId));
+        await using var clientB = new GameNet(network.CreateTransport("client-b"), Options(appId));
+        var received = new TaskCompletionSource<(PeerId Sender, PlayerReady Message)>();
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        clientA.Messages.RegisterMessage<PlayerReady>();
+        clientB.Messages.RegisterMessage<PlayerReady>();
+        server.Messages.AllowRelay<PlayerReady>((ctx, msg) => ctx.TargetPeerId == ctx.SenderId ? false : msg.Ready);
+        clientB.On<PlayerReady>((ctx, msg) => received.TrySetResult((ctx.SenderId, msg)));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var joinA = await clientA.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var joinB = await clientB.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var relay = await clientA.RelayAsync(joinB.PeerId, new PlayerReady(true), TimeSpan.FromSeconds(1));
+        var delivered = await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(relay.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(delivered.Sender, Is.EqualTo(joinA.PeerId));
+        Assert.That(delivered.Message.Ready, Is.True);
+    }
+
+    [Test]
+    public async Task RelayAsync_WhenPolicyDenies_ReturnsPermissionDeniedAndDoesNotForward()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var clientA = new GameNet(network.CreateTransport("client-a"), Options(appId));
+        await using var clientB = new GameNet(network.CreateTransport("client-b"), Options(appId));
+        var received = new TaskCompletionSource<PlayerReady>();
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        clientA.Messages.RegisterMessage<PlayerReady>();
+        clientB.Messages.RegisterMessage<PlayerReady>();
+        server.Messages.AllowRelay<PlayerReady>((_, _) => false);
+        clientB.On<PlayerReady>((_, msg) => received.TrySetResult(msg));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await clientA.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var joinB = await clientB.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var relay = await clientA.RelayAsync(joinB.PeerId, new PlayerReady(true), TimeSpan.FromSeconds(1));
+
+        Assert.That(relay.Status, Is.EqualTo(NetSendStatus.PermissionDenied));
+        Assert.That(received.Task.IsCompleted, Is.False);
+    }
+
+    [Test]
+    public async Task RelayAsync_ToMissingTarget_ReturnsPeerUnavailable()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        server.Messages.AllowRelay<PlayerReady>((_, _) => true);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var relay = await client.RelayAsync(new PeerId(999), new PlayerReady(true), TimeSpan.FromSeconds(1));
+
+        Assert.That(relay.Status, Is.EqualTo(NetSendStatus.PeerUnavailable));
+    }
+
+    [Test]
     public async Task MultipleHandlers_RunInOrder_AndExceptionIsContained()
     {
         var appId = Guid.NewGuid();

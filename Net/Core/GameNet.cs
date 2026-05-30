@@ -157,6 +157,25 @@ public sealed class GameNet : IAsyncDisposable
     }
 
     /// <summary>
+    /// 通过服务器向指定对等体中继类型化消息。
+    /// </summary>
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="targetPeerId">目标对等体。</param>
+    /// <param name="message">要中继的消息。</param>
+    /// <param name="timeout">等待服务器校验结果的超时时间。</param>
+    /// <param name="token">取消标记。</param>
+    public Task<NetSendResult> RelayAsync<T>(
+        PeerId targetPeerId,
+        T message,
+        TimeSpan timeout,
+        CancellationToken token = default)
+    {
+        return IsDisposed
+            ? Task.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
+            : Messages.RelayAsync(targetPeerId, message, timeout, token);
+    }
+
+    /// <summary>
     /// 以主机模式启动会话，主机同时是权威服务器和本地参与者。
     /// </summary>
     /// <param name="options">主机启动选项。</param>
