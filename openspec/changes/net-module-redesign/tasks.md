@@ -15,8 +15,8 @@
 
 ## 3. GameNet Lifecycle
 
-- [ ] 3.1 Add lifecycle state and an async gate so `HostAsync`, `StartServerAsync`, `JoinAsync`, `LeaveAsync`, `StopAsync`, and `DisposeAsync` are serialized.
-- [ ] 3.2 Make `StopAsync` and `DisposeAsync` idempotent and ensure dispose cancels discovery loops, pending requests, pending flows, session work, transport work, and owned resources.
+- [x] 3.1 Add lifecycle state and an async gate so `HostAsync`, `StartServerAsync`, `JoinAsync`, `LeaveAsync`, `StopAsync`, and `DisposeAsync` are serialized.
+- [x] 3.2 Make `StopAsync` and `DisposeAsync` idempotent and ensure dispose cancels discovery loops, pending requests, pending flows, session work, transport work, and owned resources.
 - [ ] 3.3 Make send, connection, discovery, stats, and flow APIs return `ObjectDisposed` results or throw `ObjectDisposedException` after disposal.
 - [ ] 3.4 Add lifecycle tests for concurrent starts, repeated stop/dispose, API use after dispose, and shutdown cancellation behavior.
 
