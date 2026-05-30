@@ -206,6 +206,59 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task BrowserEvents_UseDispatcherAndContainCallbackFailures()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var dispatcher = new InlineCountingDispatcher();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(Options(appId), network);
+        await using var secondAdvertiser = new NetDiscovery(Options(appId), network);
+        await using var discovery = new NetDiscovery(Options(appId, dispatcher: dispatcher), network);
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+        var found = 0;
+
+        browser.RoomFound += _ => found++;
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        await browser.RefreshAsync();
+
+        Assert.That(found, Is.EqualTo(1));
+        Assert.That(dispatcher.PostCount, Is.EqualTo(1));
+
+        browser.RoomFound += _ => throw new InvalidOperationException("room callback failed");
+        await secondAdvertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-2", GamePort = 7778, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room2", 1, 4, false));
+
+        await browser.RefreshAsync();
+
+        Assert.That(discovery.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task BrowserEvents_DispatcherFailureBecomesDiagnosticsError()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(Options(appId), network);
+        await using var discovery = new NetDiscovery(Options(appId, dispatcher: new ThrowingDispatcher()), network);
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+
+        browser.RoomFound += _ => { };
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        await browser.RefreshAsync();
+
+        Assert.That(discovery.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task StartAdvertise_WithPrivateMetadataField_ReturnsTransportFailed()
     {
         var network = new MemoryDiscoveryNetwork();
@@ -330,7 +383,8 @@ public class NetDiscoveryStatsTests
         int protocolVersion = 1,
         int maxMetadataPayloadSize = 8 * 1024,
         TimeProvider timeProvider = null,
-        TimeSpan? roomTimeout = null) => new()
+        TimeSpan? roomTimeout = null,
+        INetEventDispatcher dispatcher = null) => new()
     {
         Application = new NetApplicationInfo
         {
@@ -338,10 +392,30 @@ public class NetDiscoveryStatsTests
             ProtocolVersion = protocolVersion
         },
         TimeProvider = timeProvider ?? TimeProvider.System,
+        EventDispatcher = dispatcher,
         Discovery = new DiscoveryOptions
         {
             MaxMetadataPayloadSize = maxMetadataPayloadSize,
             RoomTimeout = roomTimeout ?? TimeSpan.FromSeconds(5)
         }
     };
+
+    private sealed class InlineCountingDispatcher : INetEventDispatcher
+    {
+        public int PostCount { get; private set; }
+
+        public void Post(Action action)
+        {
+            PostCount++;
+            action();
+        }
+    }
+
+    private sealed class ThrowingDispatcher : INetEventDispatcher
+    {
+        public void Post(Action action)
+        {
+            throw new InvalidOperationException("post failed");
+        }
+    }
 }

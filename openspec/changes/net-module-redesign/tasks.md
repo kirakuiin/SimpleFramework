@@ -78,11 +78,11 @@
 
 ## 10. Event Dispatching And Error Containment
 
-- [ ] 10.1 Route session, messaging, discovery, stats, flow, and diagnostics events through `INetEventDispatcher` when configured.
-- [ ] 10.2 Keep default event delivery on the current network task context when no dispatcher is configured.
-- [ ] 10.3 Convert dispatcher `Post` failures and callback exceptions into structured diagnostics errors without stopping transport loops or later events.
-- [ ] 10.4 Preserve event ordering for events produced by the same background task, including peer disconnect and peer removal ordering.
-- [ ] 10.5 Add dispatcher tests for default context delivery, dispatcher delivery, dispatcher failure, callback exception containment, diagnostics error creation, and same-peer event ordering.
+- [x] 10.1 Route session, messaging, discovery, stats, flow, and diagnostics events through `INetEventDispatcher` when configured.
+- [x] 10.2 Keep default event delivery on the current network task context when no dispatcher is configured.
+- [x] 10.3 Convert dispatcher `Post` failures and callback exceptions into structured diagnostics errors without stopping transport loops or later events.
+- [x] 10.4 Preserve event ordering for events produced by the same background task, including peer disconnect and peer removal ordering.
+- [x] 10.5 Add dispatcher tests for default context delivery, dispatcher delivery, dispatcher failure, callback exception containment, diagnostics error creation, and same-peer event ordering.
 
 ## 11. Integration Cleanup
 

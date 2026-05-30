@@ -5,6 +5,7 @@ namespace SimpleFramework.Net;
 /// </summary>
 public sealed class NetDiagnostics
 {
+    private readonly INetEventDispatcher? _dispatcher;
     private long _packetsSent;
     private long _packetsReceived;
     private long _bytesSent;
@@ -19,6 +20,15 @@ public sealed class NetDiagnostics
     /// 记录结构化错误时触发。
     /// </summary>
     public event Action<NetError>? ErrorRecorded;
+
+    /// <summary>
+    /// 创建诊断收集器。
+    /// </summary>
+    /// <param name="dispatcher">可选事件调度器；提供后错误事件会通过该调度器投递。</param>
+    public NetDiagnostics(INetEventDispatcher? dispatcher = null)
+    {
+        _dispatcher = dispatcher;
+    }
 
     /// <summary>
     /// 增加已发送包计数和字节数。
@@ -54,7 +64,13 @@ public sealed class NetDiagnostics
     public void RecordError(NetError error)
     {
         Interlocked.Increment(ref _errorCount);
-        ErrorRecorded?.Invoke(error);
+
+        var callbacks = ErrorRecorded;
+        if (callbacks is null)
+            return;
+
+        foreach (Action<NetError> callback in callbacks.GetInvocationList())
+            DispatchErrorCallback(() => callback(error));
     }
 
     /// <summary>
@@ -76,6 +92,42 @@ public sealed class NetDiagnostics
     internal void SetConnectedPeerCount(int count) => Volatile.Write(ref _connectedPeerCount, count);
     internal void SetPendingRequestCount(int count) => Volatile.Write(ref _pendingRequestCount, count);
     internal void SetPendingFlowCount(int count) => Volatile.Write(ref _pendingFlowCount, count);
+
+    private void DispatchErrorCallback(Action action)
+    {
+        if (_dispatcher is null)
+        {
+            try
+            {
+                action();
+            }
+            catch
+            {
+                Interlocked.Increment(ref _errorCount);
+            }
+
+            return;
+        }
+
+        try
+        {
+            _dispatcher.Post(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch
+                {
+                    Interlocked.Increment(ref _errorCount);
+                }
+            });
+        }
+        catch
+        {
+            Interlocked.Increment(ref _errorCount);
+        }
+    }
 }
 
 /// <summary>

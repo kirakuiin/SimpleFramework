@@ -110,6 +110,31 @@ public class NetCoreTests
     }
 
     [Test]
+    public void Diagnostics_RecordError_UsesDispatcherAndContainsFailures()
+    {
+        var dispatcher = new InlineCountingDispatcher();
+        var diagnostics = new NetDiagnostics(dispatcher);
+        NetError recorded = null;
+        diagnostics.ErrorRecorded += error => recorded = error;
+
+        diagnostics.RecordError(new NetError("TestError", "failed"));
+
+        Assert.That(dispatcher.PostCount, Is.EqualTo(1));
+        Assert.That(recorded!.Code, Is.EqualTo("TestError"));
+
+        var failingPost = new ThrowingDispatcher();
+        var postFailureDiagnostics = new NetDiagnostics(failingPost);
+        postFailureDiagnostics.ErrorRecorded += _ => { };
+        postFailureDiagnostics.RecordError(new NetError("PostFailure", "failed"));
+        Assert.That(postFailureDiagnostics.GetSnapshot().ErrorCount, Is.EqualTo(2));
+
+        var callbackFailureDiagnostics = new NetDiagnostics(new InlineCountingDispatcher());
+        callbackFailureDiagnostics.ErrorRecorded += _ => throw new InvalidOperationException("callback failed");
+        callbackFailureDiagnostics.RecordError(new NetError("CallbackFailure", "failed"));
+        Assert.That(callbackFailureDiagnostics.GetSnapshot().ErrorCount, Is.EqualTo(2));
+    }
+
+    [Test]
     public void NetProject_TargetFramework_RemainsNet8()
     {
         var projectPath = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "Net", "Net.csproj"));
@@ -280,5 +305,24 @@ public class NetCoreTests
 
         Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Cancelled));
         Assert.That(net.Session.Role, Is.EqualTo(NetSessionRole.Host));
+    }
+
+    private sealed class InlineCountingDispatcher : INetEventDispatcher
+    {
+        public int PostCount { get; private set; }
+
+        public void Post(Action action)
+        {
+            PostCount++;
+            action();
+        }
+    }
+
+    private sealed class ThrowingDispatcher : INetEventDispatcher
+    {
+        public void Post(Action action)
+        {
+            throw new InvalidOperationException("post failed");
+        }
     }
 }

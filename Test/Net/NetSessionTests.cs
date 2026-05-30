@@ -371,6 +371,59 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task SessionEvents_DefaultDelivery_RunsBeforeLifecycleCallReturns()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        var observed = false;
+
+        server.Session.StateChanged += _ => observed = true;
+
+        var host = await server.HostAsync(new HostOptions { Port = 7777 });
+
+        Assert.That(host.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(observed, Is.True);
+    }
+
+    [Test]
+    public async Task SessionEvents_DispatcherFailure_IsRecordedAndJoinStillCompletes()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, dispatcher: new ThrowingDispatcher()));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(client.Diagnostics.GetSnapshot().ErrorCount, Is.GreaterThanOrEqualTo(1));
+    }
+
+    [Test]
+    public async Task SessionEvents_CallbackException_IsRecordedAndLaterEventsContinue()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var serverClosed = new TaskCompletionSource<NetServerClosed>();
+
+        client.Session.StateChanged += _ => throw new InvalidOperationException("callback failed");
+        client.Session.ServerClosed += e => serverClosed.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await server.StopAsync();
+        await serverClosed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(client.Diagnostics.GetSnapshot().ErrorCount, Is.GreaterThanOrEqualTo(1));
+        Assert.That(serverClosed.Task.Result.Reason, Is.EqualTo(DisconnectReason.ServerClosed));
+    }
+
+    [Test]
     public async Task Reconnect_DisabledByDefault_RemovesDisconnectedPeer()
     {
         var appId = Guid.NewGuid();
@@ -506,6 +559,14 @@ public class NetSessionTests
         {
             PostCount++;
             action();
+        }
+    }
+
+    private sealed class ThrowingDispatcher : INetEventDispatcher
+    {
+        public void Post(Action action)
+        {
+            throw new InvalidOperationException("post failed");
         }
     }
 }

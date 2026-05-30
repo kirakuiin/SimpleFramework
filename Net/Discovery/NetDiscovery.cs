@@ -150,13 +150,13 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
             if (!_rooms.TryGetValue(room.RoomId, out var existing))
             {
                 _rooms[room.RoomId] = new BrowserRoom<TMetadata>(room, now);
-                RoomFound?.Invoke(room);
+                RaiseRoomEvent(RoomFound, room);
                 continue;
             }
 
             _rooms[room.RoomId] = new BrowserRoom<TMetadata>(room, now);
             if (!AreSameRoom(existing.Room, room))
-                RoomUpdated?.Invoke(room);
+                RaiseRoomEvent(RoomUpdated, room);
         }
 
         foreach (var pair in _rooms.ToArray())
@@ -165,7 +165,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
                 continue;
 
             _rooms.Remove(pair.Key);
-            RoomLost?.Invoke(pair.Value.Room);
+            RaiseRoomEvent(RoomLost, pair.Value.Room);
         }
 
         Snapshot = new LanBrowserSnapshot<TMetadata>
@@ -193,6 +193,15 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
                left.ProtocolVersion == right.ProtocolVersion &&
                left.MetadataSchemaId == right.MetadataSchemaId &&
                EqualityComparer<TMetadata>.Default.Equals(left.Metadata, right.Metadata);
+    }
+
+    private void RaiseRoomEvent(Action<LanScanResult<TMetadata>>? callbacks, LanScanResult<TMetadata> room)
+    {
+        if (callbacks is null)
+            return;
+
+        foreach (Action<LanScanResult<TMetadata>> callback in callbacks.GetInvocationList())
+            _discovery.DispatchEvent(() => callback(room));
     }
 
     private sealed record BrowserRoom<T>(LanScanResult<T> Room, DateTimeOffset LastSeenAt);
@@ -317,12 +326,13 @@ public sealed class NetDiscovery : IAsyncDisposable
 
         _options = options;
         _network = network;
+        Diagnostics = new NetDiagnostics(options.EventDispatcher);
     }
 
     /// <summary>
     /// 发现组件的诊断计数器。
     /// </summary>
-    public NetDiagnostics Diagnostics { get; } = new();
+    public NetDiagnostics Diagnostics { get; }
 
     /// <summary>
     /// 启动持续房间广告。
@@ -446,6 +456,42 @@ public sealed class NetDiscovery : IAsyncDisposable
     }
 
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
+
+    internal void DispatchEvent(Action action)
+    {
+        if (_options.EventDispatcher is null)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.RecordError(new NetError("EventCallbackError", ex.Message, ex));
+            }
+
+            return;
+        }
+
+        try
+        {
+            _options.EventDispatcher.Post(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    Diagnostics.RecordError(new NetError("EventCallbackError", ex.Message, ex));
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("EventDispatchError", ex.Message, ex));
+        }
+    }
 
     private bool TryCreatePacket<TMetadata>(LanAdvertiseInfo info, TMetadata metadata, out DiscoveryPacket packet, out string? error)
     {

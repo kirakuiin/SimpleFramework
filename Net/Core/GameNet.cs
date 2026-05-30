@@ -32,7 +32,7 @@ public sealed class GameNet : IAsyncDisposable
         ValidateOptions(options);
 
         _options = options;
-        Diagnostics = new NetDiagnostics();
+        Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
         Messages = new NetMessenger(
@@ -62,7 +62,7 @@ public sealed class GameNet : IAsyncDisposable
 
         _transport = transport;
         _options = options;
-        Diagnostics = new NetDiagnostics();
+        Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
         Messages = new NetMessenger(
