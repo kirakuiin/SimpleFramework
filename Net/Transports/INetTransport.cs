@@ -16,6 +16,11 @@ public interface INetTransport : IAsyncDisposable
     Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default);
 
     /// <summary>
+    /// 停止服务器监听并断开当前传输连接。
+    /// </summary>
+    Task<TransportStartResult> StopServerAsync(CancellationToken token = default);
+
+    /// <summary>
     /// 断开指定传输连接。
     /// </summary>
     Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed);

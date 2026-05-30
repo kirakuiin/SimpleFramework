@@ -40,6 +40,37 @@ public class NetCoreTests
     }
 
     [Test]
+    public void GameNetOptions_WithInvalidLimits_AreRejected()
+    {
+        var app = new NetApplicationInfo { ApplicationId = Guid.NewGuid() };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => GameNet.ValidateOptions(new GameNetOptions
+                {
+                    Application = app,
+                    MaxPacketSize = 0
+                }))!.Message,
+                Does.Contain("MaxPacketSize"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => GameNet.ValidateOptions(new GameNetOptions
+                {
+                    Application = app,
+                    MaxSendQueueBytesPerPeer = 0
+                }))!.Message,
+                Does.Contain("MaxSendQueueBytesPerPeer"));
+            Assert.That(
+                Assert.Throws<ArgumentException>(() => GameNet.ValidateOptions(new GameNetOptions
+                {
+                    Application = app,
+                    MaxSendQueuePacketsPerPeer = 0
+                }))!.Message,
+                Does.Contain("MaxSendQueuePacketsPerPeer"));
+        });
+    }
+
+    [Test]
     public void DiagnosticsSnapshot_IsReadOnlyCopy()
     {
         var diagnostics = new NetDiagnostics();
@@ -54,6 +85,20 @@ public class NetCoreTests
         Assert.That(snapshot.PacketsReceived, Is.EqualTo(1));
         Assert.That(snapshot.BytesReceived, Is.EqualTo(5));
         Assert.That(snapshot.ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Diagnostics_RecordError_RaisesErrorEventAndUpdatesSnapshot()
+    {
+        var diagnostics = new NetDiagnostics();
+        NetError recorded = null;
+        diagnostics.ErrorRecorded += error => recorded = error;
+
+        diagnostics.RecordError(new NetError("TestError", "failed"));
+
+        Assert.That(recorded, Is.Not.Null);
+        Assert.That(recorded!.Code, Is.EqualTo("TestError"));
+        Assert.That(diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
     }
 
     [Test]
@@ -82,6 +127,27 @@ public class NetCoreTests
     }
 
     [Test]
+    public async Task GameNet_MessageApisAfterDispose_ReturnObjectDisposed()
+    {
+        var network = new MemoryNetNetwork();
+        var net = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        });
+        net.Messages.RegisterMessage<PlayerReady>();
+
+        await net.DisposeAsync();
+
+        var sendToServer = await net.SendToServerAsync(new PlayerReady(true));
+        var sendToPeer = await net.SendAsync(PeerId.Server, new PlayerReady(true));
+        var broadcast = await net.BroadcastAsync(new PlayerReady(true));
+
+        Assert.That(sendToServer.Status, Is.EqualTo(NetSendStatus.ObjectDisposed));
+        Assert.That(sendToPeer.Status, Is.EqualTo(NetSendStatus.ObjectDisposed));
+        Assert.That(broadcast.Status, Is.EqualTo(NetSendStatus.ObjectDisposed));
+    }
+
+    [Test]
     public async Task GameNet_ConcurrentHostCalls_OnlyOneStarts()
     {
         var network = new MemoryNetNetwork();
@@ -96,5 +162,25 @@ public class NetCoreTests
         var results = await Task.WhenAll(first, second);
         Assert.That(results.Count(r => r.Status == NetSessionStatus.Ok), Is.EqualTo(1));
         Assert.That(results.Count(r => r.Status == NetSessionStatus.InvalidState), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task GameNet_Stop_IsIdempotent_AndAllowsRestart()
+    {
+        var network = new MemoryNetNetwork();
+        await using var net = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        });
+
+        var start = await net.HostAsync(new HostOptions { Port = 7777 });
+        var firstStop = await net.StopAsync();
+        var secondStop = await net.StopAsync();
+        var restart = await net.HostAsync(new HostOptions { Port = 7777 });
+
+        Assert.That(start.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(firstStop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(secondStop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(restart.Status, Is.EqualTo(NetSessionStatus.Ok));
     }
 }

@@ -128,6 +128,23 @@ public sealed class MemoryNetTransport : INetTransport
     }
 
     /// <inheritdoc />
+    public async Task<TransportStartResult> StopServerAsync(CancellationToken token = default)
+    {
+        if (IsDisposed)
+            return new TransportStartResult(NetTransportStatus.ObjectDisposed);
+        if (token.IsCancellationRequested)
+            return new TransportStartResult(NetTransportStatus.Cancelled);
+
+        _network.UnregisterServer(this);
+        Interlocked.Exchange(ref _running, 0);
+
+        foreach (var connectionId in _connections.Keys.ToArray())
+            await DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+
+        return new TransportStartResult(NetTransportStatus.Ok);
+    }
+
+    /// <inheritdoc />
     public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed)
     {
         if (_connections.TryRemove(connectionId, out var connection))
@@ -188,7 +205,7 @@ public sealed class MemoryNetTransport : INetTransport
 
     private void DispatchPacketReceived(TransportConnectionId connectionId, byte[] data, NetChannel channel)
     {
-        Task.Run(() => PacketReceived?.Invoke(new TransportPacketReceived(connectionId, data, channel)));
+        PacketReceived?.Invoke(new TransportPacketReceived(connectionId, data, channel));
     }
 
     private void DispatchError(TransportConnectionId connectionId, string message, Exception? exception = null)

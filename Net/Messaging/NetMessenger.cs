@@ -12,6 +12,7 @@ public sealed class NetMessenger
     private readonly Func<IReadOnlyCollection<PeerId>> _getBroadcastTargets;
     private readonly NetDiagnostics _diagnostics;
     private readonly INetCodec _codec;
+    private readonly INetEventDispatcher? _dispatcher;
     private readonly int _maxPacketSize;
     private readonly Dictionary<Type, List<Action<NetContext, object>>> _handlers = new();
 
@@ -21,6 +22,7 @@ public sealed class NetMessenger
         Func<IReadOnlyCollection<PeerId>> getBroadcastTargets,
         NetDiagnostics diagnostics,
         int maxPacketSize,
+        INetEventDispatcher? dispatcher = null,
         INetCodec? codec = null)
     {
         _sendToServer = sendToServer;
@@ -28,6 +30,7 @@ public sealed class NetMessenger
         _getBroadcastTargets = getBroadcastTargets;
         _diagnostics = diagnostics;
         _maxPacketSize = maxPacketSize;
+        _dispatcher = dispatcher;
         _codec = codec ?? new JsonNetCodec();
     }
 
@@ -80,7 +83,11 @@ public sealed class NetMessenger
         if (packetBytes.Length > _maxPacketSize)
             return new NetSendResult(NetSendStatus.PacketTooLarge);
 
-        return await _sendToServer(packetBytes).ConfigureAwait(false);
+        var send = await _sendToServer(packetBytes).ConfigureAwait(false);
+        if (send.Succeeded)
+            _diagnostics.AddPacketSent(packetBytes.Length);
+
+        return send;
     }
 
     /// <summary>
@@ -92,7 +99,11 @@ public sealed class NetMessenger
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
-        return await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
+        var send = await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
+        if (send.Succeeded)
+            _diagnostics.AddPacketSent(packet.Data!.Length);
+
+        return send;
     }
 
     /// <summary>
@@ -109,6 +120,8 @@ public sealed class NetMessenger
             var send = await _sendToPeer(peerId, packet.Data!).ConfigureAwait(false);
             if (!send.Succeeded)
                 return send;
+
+            _diagnostics.AddPacketSent(packet.Data!.Length);
         }
 
         return NetSendResult.Ok();
@@ -128,6 +141,7 @@ public sealed class NetMessenger
 
         if (packet?.Kind != NetPacket.Message)
             return false;
+        _diagnostics.AddPacketReceived(data.Length);
         if (!Registry.TryGet(packet.MessageId, out var descriptor))
         {
             _diagnostics.RecordError(new NetError("UnknownMessage", $"Unknown message id '{packet.MessageId}'."));
@@ -153,17 +167,38 @@ public sealed class NetMessenger
         var context = new NetContext(senderId);
         foreach (var handler in handlers.ToArray())
         {
-            try
+            DispatchHandler(() =>
             {
-                handler(context, message);
-            }
-            catch (Exception ex)
-            {
-                _diagnostics.RecordError(new NetError("MessageHandlerError", ex.Message, ex));
-            }
+                try
+                {
+                    handler(context, message);
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.RecordError(new NetError("MessageHandlerError", ex.Message, ex));
+                }
+            });
         }
 
         return true;
+    }
+
+    private void DispatchHandler(Action action)
+    {
+        if (_dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        try
+        {
+            _dispatcher.Post(action);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("EventDispatchFailed", ex.Message, ex));
+        }
     }
 
     private EncodedPacket EncodePacket<T>(T message)

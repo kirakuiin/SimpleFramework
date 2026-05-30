@@ -31,7 +31,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize);
+        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize, _options.EventDispatcher);
     }
 
     /// <summary>
@@ -49,8 +49,9 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics();
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize);
+        Messages = new NetMessenger(SendToServerPacketAsync, SendToPeerPacketAsync, GetBroadcastTargets, Diagnostics, _options.MaxPacketSize, _options.EventDispatcher);
         _transport.PacketReceived += OnTransportPacketReceived;
+        _transport.PeerDisconnected += OnTransportPeerDisconnected;
     }
 
     /// <summary>
@@ -90,7 +91,12 @@ public sealed class GameNet : IAsyncDisposable
     /// </summary>
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="message">要发送的消息。</param>
-    public ValueTask<NetSendResult> SendToServerAsync<T>(T message) => Messages.SendToServerAsync(message);
+    public ValueTask<NetSendResult> SendToServerAsync<T>(T message)
+    {
+        return IsDisposed
+            ? ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
+            : Messages.SendToServerAsync(message);
+    }
 
     /// <summary>
     /// 从服务器向指定对等体发送类型化消息。
@@ -98,14 +104,24 @@ public sealed class GameNet : IAsyncDisposable
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="peerId">目标对等体。</param>
     /// <param name="message">要发送的消息。</param>
-    public ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message) => Messages.SendAsync(peerId, message);
+    public ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
+    {
+        return IsDisposed
+            ? ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
+            : Messages.SendAsync(peerId, message);
+    }
 
     /// <summary>
     /// 从服务器向所有远端对等体广播类型化消息。
     /// </summary>
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="message">要广播的消息。</param>
-    public ValueTask<NetSendResult> BroadcastAsync<T>(T message) => Messages.BroadcastAsync(message);
+    public ValueTask<NetSendResult> BroadcastAsync<T>(T message)
+    {
+        return IsDisposed
+            ? ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
+            : Messages.BroadcastAsync(message);
+    }
 
     /// <summary>
     /// 以主机模式启动会话，主机同时是权威服务器和本地参与者。
@@ -138,8 +154,18 @@ public sealed class GameNet : IAsyncDisposable
             return new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None);
         if (_transport is null)
             return new JoinResult(NetSessionStatus.InvalidState, PeerId.None, "No transport was configured.");
+        if (token.IsCancellationRequested)
+            return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
 
-        await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
+        }
+
         try
         {
             if (IsDisposed)
@@ -185,6 +211,11 @@ public sealed class GameNet : IAsyncDisposable
                 _pendingJoin = null;
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Join timed out.");
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                _pendingJoin = null;
+                return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
+            }
 
             if (join.Succeeded)
             {
@@ -220,15 +251,42 @@ public sealed class GameNet : IAsyncDisposable
     {
         if (IsDisposed)
             return new NetSessionResult(NetSessionStatus.ObjectDisposed);
+        if (token.IsCancellationRequested)
+            return new NetSessionResult(NetSessionStatus.Cancelled);
 
-        await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return new NetSessionResult(NetSessionStatus.Cancelled);
+        }
+
         try
         {
             if (IsDisposed)
                 return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
+            if (_transport is not null)
+            {
+                var stop = await _transport.StopServerAsync(token).ConfigureAwait(false);
+                if (stop.Status is NetTransportStatus.ObjectDisposed)
+                    return new NetSessionResult(NetSessionStatus.ObjectDisposed, stop.Message);
+                if (stop.Status is NetTransportStatus.Cancelled)
+                    return new NetSessionResult(NetSessionStatus.Cancelled, stop.Message);
+            }
+
             _state = NetLifecycleState.Stopped;
             Session.SetState(NetSessionRole.None);
+            Peers.Replace(Array.Empty<PeerInfo>());
+            Peers.SetLocalPeer(PeerId.None);
+            lock (_connectionPeers)
+            {
+                _connectionPeers.Clear();
+                _peerConnections.Clear();
+            }
+            _serverConnectionId = TransportConnectionId.None;
             return NetSessionResult.Ok();
         }
         finally
@@ -257,7 +315,11 @@ public sealed class GameNet : IAsyncDisposable
         }
 
         if (_transport is not null)
+        {
+            _transport.PacketReceived -= OnTransportPacketReceived;
+            _transport.PeerDisconnected -= OnTransportPeerDisconnected;
             await _transport.DisposeAsync().ConfigureAwait(false);
+        }
 
         _lifecycleGate.Dispose();
     }
@@ -290,8 +352,18 @@ public sealed class GameNet : IAsyncDisposable
             return new NetSessionResult(NetSessionStatus.ObjectDisposed);
         if (_transport is null)
             return new NetSessionResult(NetSessionStatus.InvalidState, "No transport was configured.");
+        if (token.IsCancellationRequested)
+            return new NetSessionResult(NetSessionStatus.Cancelled);
 
-        await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return new NetSessionResult(NetSessionStatus.Cancelled);
+        }
+
         try
         {
             if (IsDisposed)
@@ -338,6 +410,31 @@ public sealed class GameNet : IAsyncDisposable
     private void OnTransportPacketReceived(TransportPacketReceived packet)
     {
         _ = Task.Run(() => HandleTransportPacketAsync(packet));
+    }
+
+    private void OnTransportPeerDisconnected(TransportPeerDisconnected disconnected)
+    {
+        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Transport disconnected."));
+        _pendingJoin = null;
+
+        if (disconnected.ConnectionId == _serverConnectionId)
+        {
+            ClearLocalSession();
+            return;
+        }
+
+        PeerId peerId;
+        lock (_connectionPeers)
+        {
+            if (!_connectionPeers.TryGetValue(disconnected.ConnectionId, out peerId))
+                return;
+
+            _connectionPeers.Remove(disconnected.ConnectionId);
+            _peerConnections.Remove(peerId);
+        }
+
+        Peers.Remove(peerId);
+        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
     }
 
     private async Task HandleTransportPacketAsync(TransportPacketReceived packet)
@@ -466,6 +563,22 @@ public sealed class GameNet : IAsyncDisposable
     {
         _pendingJoin?.TrySetResult(new JoinResult(packet.Status, PeerId.None, packet.Message));
         _pendingJoin = null;
+    }
+
+    private void ClearLocalSession()
+    {
+        _state = NetLifecycleState.Stopped;
+        Session.SetState(NetSessionRole.None);
+        Peers.Replace(Array.Empty<PeerInfo>());
+        Peers.SetLocalPeer(PeerId.None);
+        lock (_connectionPeers)
+        {
+            _connectionPeers.Clear();
+            _peerConnections.Clear();
+        }
+
+        _serverConnectionId = TransportConnectionId.None;
+        Diagnostics.SetConnectedPeerCount(0);
     }
 
     private static byte[] SerializePacket(SessionPacket packet) => JsonSerializer.SerializeToUtf8Bytes(packet);
