@@ -576,6 +576,7 @@ public sealed class NetDiscovery : IAsyncDisposable
     private readonly IDiscoveryBackend _backend;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly CancellationTokenSource _disposeCancellation = new();
+    private readonly SemaphoreSlim _advertiseGate = new(1, 1);
     private DiscoveryAdvertisementId _advertisementId;
     private LanAdvertiseInfo? _advertiseInfo;
     private int _disposed;
@@ -591,7 +592,7 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// <summary>
     /// 创建基于指定发现 backend 的发现组件。
     /// </summary>
-    public NetDiscovery(GameNetOptions options, IDiscoveryBackend backend)
+    public NetDiscovery(GameNetOptions options, IDiscoveryBackend backend, NetDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(backend);
@@ -599,7 +600,7 @@ public sealed class NetDiscovery : IAsyncDisposable
 
         _options = options;
         _backend = backend;
-        Diagnostics = new NetDiagnostics(options.EventDispatcher);
+        Diagnostics = diagnostics ?? new NetDiagnostics(options.EventDispatcher);
     }
 
     /// <summary>
@@ -612,21 +613,31 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public async Task<NetSessionResult> StartAdvertiseAsync<TMetadata>(LanAdvertiseInfo info, TMetadata metadata)
     {
+        ArgumentNullException.ThrowIfNull(info);
         if (IsDisposed)
             return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        ArgumentNullException.ThrowIfNull(info);
-        if (_advertisementId != DiscoveryAdvertisementId.None)
-            return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running.");
-        if (!ValidateMetadataSchema<TMetadata>(info.MetadataSchemaId, out var schemaError))
-            return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
+        await _advertiseGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (IsDisposed)
+                return new NetSessionResult(NetSessionStatus.ObjectDisposed);
+            if (_advertisementId != DiscoveryAdvertisementId.None)
+                return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running.");
+            if (!ValidateMetadataSchema<TMetadata>(info.MetadataSchemaId, out var schemaError))
+                return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
-        if (!TryCreatePacket(info, metadata, out var packet, out var error))
-            return new NetSessionResult(NetSessionStatus.TransportFailed, error);
+            if (!TryCreatePacket(info, metadata, out var packet, out var error))
+                return new NetSessionResult(NetSessionStatus.TransportFailed, error);
 
-        _advertisementId = await _backend.StartAdvertiseAsync(packet, _options.Discovery).ConfigureAwait(false);
-        _advertiseInfo = info;
-        return NetSessionResult.Ok();
+            _advertisementId = await _backend.StartAdvertiseAsync(packet, _options.Discovery).ConfigureAwait(false);
+            _advertiseInfo = info;
+            return NetSessionResult.Ok();
+        }
+        finally
+        {
+            _advertiseGate.Release();
+        }
     }
 
     /// <summary>
@@ -637,16 +648,27 @@ public sealed class NetDiscovery : IAsyncDisposable
         if (IsDisposed)
             return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        if (_advertisementId == DiscoveryAdvertisementId.None || _advertiseInfo is null)
-            return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started.");
-        if (!ValidateMetadataSchema<TMetadata>(_advertiseInfo.MetadataSchemaId, out var schemaError))
-            return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
+        await _advertiseGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (IsDisposed)
+                return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        if (!TryCreatePacket(_advertiseInfo, metadata, out var packet, out var error))
-            return new NetSessionResult(NetSessionStatus.TransportFailed, error);
+            if (_advertisementId == DiscoveryAdvertisementId.None || _advertiseInfo is null)
+                return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started.");
+            if (!ValidateMetadataSchema<TMetadata>(_advertiseInfo.MetadataSchemaId, out var schemaError))
+                return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
-        await _backend.UpdateAdvertiseAsync(_advertisementId, packet, _options.Discovery).ConfigureAwait(false);
-        return NetSessionResult.Ok();
+            if (!TryCreatePacket(_advertiseInfo, metadata, out var packet, out var error))
+                return new NetSessionResult(NetSessionStatus.TransportFailed, error);
+
+            await _backend.UpdateAdvertiseAsync(_advertisementId, packet, _options.Discovery).ConfigureAwait(false);
+            return NetSessionResult.Ok();
+        }
+        finally
+        {
+            _advertiseGate.Release();
+        }
     }
 
     /// <summary>
@@ -657,13 +679,24 @@ public sealed class NetDiscovery : IAsyncDisposable
         if (IsDisposed)
             return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        if (_advertisementId == DiscoveryAdvertisementId.None)
-            return NetSessionResult.Ok();
+        await _advertiseGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (IsDisposed)
+                return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
-        _advertisementId = DiscoveryAdvertisementId.None;
-        _advertiseInfo = null;
-        return NetSessionResult.Ok();
+            if (_advertisementId == DiscoveryAdvertisementId.None)
+                return NetSessionResult.Ok();
+
+            await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
+            _advertisementId = DiscoveryAdvertisementId.None;
+            _advertiseInfo = null;
+            return NetSessionResult.Ok();
+        }
+        finally
+        {
+            _advertiseGate.Release();
+        }
     }
 
     /// <summary>
@@ -763,11 +796,19 @@ public sealed class NetDiscovery : IAsyncDisposable
             return;
 
         _disposeCancellation.Cancel();
-        if (_advertisementId != DiscoveryAdvertisementId.None)
+        await _advertiseGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
-            _advertisementId = DiscoveryAdvertisementId.None;
-            _advertiseInfo = null;
+            if (_advertisementId != DiscoveryAdvertisementId.None)
+            {
+                await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
+                _advertisementId = DiscoveryAdvertisementId.None;
+                _advertiseInfo = null;
+            }
+        }
+        finally
+        {
+            _advertiseGate.Release();
         }
 
         await _backend.DisposeAsync().ConfigureAwait(false);

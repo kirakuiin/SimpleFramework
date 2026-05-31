@@ -339,7 +339,7 @@ public sealed class NetMessenger
         if (packetBytes.Length > _maxPacketSize)
             return new NetRequestResult<TResponse> { Status = NetRequestStatus.PacketTooLarge, Message = "Packet is too large." };
 
-        var pending = new PendingRequest(peerId);
+        var pending = new PendingRequest(peerId, responseDescriptor.MessageId);
         _pendingRequests[correlationId] = pending;
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
 
@@ -406,7 +406,7 @@ public sealed class NetMessenger
         {
             NetPacket.Message => HandleMessagePacket(data.Length, packet, senderId),
             NetPacket.Request => await HandleRequestPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
-            NetPacket.Response => HandleResponsePacket(data.Length, packet),
+            NetPacket.Response => HandleResponsePacket(data.Length, packet, senderId),
             NetPacket.Relay => await HandleRelayPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
             NetPacket.RelayResult => HandleRelayResultPacket(data.Length, packet),
             _ => false
@@ -554,10 +554,21 @@ public sealed class NetMessenger
         return true;
     }
 
-    private bool HandleResponsePacket(int byteCount, NetPacket packet)
+    private bool HandleResponsePacket(int byteCount, NetPacket packet, PeerId senderId)
     {
         _diagnostics.AddPacketReceived(byteCount);
-        if (!_pendingRequests.TryRemove(packet.CorrelationId, out var pending))
+        if (!_pendingRequests.TryGetValue(packet.CorrelationId, out var pending))
+            return true;
+
+        if (pending.PeerId != senderId ||
+            packet.MessageId != pending.ResponseMessageId ||
+            packet.ResponseMessageId != pending.ResponseMessageId)
+        {
+            _diagnostics.RecordError(new NetError("UnexpectedResponse", "Response sender or message type did not match the pending request."));
+            return true;
+        }
+
+        if (!_pendingRequests.TryRemove(packet.CorrelationId, out pending))
             return true;
 
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
@@ -688,6 +699,7 @@ public sealed class NetMessenger
     {
         return status switch
         {
+            NetSendStatus.ObjectDisposed => NetRequestStatus.ObjectDisposed,
             NetSendStatus.SessionClosed => NetRequestStatus.SessionClosed,
             NetSendStatus.PacketTooLarge => NetRequestStatus.PacketTooLarge,
             NetSendStatus.SendQueueFull => NetRequestStatus.SendQueueFull,
@@ -876,9 +888,10 @@ public sealed class NetMessenger
         public int SentInWindow { get; set; }
     }
 
-    private sealed class PendingRequest(PeerId peerId)
+    private sealed class PendingRequest(PeerId peerId, ulong responseMessageId)
     {
         public PeerId PeerId { get; } = peerId;
+        public ulong ResponseMessageId { get; } = responseMessageId;
 
         public TaskCompletionSource<PendingResponse> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -24,6 +24,9 @@ public sealed class GameNet : IAsyncDisposable
     private readonly Dictionary<string, ReconnectEntry> _reconnectTokens = new();
     private readonly Dictionary<PeerId, string> _peerReconnectTokens = new();
     private readonly Dictionary<PeerId, CancellationTokenSource> _reconnectExpiry = new();
+    private JoinOptions? _lastJoinOptions;
+    private string? _lastReconnectToken;
+    private int _reconnectLoopRunning;
 
     /// <summary>
     /// 创建不带传输的 GameNet 实例，适用于只使用注册、验证或离线组件的场景。
@@ -37,7 +40,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork(_options.TimeProvider));
+        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork(_options.TimeProvider), Diagnostics);
         Messages = new NetMessenger(
             SendToServerPacketAsync,
             SendToPeerPacketAsync,
@@ -70,7 +73,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork(_options.TimeProvider));
+        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork(_options.TimeProvider), Diagnostics);
         Messages = new NetMessenger(
             SendToServerPacketAsync,
             SendToPeerPacketAsync,
@@ -86,6 +89,7 @@ public sealed class GameNet : IAsyncDisposable
         Flow = new NetFlow(Messages, Diagnostics, _options.TimeProvider, () => Session.Role, CanReachPeer, () => IsDisposed);
         _transport.PacketReceived += OnTransportPacketReceived;
         _transport.PeerDisconnected += OnTransportPeerDisconnected;
+        _transport.Error += OnTransportError;
     }
 
     /// <summary>
@@ -197,7 +201,7 @@ public sealed class GameNet : IAsyncDisposable
         CancellationToken token = default)
     {
         return IsDisposed
-            ? Task.FromResult(new NetRequestResult<TResponse> { Status = NetRequestStatus.SessionClosed })
+            ? Task.FromResult(new NetRequestResult<TResponse> { Status = NetRequestStatus.ObjectDisposed })
             : Messages.RequestAsync<TRequest, TResponse>(peerId, request, timeout, token);
     }
 
@@ -361,6 +365,8 @@ public sealed class GameNet : IAsyncDisposable
                     _serverConnectionId = connectionId;
                     lock (_connectionPeers)
                         _connectionPeers[connectionId] = PeerId.Server;
+                    _lastJoinOptions = options;
+                    _lastReconnectToken = join.ReconnectToken;
                     _state = NetLifecycleState.Client;
                     SetSessionRole(NetSessionRole.Client);
                 }
@@ -464,6 +470,8 @@ public sealed class GameNet : IAsyncDisposable
                     await _transport.DisconnectAsync(_serverConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
 
                 ClearLocalSession(DisconnectReason.LocalClosed);
+                _lastJoinOptions = null;
+                _lastReconnectToken = null;
                 return NetSessionResult.Ok();
             }
 
@@ -488,6 +496,8 @@ public sealed class GameNet : IAsyncDisposable
             }
             ClearReconnectState();
             _serverConnectionId = TransportConnectionId.None;
+            _lastJoinOptions = null;
+            _lastReconnectToken = null;
             return NetSessionResult.Ok();
         }
         finally
@@ -519,6 +529,8 @@ public sealed class GameNet : IAsyncDisposable
             Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "GameNet was disposed.");
             Stats.CancelPendingProbes(NetStatsStatus.ObjectDisposed, "GameNet was disposed.");
             ClearReconnectState();
+            _lastJoinOptions = null;
+            _lastReconnectToken = null;
         }
         finally
         {
@@ -529,6 +541,7 @@ public sealed class GameNet : IAsyncDisposable
         {
             _transport.PacketReceived -= OnTransportPacketReceived;
             _transport.PeerDisconnected -= OnTransportPeerDisconnected;
+            _transport.Error -= OnTransportError;
             await _transport.DisposeAsync().ConfigureAwait(false);
         }
 
@@ -684,7 +697,12 @@ public sealed class GameNet : IAsyncDisposable
         {
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Server connection was closed.");
             Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "Server connection was closed.");
+            var reconnectOptions = ShouldAutoReconnect(disconnected.Reason) ? _lastJoinOptions : null;
+            var reconnectToken = _lastReconnectToken;
+            var previousPeerId = Peers.LocalPeerId;
             ClearLocalSession(disconnected.Reason);
+            if (reconnectOptions is not null && !string.IsNullOrWhiteSpace(reconnectToken))
+                StartReconnectLoop(reconnectOptions, reconnectToken, previousPeerId);
             return;
         }
 
@@ -699,6 +717,11 @@ public sealed class GameNet : IAsyncDisposable
         }
 
         RemoveRemotePeer(peerId, disconnected.Reason);
+    }
+
+    private void OnTransportError(TransportError error)
+    {
+        Diagnostics.RecordError(new NetError("TransportError", error.Message, error.Exception));
     }
 
     private async Task HandleTransportPacketAsync(TransportPacketReceived packet)
@@ -1101,6 +1124,61 @@ public sealed class GameNet : IAsyncDisposable
         DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(PeerId.Server, reason)));
         if (reason == DisconnectReason.ServerClosed)
             DispatchFrameworkEvent(() => Session.RaiseServerClosed(new NetServerClosed(reason)));
+    }
+
+    private bool ShouldAutoReconnect(DisconnectReason reason)
+    {
+        if (_lastJoinOptions?.Reconnect.IsEnabled != true || _lastJoinOptions.Reconnect.Attempts <= 0)
+            return false;
+
+        return reason is not (DisconnectReason.LocalClosed or DisconnectReason.ServerClosed or DisconnectReason.Kicked or DisconnectReason.RateLimited);
+    }
+
+    private void StartReconnectLoop(JoinOptions options, string reconnectToken, PeerId previousPeerId)
+    {
+        if (Interlocked.Exchange(ref _reconnectLoopRunning, 1) == 1)
+            return;
+
+        _ = ReconnectLoopAsync(options, reconnectToken, previousPeerId);
+    }
+
+    private async Task ReconnectLoopAsync(JoinOptions options, string reconnectToken, PeerId previousPeerId)
+    {
+        try
+        {
+            for (var attempt = 0; attempt < options.Reconnect.Attempts && !IsDisposed; attempt++)
+            {
+                try
+                {
+                    await Task.Delay(options.Reconnect.Interval, _options.TimeProvider, _lifecycleCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                var join = await JoinAsync(new JoinOptions
+                {
+                    Host = options.Host,
+                    Port = options.Port,
+                    Timeout = options.Timeout,
+                    AuthPayload = options.AuthPayload,
+                    ReconnectToken = reconnectToken,
+                    Reconnect = options.Reconnect
+                }).ConfigureAwait(false);
+
+                if (!join.Succeeded)
+                    continue;
+
+                _lastReconnectToken = join.ReconnectToken ?? reconnectToken;
+                DispatchFrameworkEvent(() => Session.RaisePeerReconnected(new NetPeerReconnected(previousPeerId)));
+                return;
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconnectLoopRunning, 0);
+        }
     }
 
     private static byte[] SerializePacket(SessionPacket packet) => JsonSerializer.SerializeToUtf8Bytes(packet);

@@ -91,6 +91,7 @@ public readonly record struct NetSessionResult(NetSessionStatus Status, string? 
 public enum NetRequestStatus
 {
     Ok,
+    ObjectDisposed,
     Timeout,
     Cancelled,
     PacketTooLarge,

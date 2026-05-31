@@ -1051,6 +1051,114 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RequestAsync_IgnoresResponseFromUnexpectedPeer()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            releaseHandler.Task.GetAwaiter().GetResult();
+            return new JoinRoomResponse(true, "original");
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var request = client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var fakePayload = new JsonNetCodec().Encode(new JoinRoomResponse(false, "fake"));
+        var fakePacket = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Response,
+            MessageId = client.Messages.Registry.Get<JoinRoomResponse>().MessageId,
+            ResponseMessageId = client.Messages.Registry.Get<JoinRoomResponse>().MessageId,
+            CorrelationId = 1,
+            SenderId = new PeerId(999),
+            Payload = fakePayload,
+            RequestStatus = NetRequestStatus.Ok
+        });
+
+        await client.Messages.TryHandlePacket(fakePacket, new PeerId(999));
+        await Task.Delay(50);
+        var completedEarly = request.IsCompleted;
+
+        releaseHandler.SetResult();
+        var result = await request.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(completedEarly, Is.False);
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(result.Response!.Reason, Is.EqualTo("original"));
+    }
+
+    [Test]
+    public async Task RequestAsync_IgnoresResponseWithUnexpectedMessageType()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            releaseHandler.Task.GetAwaiter().GetResult();
+            return new JoinRoomResponse(true, "original");
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var request = client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var wrongTypePayload = new JsonNetCodec().Encode(new PlayerReady(true));
+        var wrongTypePacket = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Response,
+            MessageId = client.Messages.Registry.Get<PlayerReady>().MessageId,
+            ResponseMessageId = client.Messages.Registry.Get<PlayerReady>().MessageId,
+            CorrelationId = 1,
+            SenderId = PeerId.Server,
+            Payload = wrongTypePayload,
+            RequestStatus = NetRequestStatus.Ok
+        });
+
+        await client.Messages.TryHandlePacket(wrongTypePacket, PeerId.Server);
+        await Task.Delay(50);
+        var completedEarly = request.IsCompleted;
+
+        releaseHandler.SetResult();
+        var result = await request.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(completedEarly, Is.False);
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(result.Response!.Reason, Is.EqualTo("original"));
+    }
+
+    [Test]
     public async Task RequestAsync_Cancellation_RemovesPendingEntry()
     {
         var appId = Guid.NewGuid();

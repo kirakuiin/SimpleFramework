@@ -60,6 +60,11 @@ public sealed class JoinOptions
     /// 可选重连令牌。
     /// </summary>
     public string? ReconnectToken { get; init; }
+
+    /// <summary>
+    /// 客户端断线后的重连策略；默认禁用。
+    /// </summary>
+    public ReconnectPolicy Reconnect { get; init; } = ReconnectPolicy.Disabled;
 }
 
 /// <summary>
@@ -77,10 +82,25 @@ public sealed class ReconnectPolicy
     /// </summary>
     public static ReconnectPolicy Enabled(TimeSpan graceWindow) => new(true, graceWindow);
 
-    private ReconnectPolicy(bool isEnabled, TimeSpan graceWindow)
+    /// <summary>
+    /// 客户端使用固定间隔自动重试。
+    /// </summary>
+    public static ReconnectPolicy FixedRetry(int attempts, TimeSpan interval)
+    {
+        if (attempts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attempts), "Reconnect attempts must be greater than zero.");
+        if (interval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(interval), "Reconnect interval must be greater than zero.");
+
+        return new ReconnectPolicy(true, TimeSpan.Zero, attempts, interval);
+    }
+
+    private ReconnectPolicy(bool isEnabled, TimeSpan graceWindow, int attempts = 0, TimeSpan interval = default)
     {
         IsEnabled = isEnabled;
         GraceWindow = graceWindow;
+        Attempts = attempts;
+        Interval = interval;
     }
 
     /// <summary>
@@ -92,6 +112,16 @@ public sealed class ReconnectPolicy
     /// 允许使用重连令牌恢复身份的时间窗口。
     /// </summary>
     public TimeSpan GraceWindow { get; }
+
+    /// <summary>
+    /// 客户端自动重连尝试次数。
+    /// </summary>
+    public int Attempts { get; }
+
+    /// <summary>
+    /// 客户端自动重连间隔。
+    /// </summary>
+    public TimeSpan Interval { get; }
 }
 
 /// <summary>

@@ -688,6 +688,42 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task Reconnect_WithClientPolicy_AutomaticallyRestoresOriginalPeerIdAfterTransportDrop()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var serverTransport = network.CreateTransport("server");
+        var clientTransport = network.CreateTransport("client");
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(clientTransport, Options(appId));
+        var clientReconnected = new TaskCompletionSource<NetPeerReconnected>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Session.PeerReconnected += e => clientReconnected.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+        var firstJoin = await client.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            Reconnect = ReconnectPolicy.FixedRetry(3, TimeSpan.FromMilliseconds(10))
+        });
+
+        clientTransport.RemoveRemoteConnection(GetOnlyConnectionId(clientTransport), DisconnectReason.TransportFailed);
+        serverTransport.RemoveRemoteConnection(GetOnlyConnectionId(serverTransport), DisconnectReason.RemoteClosed);
+
+        var reconnected = await clientReconnected.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(firstJoin.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(reconnected.PeerId, Is.EqualTo(firstJoin.PeerId));
+        Assert.That(client.Peers.LocalPeerId, Is.EqualTo(firstJoin.PeerId));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.Client));
+        await WaitUntilAsync(() => server.Peers.Peers.Single(p => p.PeerId == firstJoin.PeerId).IsConnected);
+    }
+
+    [Test]
     public async Task Reconnect_TokenCannotBeReusedAfterSuccessfulReconnect()
     {
         var appId = Guid.NewGuid();
@@ -786,6 +822,14 @@ public class NetSessionTests
         {
             await Task.Delay(10, cts.Token);
         }
+    }
+
+    private static TransportConnectionId GetOnlyConnectionId(MemoryNetTransport transport)
+    {
+        var field = typeof(MemoryNetTransport).GetField("_connections", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var connections = field.GetValue(transport)!;
+        var keys = (IEnumerable<TransportConnectionId>)connections.GetType().GetProperty("Keys")!.GetValue(connections)!;
+        return keys.Single();
     }
 
     private static GameNetOptions Options(Guid appId, int protocolVersion = 1, INetEventDispatcher dispatcher = null, TimeProvider timeProvider = null) => new()

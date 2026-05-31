@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -229,6 +230,45 @@ public class NetCoreTests
     }
 
     [Test]
+    public async Task GameNet_RequestApiAfterDispose_ReturnsObjectDisposed()
+    {
+        var network = new MemoryNetNetwork();
+        var net = new GameNet(network.CreateTransport("client"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = Guid.NewGuid() }
+        });
+        net.Messages.RegisterMessage<JoinRoomRequest>();
+        net.Messages.RegisterMessage<JoinRoomResponse>();
+
+        await net.DisposeAsync();
+
+        var request = await net.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(request.Status, Is.EqualTo(NetRequestStatus.ObjectDisposed));
+    }
+
+    [Test]
+    public async Task GameNet_DiagnosticsIncludeTransportAndDiscoveryErrors()
+    {
+        var appId = Guid.NewGuid();
+        await using var transport = new ErrorReportingTransport();
+        await using var discoveryBackend = new MalformedDiscoveryBackend(appId);
+        await using var net = new GameNet(transport, new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = appId }
+        }, discoveryBackend);
+
+        transport.RaiseError("transport failed");
+        await net.Discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+
+        Assert.That(net.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(2));
+        Assert.That(net.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task NetDiscovery_ApisAfterDispose_ReturnObjectDisposedOrThrow()
     {
         var discovery = new NetDiscovery(new GameNetOptions
@@ -349,5 +389,82 @@ public class NetCoreTests
         {
             throw new InvalidOperationException("post failed");
         }
+    }
+
+    private sealed class ErrorReportingTransport : INetTransport
+    {
+        private Action<TransportError> _error = _ => { };
+
+        public event Action<TransportPeerConnected> PeerConnected
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<TransportPeerDisconnected> PeerDisconnected
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<TransportPacketReceived> PacketReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<TransportError> Error
+        {
+            add => _error += value;
+            remove => _error -= value;
+        }
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None));
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            Task.CompletedTask;
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            ValueTask.FromResult(new NetSendResult(NetSendStatus.TransportFailed));
+
+        public void RaiseError(string message) =>
+            _error(new TransportError(TransportConnectionId.None, message));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class MalformedDiscoveryBackend(Guid appId) : IDiscoveryBackend
+    {
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult<IReadOnlyList<DiscoveryPacket>>(new[]
+            {
+                new DiscoveryPacket(
+                    DiscoveryPacket.ExpectedMagic,
+                    DiscoveryPacket.CurrentPacketVersion,
+                    appId,
+                    1,
+                    "broken-room",
+                    7777,
+                    DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+                    new byte[] { 0xff, 0x00 })
+            });
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

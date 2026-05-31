@@ -233,6 +233,27 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task StartAdvertise_ConcurrentCalls_StartOnlyOneAdvertisement()
+    {
+        var backend = new BlockingStartDiscoveryBackend();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+        var info = new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId };
+
+        var first = discovery.StartAdvertiseAsync(info, new RoomListMetadata("Room", 1, 4, false));
+        await backend.WaitForFirstStartAsync();
+        var second = discovery.StartAdvertiseAsync(info, new RoomListMetadata("Room", 1, 4, false));
+        backend.ReleaseStarts();
+
+        var results = await Task.WhenAll(first, second);
+
+        Assert.That(results.Count(result => result.Status == NetSessionStatus.Ok), Is.EqualTo(1));
+        Assert.That(results.Count(result => result.Status == NetSessionStatus.InvalidState), Is.EqualTo(1));
+        Assert.That(backend.StartCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task StopAdvertise_RemovesRoomFromScans()
     {
         var network = new MemoryDiscoveryNetwork();
@@ -703,5 +724,40 @@ public class NetDiscoveryStatsTests
             DisposeCount++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class BlockingStartDiscoveryBackend : IDiscoveryBackend
+    {
+        private readonly TaskCompletionSource _firstStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseStarts = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _started;
+
+        public int StartCount => Volatile.Read(ref _started);
+
+        public async Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
+        {
+            if (Interlocked.Increment(ref _started) == 1)
+                _firstStarted.TrySetResult();
+
+            await _releaseStarts.Task.WaitAsync(token).ConfigureAwait(false);
+            return new DiscoveryAdvertisementId(Guid.NewGuid());
+        }
+
+        public Task WaitForFirstStartAsync() =>
+            _firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        public void ReleaseStarts() =>
+            _releaseStarts.TrySetResult();
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult<IReadOnlyList<DiscoveryPacket>>(Array.Empty<DiscoveryPacket>());
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

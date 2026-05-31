@@ -47,6 +47,7 @@ await client.SendToServerAsync(new PlayerReady(true));
 - `HostAsync` 启动主机模式，服务器自身也是本地参与者。
 - `StartServerAsync` 启动专用服务器模式，不创建本地玩家参与者。
 - `JoinAsync` 会校验 `ApplicationId` 和 `ProtocolVersion`，并可通过 `HostOptions.Authenticator` 校验认证载荷。
+- 客户端自动重连默认关闭；需要时在 `JoinOptions.Reconnect` 中显式配置，例如 `ReconnectPolicy.FixedRetry(3, TimeSpan.FromSeconds(1))`。服务端仍需通过 `HostOptions.ReconnectPolicy` 开启重连宽限窗口。
 
 ## 消息
 
