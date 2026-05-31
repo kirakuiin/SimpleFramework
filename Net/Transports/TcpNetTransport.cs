@@ -17,6 +17,19 @@ public sealed class TcpNetTransport : INetTransport
     private int _disposed;
     private int _running;
 
+    public TcpNetTransport(int maxFrameSize = 64 * 1024)
+    {
+        if (maxFrameSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxFrameSize), "Max frame size must be greater than zero.");
+
+        MaxFrameSize = maxFrameSize;
+    }
+
+    /// <summary>
+    /// 读取 TCP 帧前允许的最大声明长度，应与上层 MaxPacketSize 保持一致。
+    /// </summary>
+    public int MaxFrameSize { get; set; }
+
     /// <summary>
     /// 监听成功后的本地终结点；端口为 0 时可从这里读取实际端口。
     /// </summary>
@@ -262,7 +275,7 @@ public sealed class TcpNetTransport : INetTransport
         {
             while (!token.IsCancellationRequested)
             {
-                var packet = await ReadFrameAsync(connection.Stream, token).ConfigureAwait(false);
+                var packet = await ReadFrameAsync(connection.Stream, MaxFrameSize, token).ConfigureAwait(false);
                 if (packet is null)
                     break;
 
@@ -278,13 +291,13 @@ public sealed class TcpNetTransport : INetTransport
         catch (OperationCanceledException)
         {
         }
-        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or InvalidDataException)
         {
             if (_connections.TryRemove(connectionId, out var removed))
                 removed.Dispose();
 
             DispatchError(connectionId, ex.Message, ex);
-            DispatchPeerDisconnected(connectionId, DisconnectReason.RemoteClosed);
+            DispatchPeerDisconnected(connectionId, ex is InvalidDataException ? DisconnectReason.TransportFailed : DisconnectReason.RemoteClosed);
         }
     }
 
@@ -296,7 +309,7 @@ public sealed class TcpNetTransport : INetTransport
         await stream.FlushAsync(token).ConfigureAwait(false);
     }
 
-    private static async Task<byte[]?> ReadFrameAsync(NetworkStream stream, CancellationToken token)
+    private static async Task<byte[]?> ReadFrameAsync(NetworkStream stream, int maxFrameSize, CancellationToken token)
     {
         var lengthBytes = await ReadExactlyOrNullAsync(stream, 4, token).ConfigureAwait(false);
         if (lengthBytes is null)
@@ -305,6 +318,8 @@ public sealed class TcpNetTransport : INetTransport
         var length = BitConverter.ToInt32(lengthBytes, 0);
         if (length < 0)
             throw new InvalidDataException("Frame length cannot be negative.");
+        if (length > maxFrameSize)
+            throw new InvalidDataException($"Frame length {length} exceeds MaxFrameSize {maxFrameSize}.");
 
         return await ReadExactlyOrNullAsync(stream, length, token).ConfigureAwait(false);
     }

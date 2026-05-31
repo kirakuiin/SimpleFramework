@@ -1,5 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Net;
+using System.Net.Sockets;
 
 namespace SimpleFramework.Net;
 
@@ -9,6 +12,16 @@ namespace SimpleFramework.Net;
 public sealed class DiscoveryOptions
 {
     /// <summary>
+    /// UDP/LAN 发现端口。
+    /// </summary>
+    public int Port { get; init; } = 3344;
+
+    /// <summary>
+    /// 持续广告发送间隔。
+    /// </summary>
+    public TimeSpan AdvertiseInterval { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
     /// 单个发现元数据载荷允许的最大字节数。
     /// </summary>
     public int MaxMetadataPayloadSize { get; init; } = 8 * 1024;
@@ -17,6 +30,51 @@ public sealed class DiscoveryOptions
     /// 浏览器在未收到更新后保留房间的最长时间。
     /// </summary>
     public TimeSpan RoomTimeout { get; init; } = TimeSpan.FromSeconds(5);
+}
+
+/// <summary>
+/// 发现广告句柄。
+/// </summary>
+public readonly record struct DiscoveryAdvertisementId(Guid Value)
+{
+    public static readonly DiscoveryAdvertisementId None = new(Guid.Empty);
+}
+
+/// <summary>
+/// 发现后端抽象，用于替换内存测试网络和 UDP/LAN 网络。
+/// </summary>
+public interface IDiscoveryBackend : IAsyncDisposable
+{
+    Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default);
+    Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default);
+    Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default);
+    Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default);
+}
+
+/// <summary>
+/// 标记发现元数据类型使用的稳定 schema key。
+/// </summary>
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
+public sealed class DiscoveryMetadataAttribute : Attribute
+{
+    public DiscoveryMetadataAttribute(string schemaKey)
+    {
+        if (string.IsNullOrWhiteSpace(schemaKey))
+            throw new ArgumentException("Discovery metadata schema key cannot be empty.", nameof(schemaKey));
+
+        SchemaKey = schemaKey;
+        SchemaId = DiscoveryMetadataRegistry.GetSchemaId(schemaKey);
+    }
+
+    /// <summary>
+    /// 稳定 schema key。
+    /// </summary>
+    public string SchemaKey { get; }
+
+    /// <summary>
+    /// 由 schema key 派生的 schema id。
+    /// </summary>
+    public uint SchemaId { get; }
 }
 
 /// <summary>
@@ -55,6 +113,11 @@ public sealed class LanScanResult<TMetadata>
     /// 游戏会话监听端口。
     /// </summary>
     public required int GamePort { get; init; }
+
+    /// <summary>
+    /// 发现包来源端点；内存后端可能为空。
+    /// </summary>
+    public IPEndPoint? EndPoint { get; init; }
 
     /// <summary>
     /// 是否可被当前应用版本直接加入。
@@ -108,13 +171,15 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     private readonly NetDiscovery _discovery;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _roomTimeout;
+    private readonly uint _metadataSchemaId;
     private readonly Dictionary<string, BrowserRoom<TMetadata>> _rooms = new();
 
-    internal LanBrowser(NetDiscovery discovery, TimeProvider timeProvider, TimeSpan roomTimeout)
+    internal LanBrowser(NetDiscovery discovery, TimeProvider timeProvider, TimeSpan roomTimeout, uint metadataSchemaId)
     {
         _discovery = discovery;
         _timeProvider = timeProvider;
         _roomTimeout = roomTimeout;
+        _metadataSchemaId = metadataSchemaId;
         Snapshot = new LanBrowserSnapshot<TMetadata> { Rooms = Array.Empty<LanScanResult<TMetadata>>() };
     }
 
@@ -144,7 +209,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     public async Task RefreshAsync()
     {
         var now = _timeProvider.GetUtcNow();
-        var scanned = await _discovery.ScanAsync<TMetadata>(TimeSpan.Zero).ConfigureAwait(false);
+        var scanned = await _discovery.ScanAsync<TMetadata>(TimeSpan.Zero, _metadataSchemaId).ConfigureAwait(false);
         foreach (var room in scanned)
         {
             if (!_rooms.TryGetValue(room.RoomId, out var existing))
@@ -266,40 +331,185 @@ public sealed record DiscoveryMetadataDescriptor(Type MetadataType, string Schem
 /// <summary>
 /// 用于单元测试的内存发现网络。
 /// </summary>
-public sealed class MemoryDiscoveryNetwork
+public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend
 {
     private readonly object _gate = new();
     private readonly Dictionary<Guid, DiscoveryPacket> _advertisements = new();
 
-    internal Guid Publish(DiscoveryPacket packet)
+    public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
         lock (_gate)
         {
             var id = Guid.NewGuid();
             _advertisements[id] = packet;
-            return id;
+            return Task.FromResult(new DiscoveryAdvertisementId(id));
         }
     }
 
-    internal void Update(Guid id, DiscoveryPacket packet)
+    public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
         lock (_gate)
         {
-            if (_advertisements.ContainsKey(id))
-                _advertisements[id] = packet;
+            if (_advertisements.ContainsKey(id.Value))
+                _advertisements[id.Value] = packet;
         }
+
+        return Task.CompletedTask;
     }
 
-    internal void Remove(Guid id)
+    public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)
     {
         lock (_gate)
-            _advertisements.Remove(id);
+            _advertisements.Remove(id.Value);
+
+        return Task.CompletedTask;
     }
 
-    internal IReadOnlyList<DiscoveryPacket> Snapshot()
+    public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
     {
         lock (_gate)
-            return _advertisements.Values.ToArray();
+            return Task.FromResult<IReadOnlyList<DiscoveryPacket>>(_advertisements.Values.ToArray());
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+/// <summary>
+/// 基于 UDP broadcast 的局域网发现后端。
+/// </summary>
+public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<DiscoveryAdvertisementId, CancellationTokenSource> _advertisements = new();
+
+    public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
+    {
+        var id = new DiscoveryAdvertisementId(Guid.NewGuid());
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        lock (_gate)
+            _advertisements[id] = cancellation;
+
+        _ = AdvertiseLoopAsync(packet, options, cancellation.Token);
+        return Task.FromResult(id);
+    }
+
+    public async Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
+    {
+        await StopAdvertiseAsync(id, token).ConfigureAwait(false);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        lock (_gate)
+            _advertisements[id] = cancellation;
+
+        _ = AdvertiseLoopAsync(packet, options, cancellation.Token);
+    }
+
+    public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)
+    {
+        CancellationTokenSource? cancellation = null;
+        lock (_gate)
+        {
+            if (_advertisements.Remove(id, out var existing))
+                cancellation = existing;
+        }
+
+        if (cancellation is not null)
+        {
+            cancellation.Cancel();
+            cancellation.Dispose();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+    {
+        if (duration <= TimeSpan.Zero)
+            return Array.Empty<DiscoveryPacket>();
+
+        var results = new List<DiscoveryPacket>();
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        socket.ExclusiveAddressUse = false;
+        socket.Bind(new IPEndPoint(IPAddress.Any, options.Port));
+        using var client = new UdpClient { Client = socket };
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(duration);
+
+        while (!timeout.IsCancellationRequested)
+        {
+            UdpReceiveResult received;
+            try
+            {
+                received = await client.ReceiveAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+
+            try
+            {
+                var packet = JsonSerializer.Deserialize<DiscoveryPacket>(received.Buffer);
+                if (packet is null ||
+                    packet.Magic != DiscoveryPacket.ExpectedMagic ||
+                    packet.PacketVersion != DiscoveryPacket.CurrentPacketVersion)
+                {
+                    continue;
+                }
+
+                results.Add(packet with { RemoteEndPoint = received.RemoteEndPoint });
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return results;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        DiscoveryAdvertisementId[] ids;
+        lock (_gate)
+            ids = _advertisements.Keys.ToArray();
+
+        foreach (var id in ids)
+            await StopAdvertiseAsync(id).ConfigureAwait(false);
+    }
+
+    private static async Task AdvertiseLoopAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token)
+    {
+        using var client = new UdpClient(AddressFamily.InterNetwork)
+        {
+            EnableBroadcast = true
+        };
+        var endPoint = new IPEndPoint(IPAddress.Broadcast, options.Port);
+        var payload = JsonSerializer.SerializeToUtf8Bytes(packet);
+
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await client.SendAsync(payload, endPoint, token).ConfigureAwait(false);
+                await Task.Delay(options.AdvertiseInterval, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (SocketException)
+            {
+                await Task.Delay(options.AdvertiseInterval, token).ConfigureAwait(false);
+            }
+        }
     }
 }
 
@@ -309,23 +519,31 @@ public sealed class MemoryDiscoveryNetwork
 public sealed class NetDiscovery : IAsyncDisposable
 {
     private readonly GameNetOptions _options;
-    private readonly MemoryDiscoveryNetwork _network;
+    private readonly IDiscoveryBackend _backend;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
-    private Guid? _advertisementId;
+    private DiscoveryAdvertisementId _advertisementId;
     private LanAdvertiseInfo? _advertiseInfo;
     private int _disposed;
 
     /// <summary>
     /// 创建基于内存发现网络的发现组件。
     /// </summary>
-    public NetDiscovery(GameNetOptions options, MemoryDiscoveryNetwork network)
+    public NetDiscovery(GameNetOptions options)
+        : this(options, new UdpDiscoveryNetwork())
+    {
+    }
+
+    /// <summary>
+    /// 创建基于指定发现 backend 的发现组件。
+    /// </summary>
+    public NetDiscovery(GameNetOptions options, IDiscoveryBackend backend)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(network);
+        ArgumentNullException.ThrowIfNull(backend);
         GameNet.ValidateOptions(options);
 
         _options = options;
-        _network = network;
+        _backend = backend;
         Diagnostics = new NetDiagnostics(options.EventDispatcher);
     }
 
@@ -337,69 +555,79 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// <summary>
     /// 启动持续房间广告。
     /// </summary>
-    public Task<NetSessionResult> StartAdvertiseAsync<TMetadata>(LanAdvertiseInfo info, TMetadata metadata)
+    public async Task<NetSessionResult> StartAdvertiseAsync<TMetadata>(LanAdvertiseInfo info, TMetadata metadata)
     {
         if (IsDisposed)
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.ObjectDisposed));
+            return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
         ArgumentNullException.ThrowIfNull(info);
-        if (_advertisementId is not null)
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running."));
+        if (_advertisementId != DiscoveryAdvertisementId.None)
+            return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running.");
 
         if (!TryCreatePacket(info, metadata, out var packet, out var error))
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.TransportFailed, error));
+            return new NetSessionResult(NetSessionStatus.TransportFailed, error);
 
-        _advertisementId = _network.Publish(packet);
+        _advertisementId = await _backend.StartAdvertiseAsync(packet, _options.Discovery).ConfigureAwait(false);
         _advertiseInfo = info;
-        return Task.FromResult(NetSessionResult.Ok());
+        return NetSessionResult.Ok();
     }
 
     /// <summary>
     /// 更新当前广告的公开元数据。
     /// </summary>
-    public Task<NetSessionResult> UpdateAdvertiseMetadataAsync<TMetadata>(TMetadata metadata)
+    public async Task<NetSessionResult> UpdateAdvertiseMetadataAsync<TMetadata>(TMetadata metadata)
     {
         if (IsDisposed)
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.ObjectDisposed));
+            return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        if (_advertisementId is null || _advertiseInfo is null)
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started."));
+        if (_advertisementId == DiscoveryAdvertisementId.None || _advertiseInfo is null)
+            return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started.");
 
         if (!TryCreatePacket(_advertiseInfo, metadata, out var packet, out var error))
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.TransportFailed, error));
+            return new NetSessionResult(NetSessionStatus.TransportFailed, error);
 
-        _network.Update(_advertisementId.Value, packet);
-        return Task.FromResult(NetSessionResult.Ok());
+        await _backend.UpdateAdvertiseAsync(_advertisementId, packet, _options.Discovery).ConfigureAwait(false);
+        return NetSessionResult.Ok();
     }
 
     /// <summary>
     /// 停止当前房间广告。
     /// </summary>
-    public Task<NetSessionResult> StopAdvertiseAsync()
+    public async Task<NetSessionResult> StopAdvertiseAsync()
     {
         if (IsDisposed)
-            return Task.FromResult(new NetSessionResult(NetSessionStatus.ObjectDisposed));
+            return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
-        if (_advertisementId is null)
-            return Task.FromResult(NetSessionResult.Ok());
+        if (_advertisementId == DiscoveryAdvertisementId.None)
+            return NetSessionResult.Ok();
 
-        _network.Remove(_advertisementId.Value);
-        _advertisementId = null;
+        await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
+        _advertisementId = DiscoveryAdvertisementId.None;
         _advertiseInfo = null;
-        return Task.FromResult(NetSessionResult.Ok());
+        return NetSessionResult.Ok();
     }
 
     /// <summary>
     /// 执行一次房间扫描。
     /// </summary>
-    public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration)
+    public async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration)
+    {
+        return await ScanAsync<TMetadata>(duration, GetRequiredMetadataSchemaId<TMetadata>()).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 按指定 metadata schema 执行一次房间扫描。
+    /// </summary>
+    public async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration, uint metadataSchemaId)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
 
         var results = new List<LanScanResult<TMetadata>>();
-        foreach (var packet in _network.Snapshot())
+        foreach (var packet in await _backend.ScanAsync(duration, _options.Discovery).ConfigureAwait(false))
         {
             if (packet.ApplicationId != _options.Application.ApplicationId)
+                continue;
+            if (packet.MetadataSchemaId != metadataSchemaId)
                 continue;
             if (packet.MetadataPayload.Length > _options.Discovery.MaxMetadataPayloadSize)
             {
@@ -407,9 +635,23 @@ public sealed class NetDiscovery : IAsyncDisposable
                 continue;
             }
 
-            var metadata = JsonSerializer.Deserialize<TMetadata>(packet.MetadataPayload, _jsonOptions);
-            if (metadata is null)
+            TMetadata? metadata;
+            try
+            {
+                metadata = JsonSerializer.Deserialize<TMetadata>(packet.MetadataPayload, _jsonOptions);
+            }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException)
+            {
+                Diagnostics.AddDroppedPacket();
+                Diagnostics.RecordError(new NetError("DiscoveryMetadataDecodeFailed", ex.Message, ex));
                 continue;
+            }
+
+            if (metadata is null)
+            {
+                Diagnostics.AddDroppedPacket();
+                continue;
+            }
 
             results.Add(new LanScanResult<TMetadata>
             {
@@ -420,11 +662,12 @@ public sealed class NetDiscovery : IAsyncDisposable
                 ProtocolVersion = packet.ProtocolVersion,
                 MetadataSchemaId = packet.MetadataSchemaId,
                 Metadata = metadata,
+                EndPoint = packet.RemoteEndPoint,
                 EstimatedLatency = TimeSpan.Zero
             });
         }
 
-        return Task.FromResult<IReadOnlyList<LanScanResult<TMetadata>>>(results);
+        return results;
     }
 
     /// <summary>
@@ -432,27 +675,35 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>()
     {
+        return StartBrowserAsync<TMetadata>(GetRequiredMetadataSchemaId<TMetadata>());
+    }
+
+    /// <summary>
+    /// 按指定 metadata schema 创建连续房间浏览器。
+    /// </summary>
+    public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>(uint metadataSchemaId)
+    {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
 
-        return Task.FromResult(new LanBrowser<TMetadata>(this, _options.TimeProvider, _options.Discovery.RoomTimeout));
+        return Task.FromResult(new LanBrowser<TMetadata>(this, _options.TimeProvider, _options.Discovery.RoomTimeout, metadataSchemaId));
     }
 
     /// <summary>
     /// 释放发现组件并停止当前广告。
     /// </summary>
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
-            return ValueTask.CompletedTask;
+            return;
 
-        if (_advertisementId is not null)
+        if (_advertisementId != DiscoveryAdvertisementId.None)
         {
-            _network.Remove(_advertisementId.Value);
-            _advertisementId = null;
+            await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
+            _advertisementId = DiscoveryAdvertisementId.None;
             _advertiseInfo = null;
         }
 
-        return ValueTask.CompletedTask;
+        await _backend.DisposeAsync().ConfigureAwait(false);
     }
 
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
@@ -545,9 +796,21 @@ public sealed class NetDiscovery : IAsyncDisposable
         error = null;
         return true;
     }
+
+    private static uint GetRequiredMetadataSchemaId<TMetadata>()
+    {
+        var attribute = Attribute.GetCustomAttribute(typeof(TMetadata), typeof(DiscoveryMetadataAttribute)) as DiscoveryMetadataAttribute;
+        if (attribute is null)
+        {
+            throw new InvalidOperationException(
+                $"Discovery metadata type '{typeof(TMetadata).FullName}' must declare {nameof(DiscoveryMetadataAttribute)} or use an overload with an explicit metadata schema id.");
+        }
+
+        return attribute.SchemaId;
+    }
 }
 
-internal sealed record DiscoveryPacket(
+public sealed record DiscoveryPacket(
     uint Magic,
     ushort PacketVersion,
     Guid ApplicationId,
@@ -559,4 +822,7 @@ internal sealed record DiscoveryPacket(
 {
     public const uint ExpectedMagic = 0x53464E44;
     public const ushort CurrentPacketVersion = 1;
+
+    [JsonIgnore]
+    public IPEndPoint? RemoteEndPoint { get; init; }
 }

@@ -252,6 +252,31 @@ public class NetCoreTests
     }
 
     [Test]
+    public async Task GameNet_ExposesDiscovery_AndDisposeStopsAdvertise()
+    {
+        var appId = Guid.NewGuid();
+        var discoveryNetwork = new MemoryDiscoveryNetwork();
+        var transportNetwork = new MemoryNetNetwork();
+        var options = new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = appId }
+        };
+        await using var net = new GameNet(transportNetwork.CreateTransport("server"), options, discoveryNetwork);
+        await using var browser = new NetDiscovery(options, discoveryNetwork);
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+
+        await net.Discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.Zero), Has.Count.EqualTo(1));
+
+        await net.DisposeAsync();
+
+        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.Zero), Is.Empty);
+    }
+
+    [Test]
     public async Task GameNet_ConcurrentHostCalls_OnlyOneStarts()
     {
         var network = new MemoryNetNetwork();

@@ -88,14 +88,14 @@ var response = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
 LAN 发现只承载公开展示和筛选信息。不要把真实密码、token、私钥或私有房间 key 放入 metadata；可以放 `HasPassword` 这类公开标识。
 
 ```csharp
+[DiscoveryMetadata("room.metadata.v1")]
 public sealed record RoomMetadata(string RoomName, int CurrentPlayers, int MaxPlayers, bool HasPassword);
 
-var discoveryNetwork = new MemoryDiscoveryNetwork();
-await using var advertiser = new NetDiscovery(options, discoveryNetwork);
-await using var browserDiscovery = new NetDiscovery(options, discoveryNetwork);
+await using var server = new GameNet(new TcpNetTransport(), options);
+await using var client = new GameNet(new TcpNetTransport(), options);
 
 var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.metadata.v1");
-await advertiser.StartAdvertiseAsync(
+await server.Discovery.StartAdvertiseAsync(
     new LanAdvertiseInfo
     {
         RoomId = "room-1",
@@ -104,7 +104,16 @@ await advertiser.StartAdvertiseAsync(
     },
     new RoomMetadata("Test Room", 1, 4, false));
 
-var rooms = await browserDiscovery.ScanAsync<RoomMetadata>(TimeSpan.FromMilliseconds(200));
+var rooms = await client.Discovery.ScanAsync<RoomMetadata>(TimeSpan.FromMilliseconds(200));
+```
+
+`GameNet` 默认使用 UDP broadcast 后端用于 LAN 发现。单元测试需要确定性行为时，可以注入共享的 `MemoryDiscoveryNetwork`：
+
+```csharp
+var discoveryNetwork = new MemoryDiscoveryNetwork();
+var memoryNet = new MemoryNetNetwork();
+await using var server = new GameNet(memoryNet.CreateTransport("server"), options, discoveryNetwork);
+await using var client = new GameNet(memoryNet.CreateTransport("client"), options, discoveryNetwork);
 ```
 
 连续浏览器会产生 found、updated、lost 事件；如果 `GameNetOptions.EventDispatcher` 已配置，这些事件会通过 dispatcher 投递。

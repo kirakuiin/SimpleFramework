@@ -57,6 +57,46 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task JoinRejected_ServerClosesUnderlyingTransportConnection()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        var clientTransport = network.CreateTransport("client");
+        await using var client = new GameNet(clientTransport, Options(Guid.NewGuid()));
+        var disconnected = new TaskCompletionSource<TransportPeerDisconnected>();
+        clientTransport.PeerDisconnected += e => disconnected.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.IncompatibleApplication));
+        Assert.That((await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(1))).Reason, Is.EqualTo(DisconnectReason.RemoteClosed));
+    }
+
+    [Test]
+    public async Task JoinTimeout_ClientClosesUnderlyingTransportConnection()
+    {
+        var network = new MemoryNetNetwork();
+        var silentServer = network.CreateTransport("silent-server");
+        await using var client = new GameNet(network.CreateTransport("client"), Options(Guid.NewGuid()));
+        var disconnected = new TaskCompletionSource<TransportPeerDisconnected>();
+        silentServer.PeerDisconnected += e => disconnected.TrySetResult(e);
+
+        await silentServer.StartServerAsync(new NetListenOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions
+        {
+            Host = "silent-server",
+            Port = 7777,
+            Timeout = TimeSpan.FromMilliseconds(50)
+        });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That((await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(1))).Reason, Is.EqualTo(DisconnectReason.RemoteClosed));
+        await silentServer.DisposeAsync();
+    }
+
+    [Test]
     public async Task Join_WhenServerIsFull_ReturnsCapacityFull()
     {
         var appId = Guid.NewGuid();
@@ -168,6 +208,89 @@ public class NetSessionTests
 
         Assert.That(participants, Is.EquivalentTo(new[] { joinA.PeerId, joinB.PeerId }));
         Assert.That(participants, Does.Not.Contain(PeerId.Server));
+    }
+
+    [Test]
+    public async Task PeerDirectory_ExistingClientsReceiveJoinAndLeaveUpdates()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var clientA = new GameNet(network.CreateTransport("client-a"), Options(appId));
+        await using var clientB = new GameNet(network.CreateTransport("client-b"), Options(appId));
+        var clientAObservedJoin = new TaskCompletionSource<NetPeerJoined>();
+        var clientAObservedLeft = new TaskCompletionSource<NetPeerLeft>();
+
+        clientA.Session.PeerJoined += e =>
+        {
+            if (!e.Peer.IsServer && e.Peer.PeerId != clientA.Peers.LocalPeerId)
+                clientAObservedJoin.TrySetResult(e);
+        };
+        clientA.Session.PeerLeft += e => clientAObservedLeft.TrySetResult(e);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await clientA.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var joinB = await clientB.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var joined = await clientAObservedJoin.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(joined.Peer.PeerId, Is.EqualTo(joinB.PeerId));
+        await WaitUntilAsync(() => clientA.Peers.Peers.Any(p => p.PeerId == joinB.PeerId));
+
+        await clientB.LeaveAsync();
+
+        var left = await clientAObservedLeft.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(left.PeerId, Is.EqualTo(joinB.PeerId));
+        await WaitUntilAsync(() => clientA.Peers.Peers.All(p => p.PeerId != joinB.PeerId));
+    }
+
+    [Test]
+    public async Task PeerDirectory_ClientUpdateEventsPreserveDisconnectReconnectAndLeaveOrder()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+        await using var observer = new GameNet(network.CreateTransport("observer"), Options(appId, timeProvider: clock));
+        await using var firstClient = new GameNet(network.CreateTransport("client-a"), Options(appId, timeProvider: clock));
+        await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId, timeProvider: clock));
+        var events = new List<string>();
+
+        observer.Session.PeerDisconnected += e => events.Add($"disconnected:{e.PeerId.Value}");
+        observer.Session.PeerReconnected += e => events.Add($"reconnected:{e.PeerId.Value}");
+        observer.Session.PeerLeft += e => events.Add($"left:{e.PeerId.Value}");
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(5))
+        });
+        await observer.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => observer.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
+
+        var reconnect = await secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+        await WaitUntilAsync(() => observer.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && p.IsConnected));
+
+        await secondClient.LeaveAsync();
+        await WaitUntilAsync(() => observer.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await WaitUntilAsync(() => observer.Peers.Peers.All(p => p.PeerId != firstJoin.PeerId));
+
+        Assert.That(reconnect.PeerId, Is.EqualTo(firstJoin.PeerId));
+        Assert.That(events, Is.EqualTo(new[]
+        {
+            $"disconnected:{firstJoin.PeerId.Value}",
+            $"reconnected:{firstJoin.PeerId.Value}",
+            $"disconnected:{firstJoin.PeerId.Value}",
+            $"left:{firstJoin.PeerId.Value}"
+        }));
     }
 
     [Test]

@@ -291,6 +291,33 @@ public class NetTransportTests
     }
 
     [Test]
+    public async Task TcpTransport_RejectsFrameHeaderLargerThanConfiguredLimit()
+    {
+        await using var server = new TcpNetTransport(maxFrameSize: 16);
+        using var client = new TcpClient();
+        var connected = new TaskCompletionSource<TransportConnectionId>();
+        var disconnected = new TaskCompletionSource<TransportPeerDisconnected>();
+        var error = new TaskCompletionSource<TransportError>();
+
+        server.PeerConnected += e => connected.TrySetResult(e.ConnectionId);
+        server.PeerDisconnected += e => disconnected.TrySetResult(e);
+        server.Error += e => error.TrySetResult(e);
+
+        await server.StartServerAsync(new NetListenOptions
+        {
+            BindAddress = IPAddress.Loopback,
+            Port = 0
+        });
+        await client.ConnectAsync(IPAddress.Loopback, server.LocalEndPoint!.Port);
+        await connected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await client.GetStream().WriteAsync(BitConverter.GetBytes(1024));
+
+        Assert.That((await error.Task.WaitAsync(TimeSpan.FromSeconds(2))).Message, Does.Contain("Frame length"));
+        Assert.That((await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(2))).Reason, Is.EqualTo(DisconnectReason.TransportFailed));
+    }
+
+    [Test]
     public async Task TcpTransport_UnreliableChannel_ReturnsChannelUnsupportedByDefault()
     {
         await using var server = new TcpNetTransport();

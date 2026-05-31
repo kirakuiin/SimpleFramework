@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Net;
@@ -8,8 +11,10 @@ using Test.Net.TestDoubles;
 
 namespace Test.Net;
 
+[DiscoveryMetadata("room.list.v1")]
 public sealed record RoomListMetadata(string RoomName, int CurrentPlayers, int MaxPlayers, bool HasPassword);
 
+[DiscoveryMetadata("room.other.v1")]
 public sealed record OtherRoomListMetadata(string Name);
 
 public sealed record UnsafeRoomMetadata(string Password);
@@ -56,6 +61,96 @@ public class NetDiscoveryStatsTests
         Assert.That(rooms[0].IsJoinable, Is.True);
         Assert.That(rooms[0].Metadata.RoomName, Is.EqualTo("Room"));
         Assert.That(rooms[0].Metadata.HasPassword, Is.True);
+    }
+
+    [Test]
+    public async Task DiscoveryScan_FiltersDifferentMetadataSchemaBeforeDecode()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var appId = Guid.NewGuid();
+        await using var advertiser = new NetDiscovery(Options(appId), network);
+        await using var browser = new NetDiscovery(Options(appId), network);
+
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo
+            {
+                RoomId = "room-other",
+                GamePort = 7777,
+                MetadataSchemaId = DiscoveryMetadataRegistry.GetSchemaId("room.other.v1")
+            },
+            new OtherRoomListMetadata("Other"));
+
+        var rooms = await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(100));
+
+        Assert.That(rooms, Is.Empty);
+    }
+
+    [Test]
+    public async Task DiscoveryScan_WithMalformedMetadata_DropsPacketAndRecordsDiagnostic()
+    {
+        var appId = Guid.NewGuid();
+        var backend = new StaticDiscoveryBackend(new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            "broken-room",
+            7777,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            new byte[] { 0xff, 0x00 }));
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+
+        Assert.That(rooms, Is.Empty);
+        Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+        Assert.That(discovery.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task DiscoveryScan_WithoutMetadataSchemaAttribute_Throws()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), network);
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await discovery.ScanAsync<UnregisteredDiscoveryMetadata>(TimeSpan.Zero));
+
+        Assert.That(ex!.Message, Does.Contain(nameof(DiscoveryMetadataAttribute)));
+    }
+
+    [Test]
+    public async Task DiscoveryDispose_DisposesBackend()
+    {
+        var backend = new DisposableDiscoveryBackend();
+        var discovery = new NetDiscovery(Options(Guid.NewGuid()), backend);
+
+        await discovery.DisposeAsync();
+
+        Assert.That(backend.DisposeCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task UdpDiscoveryNetwork_ScanFindsLanAdvertisement()
+    {
+        var appId = Guid.NewGuid();
+        var port = GetUnusedUdpPort();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(
+            Options(appId, discoveryPort: port, advertiseInterval: TimeSpan.FromMilliseconds(25)),
+            new UdpDiscoveryNetwork());
+        await using var browser = new NetDiscovery(
+            Options(appId, discoveryPort: port, advertiseInterval: TimeSpan.FromMilliseconds(25)),
+            new UdpDiscoveryNetwork());
+
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-udp", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("UdpRoom", 1, 4, false));
+
+        var rooms = await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(500));
+
+        Assert.That(rooms, Has.Count.GreaterThanOrEqualTo(1));
+        Assert.That(rooms.Any(room => room.RoomId == "room-udp" && room.Metadata.RoomName == "UdpRoom"), Is.True);
     }
 
     [Test]
@@ -384,7 +479,9 @@ public class NetDiscoveryStatsTests
         int maxMetadataPayloadSize = 8 * 1024,
         TimeProvider timeProvider = null,
         TimeSpan? roomTimeout = null,
-        INetEventDispatcher dispatcher = null) => new()
+        INetEventDispatcher dispatcher = null,
+        int discoveryPort = 3344,
+        TimeSpan? advertiseInterval = null) => new()
     {
         Application = new NetApplicationInfo
         {
@@ -396,9 +493,17 @@ public class NetDiscoveryStatsTests
         Discovery = new DiscoveryOptions
         {
             MaxMetadataPayloadSize = maxMetadataPayloadSize,
-            RoomTimeout = roomTimeout ?? TimeSpan.FromSeconds(5)
+            RoomTimeout = roomTimeout ?? TimeSpan.FromSeconds(5),
+            Port = discoveryPort,
+            AdvertiseInterval = advertiseInterval ?? TimeSpan.FromSeconds(1)
         }
     };
+
+    private static int GetUnusedUdpPort()
+    {
+        using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        return ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+    }
 
     private sealed class InlineCountingDispatcher : INetEventDispatcher
     {
@@ -416,6 +521,55 @@ public class NetDiscoveryStatsTests
         public void Post(Action action)
         {
             throw new InvalidOperationException("post failed");
+        }
+    }
+
+    private sealed record UnregisteredDiscoveryMetadata(string Name);
+
+    private sealed class StaticDiscoveryBackend : IDiscoveryBackend
+    {
+        private readonly DiscoveryPacket _packet;
+
+        public StaticDiscoveryBackend(DiscoveryPacket packet)
+        {
+            _packet = packet;
+        }
+
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult<IReadOnlyList<DiscoveryPacket>>(new[] { _packet });
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DisposableDiscoveryBackend : IDiscoveryBackend
+    {
+        public int DisposeCount { get; private set; }
+
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult<IReadOnlyList<DiscoveryPacket>>(Array.Empty<DiscoveryPacket>());
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
         }
     }
 }

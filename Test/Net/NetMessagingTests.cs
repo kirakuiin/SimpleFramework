@@ -707,6 +707,61 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task JoinAsync_WithStrictFingerprintMismatch_IsRejected()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Strict));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Strict));
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<BigMessage>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.IncompatibleProtocol));
+        Assert.That(join.Message, Does.Contain("fingerprint"));
+        Assert.That(server.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task JoinAsync_WithWarnFingerprintMismatch_RecordsDiagnosticAndAllowsJoin()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Warn));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Warn));
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<BigMessage>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task JoinAsync_WithIgnoreFingerprintMismatch_RecordsDiagnosticAndAllowsJoin()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Ignore));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Ignore));
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<BigMessage>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task RequestAsync_ReturnsTypedResponse()
     {
         var appId = Guid.NewGuid();
@@ -931,11 +986,16 @@ public class NetMessagingTests
         Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
     }
 
-    private static GameNetOptions Options(Guid appId, INetEventDispatcher dispatcher = null, TimeProvider timeProvider = null) => new()
+    private static GameNetOptions Options(
+        Guid appId,
+        INetEventDispatcher dispatcher = null,
+        TimeProvider timeProvider = null,
+        NetFingerprintPolicy fingerprintPolicy = NetFingerprintPolicy.Strict) => new()
     {
         Application = new NetApplicationInfo { ApplicationId = appId },
         EventDispatcher = dispatcher,
-        TimeProvider = timeProvider ?? TimeProvider.System
+        TimeProvider = timeProvider ?? TimeProvider.System,
+        MessageFingerprintPolicy = fingerprintPolicy
     };
 
     private static bool IsScanFixtureType(Type type)

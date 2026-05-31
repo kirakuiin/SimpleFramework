@@ -27,7 +27,7 @@ public sealed class GameNet : IAsyncDisposable
     /// 创建不带传输的 GameNet 实例，适用于只使用注册、验证或离线组件的场景。
     /// </summary>
     /// <param name="options">共享网络配置。</param>
-    public GameNet(GameNetOptions options)
+    public GameNet(GameNetOptions options, IDiscoveryBackend? discoveryBackend = null)
     {
         ValidateOptions(options);
 
@@ -35,6 +35,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
+        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork());
         Messages = new NetMessenger(
             SendToServerPacketAsync,
             SendToPeerPacketAsync,
@@ -55,16 +56,19 @@ public sealed class GameNet : IAsyncDisposable
     /// </summary>
     /// <param name="transport">底层网络传输实现。</param>
     /// <param name="options">共享网络配置。</param>
-    public GameNet(INetTransport transport, GameNetOptions options)
+    public GameNet(INetTransport transport, GameNetOptions options, IDiscoveryBackend? discoveryBackend = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ValidateOptions(options);
 
         _transport = transport;
+        if (_transport is TcpNetTransport tcpTransport)
+            tcpTransport.MaxFrameSize = options.MaxPacketSize;
         _options = options;
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
+        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork());
         Messages = new NetMessenger(
             SendToServerPacketAsync,
             SendToPeerPacketAsync,
@@ -101,6 +105,11 @@ public sealed class GameNet : IAsyncDisposable
     /// 当前会话中的对等体目录。
     /// </summary>
     public PeerDirectory Peers { get; }
+
+    /// <summary>
+    /// 局域网房间发现组件。
+    /// </summary>
+    public NetDiscovery Discovery { get; }
 
     /// <summary>
     /// 类型化消息收发组件。
@@ -279,12 +288,14 @@ public sealed class GameNet : IAsyncDisposable
                 options.ReconnectToken,
                 PeerId.None,
                 null,
+                Messages.Registry.GetFingerprint(),
                 NetSessionStatus.Ok,
                 null);
             var send = await _transport.SendAsync(connect.ConnectionId, SerializePacket(request), NetChannel.System, token).ConfigureAwait(false);
             if (!send.Succeeded)
             {
                 _pendingJoin = null;
+                await _transport.DisconnectAsync(connect.ConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, send.Message);
             }
 
@@ -296,11 +307,13 @@ public sealed class GameNet : IAsyncDisposable
             catch (TimeoutException)
             {
                 _pendingJoin = null;
+                await _transport.DisconnectAsync(connect.ConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Join timed out.");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 _pendingJoin = null;
+                await _transport.DisconnectAsync(connect.ConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
             }
 
@@ -311,6 +324,10 @@ public sealed class GameNet : IAsyncDisposable
                     _connectionPeers[connect.ConnectionId] = PeerId.Server;
                 _state = NetLifecycleState.Client;
                 SetSessionRole(NetSessionRole.Client);
+            }
+            else
+            {
+                await _transport.DisconnectAsync(connect.ConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
             }
 
             return join;
@@ -383,6 +400,7 @@ public sealed class GameNet : IAsyncDisposable
             if (IsDisposed)
                 return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
+            await Discovery.StopAdvertiseAsync().ConfigureAwait(false);
             Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Session stopped.");
             if (_transport is not null && _state == NetLifecycleState.Client)
@@ -435,6 +453,7 @@ public sealed class GameNet : IAsyncDisposable
         {
             _state = NetLifecycleState.Stopped;
             SetSessionRole(NetSessionRole.None);
+            await Discovery.DisposeAsync().ConfigureAwait(false);
             Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "GameNet was disposed.");
             ClearReconnectState();
@@ -476,10 +495,16 @@ public sealed class GameNet : IAsyncDisposable
             throw new ArgumentException("MaxSendQueuePacketsPerPeer must be > 0.", nameof(options));
         if (options.MaxSendsPerSecondPerPeer <= 0)
             throw new ArgumentException("MaxSendsPerSecondPerPeer must be > 0.", nameof(options));
+        if (options.Discovery.Port is <= 0 or > 65535)
+            throw new ArgumentException("Discovery.Port must be between 1 and 65535.", nameof(options));
+        if (options.Discovery.AdvertiseInterval <= TimeSpan.Zero)
+            throw new ArgumentException("Discovery.AdvertiseInterval must be > 0.", nameof(options));
         if (options.Discovery.MaxMetadataPayloadSize <= 0)
             throw new ArgumentException("MaxMetadataPayloadSize must be > 0.", nameof(options));
         if (options.Discovery.RoomTimeout <= TimeSpan.Zero)
             throw new ArgumentException("RoomTimeout must be > 0.", nameof(options));
+        if (options.Discovery.RoomTimeout <= options.Discovery.AdvertiseInterval)
+            throw new ArgumentException("Discovery.RoomTimeout must be greater than Discovery.AdvertiseInterval.", nameof(options));
     }
 
     private async Task<NetSessionResult> StartServerCoreAsync(HostOptions options, NetLifecycleState startedState, CancellationToken token)
@@ -545,7 +570,29 @@ public sealed class GameNet : IAsyncDisposable
 
     private void OnTransportPacketReceived(TransportPacketReceived packet)
     {
+        if (IsSessionControlPacket(packet.Data.Span))
+        {
+            _ = HandleTransportPacketAsync(packet);
+            return;
+        }
+
         _ = Task.Run(() => HandleTransportPacketAsync(packet));
+    }
+
+    private static bool IsSessionControlPacket(ReadOnlySpan<byte> data)
+    {
+        try
+        {
+            var packet = JsonSerializer.Deserialize<SessionPacket>(data);
+            return packet?.Kind is SessionPacket.JoinRequest
+                or SessionPacket.JoinAccepted
+                or SessionPacket.JoinRejected
+                or SessionPacket.PeerDirectoryUpdated;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void OnTransportPeerDisconnected(TransportPeerDisconnected disconnected)
@@ -600,6 +647,9 @@ public sealed class GameNet : IAsyncDisposable
             case SessionPacket.JoinRejected:
                 HandleJoinRejected(sessionPacket);
                 return;
+            case SessionPacket.PeerDirectoryUpdated:
+                HandlePeerDirectoryUpdated(sessionPacket);
+                return;
         }
 
         var senderId = PeerId.None;
@@ -622,6 +672,13 @@ public sealed class GameNet : IAsyncDisposable
         if (packet.ProtocolVersion != _options.Application.ProtocolVersion)
         {
             await SendJoinRejectedAsync(connectionId, NetSessionStatus.IncompatibleProtocol, "ProtocolVersion is incompatible.").ConfigureAwait(false);
+            return;
+        }
+
+        var fingerprintCheck = CheckRemoteFingerprint(packet.MessageFingerprint, "client");
+        if (fingerprintCheck.Status == NetFingerprintStatus.Rejected)
+        {
+            await SendJoinRejectedAsync(connectionId, NetSessionStatus.IncompatibleProtocol, fingerprintCheck.Message ?? "Message fingerprint mismatch.").ConfigureAwait(false);
             return;
         }
 
@@ -672,9 +729,11 @@ public sealed class GameNet : IAsyncDisposable
             reconnectToken,
             peerId,
             Peers.Peers.ToArray(),
+            Messages.Registry.GetFingerprint(),
             NetSessionStatus.Ok,
             null);
         await _transport.SendAsync(connectionId, SerializePacket(accepted), NetChannel.System).ConfigureAwait(false);
+        await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);
     }
 
     private async Task HandleReconnectRequestAsync(TransportConnectionId connectionId, string reconnectToken)
@@ -723,9 +782,11 @@ public sealed class GameNet : IAsyncDisposable
             reconnectToken,
             entry.PeerId,
             Peers.Peers.ToArray(),
+            Messages.Registry.GetFingerprint(),
             NetSessionStatus.Ok,
             null);
         await _transport.SendAsync(connectionId, SerializePacket(accepted), NetChannel.System).ConfigureAwait(false);
+        await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);
     }
 
     private async Task SendJoinRejectedAsync(TransportConnectionId connectionId, NetSessionStatus status, string message)
@@ -741,13 +802,23 @@ public sealed class GameNet : IAsyncDisposable
             null,
             PeerId.None,
             null,
+            Messages.Registry.GetFingerprint(),
             status,
             message);
         await _transport.SendAsync(connectionId, SerializePacket(rejected), NetChannel.System).ConfigureAwait(false);
+        await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
     }
 
     private void HandleJoinAccepted(SessionPacket packet)
     {
+        var fingerprintCheck = CheckRemoteFingerprint(packet.MessageFingerprint, "server");
+        if (fingerprintCheck.Status == NetFingerprintStatus.Rejected)
+        {
+            _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.IncompatibleProtocol, PeerId.None, fingerprintCheck.Message));
+            _pendingJoin = null;
+            return;
+        }
+
         var peers = packet.Peers ?? Array.Empty<PeerInfo>();
         Peers.SetLocalPeer(packet.PeerId);
         Peers.Replace(peers.Select(p => p.PeerId == packet.PeerId ? p with { IsLocal = true } : p));
@@ -760,6 +831,101 @@ public sealed class GameNet : IAsyncDisposable
     {
         _pendingJoin?.TrySetResult(new JoinResult(packet.Status, PeerId.None, packet.Message));
         _pendingJoin = null;
+    }
+
+    private async Task BroadcastPeerDirectoryUpdateAsync(TransportConnectionId exceptConnectionId = default)
+    {
+        if (_transport is null)
+            return;
+
+        KeyValuePair<PeerId, TransportConnectionId>[] targets;
+        lock (_connectionPeers)
+            targets = _peerConnections.ToArray();
+
+        if (targets.Length == 0)
+            return;
+
+        var update = new SessionPacket(
+            SessionPacket.PeerDirectoryUpdated,
+            _options.Application.ApplicationId,
+            _options.Application.ProtocolVersion,
+            null,
+            null,
+            PeerId.None,
+            Peers.Peers.ToArray(),
+            Messages.Registry.GetFingerprint(),
+            NetSessionStatus.Ok,
+            null);
+        var payload = SerializePacket(update);
+        foreach (var target in targets)
+        {
+            if (target.Value == exceptConnectionId)
+                continue;
+
+            await _transport.SendAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
+        }
+    }
+
+    private void HandlePeerDirectoryUpdated(SessionPacket packet)
+    {
+        if (Session.Role != NetSessionRole.Client)
+            return;
+
+        var localPeerId = Peers.LocalPeerId;
+        var oldPeers = Peers.Peers.ToDictionary(peer => peer.PeerId);
+        var newPeers = (packet.Peers ?? Array.Empty<PeerInfo>())
+            .Select(peer => peer.PeerId == localPeerId ? peer with { IsLocal = true } : peer)
+            .ToArray();
+        var newMap = newPeers.ToDictionary(peer => peer.PeerId);
+        var events = new List<Action>();
+
+        foreach (var peer in newPeers)
+        {
+            if (peer.PeerId == localPeerId || peer.IsServer)
+                continue;
+
+            if (!oldPeers.TryGetValue(peer.PeerId, out var oldPeer))
+            {
+                events.Add(() => Session.RaisePeerJoined(new NetPeerJoined(peer)));
+                continue;
+            }
+
+            if (oldPeer.IsConnected && !peer.IsConnected)
+                events.Add(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peer.PeerId, DisconnectReason.RemoteClosed)));
+            else if (!oldPeer.IsConnected && peer.IsConnected)
+                events.Add(() => Session.RaisePeerReconnected(new NetPeerReconnected(peer.PeerId)));
+        }
+
+        foreach (var oldPeer in oldPeers.Values)
+        {
+            if (oldPeer.PeerId == localPeerId || oldPeer.IsServer || newMap.ContainsKey(oldPeer.PeerId))
+                continue;
+
+            if (oldPeer.IsConnected)
+                events.Add(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(oldPeer.PeerId, DisconnectReason.RemoteClosed)));
+            events.Add(() => Session.RaisePeerLeft(new NetPeerLeft(oldPeer.PeerId, DisconnectReason.RemoteClosed)));
+        }
+
+        Peers.Replace(newPeers);
+        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
+        foreach (var raise in events)
+            DispatchFrameworkEvent(raise);
+    }
+
+    private NetFingerprintCheckResult CheckRemoteFingerprint(string? remoteFingerprint, string remoteName)
+    {
+        var result = Messages.Registry.CheckFingerprint(remoteFingerprint ?? string.Empty, _options.MessageFingerprintPolicy);
+        if (result.Status == NetFingerprintStatus.Match)
+            return result;
+
+        var code = result.Status switch
+        {
+            NetFingerprintStatus.Rejected => "MessageFingerprintMismatchRejected",
+            NetFingerprintStatus.Warning => "MessageFingerprintMismatchWarning",
+            _ => "MessageFingerprintMismatchIgnored"
+        };
+        Diagnostics.RecordError(new NetError(code, $"{remoteName} message fingerprint mismatch."));
+        return result;
     }
 
     private void ClearLocalSession(DisconnectReason reason)
@@ -843,6 +1009,7 @@ public sealed class GameNet : IAsyncDisposable
         Peers.Upsert(existing with { IsConnected = false });
         Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
         DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peerId, reason)));
+        _ = BroadcastPeerDirectoryUpdateAsync();
         ScheduleReconnectExpiry(peerId, _hostOptions.ReconnectPolicy.GraceWindow, reason);
         return true;
     }
@@ -868,6 +1035,7 @@ public sealed class GameNet : IAsyncDisposable
         if (raiseDisconnected)
             DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peerId, reason)));
         DispatchFrameworkEvent(() => Session.RaisePeerLeft(new NetPeerLeft(peerId, reason)));
+        _ = BroadcastPeerDirectoryUpdateAsync();
     }
 
     private void SetSessionRole(NetSessionRole role)

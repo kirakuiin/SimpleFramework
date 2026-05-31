@@ -47,6 +47,11 @@ public sealed class GameNetOptions
     public DiscoveryOptions Discovery { get; init; } = new();
 
     /// <summary>
+    /// 消息表指纹不一致时的握手策略。
+    /// </summary>
+    public NetFingerprintPolicy MessageFingerprintPolicy { get; init; } = NetFingerprintPolicy.Strict;
+
+    /// <summary>
     /// 单个框架包允许的最大字节数。
     /// </summary>
     public int MaxPacketSize { get; init; } = 64 * 1024;
