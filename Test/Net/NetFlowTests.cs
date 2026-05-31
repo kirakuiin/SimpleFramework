@@ -342,6 +342,48 @@ public class NetFlowTests
     }
 
     [Test]
+    public async Task Flow_DisconnectOnePeer_DoesNotCancelOtherPeerPendingResponse()
+    {
+        var fixture = await ThreePeerFixture.StartAsync();
+        await using (fixture)
+        {
+            var clientAReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            fixture.ClientA.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) =>
+            {
+                clientAReceived.TrySetResult();
+                releaseA.Task.GetAwaiter().GetResult();
+                return new LoadSceneAck(true, "a");
+            });
+            fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) =>
+            {
+                releaseB.Task.GetAwaiter().GetResult();
+                return new LoadSceneAck(true, "b");
+            });
+
+            var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromMilliseconds(300));
+
+            await clientAReceived.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            var clientAPeer = fixture.ClientA.Peers.LocalPeerId;
+            var clientBPeer = fixture.ClientB.Peers.LocalPeerId;
+            await fixture.Server.KickAsync(clientAPeer);
+            releaseB.SetResult();
+
+            var result = await flow.WaitAsync(TimeSpan.FromSeconds(1));
+            releaseA.SetResult();
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Timeout));
+            Assert.That(result.Responses.Select(response => response.PeerId), Is.EqualTo(new[] { clientBPeer }));
+        }
+    }
+
+    [Test]
     public async Task Flow_LateResponseAfterCompletion_IsIgnored()
     {
         var fixture = await ThreePeerFixture.StartAsync();

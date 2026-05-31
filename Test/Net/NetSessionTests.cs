@@ -398,6 +398,32 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task TcpSession_ServerKick_NotifiesClientWithKickedReason()
+    {
+        var appId = Guid.NewGuid();
+        await using var serverTransport = new TcpNetTransport();
+        await using var clientTransport = new TcpNetTransport();
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(clientTransport, Options(appId));
+        var clientDisconnected = new TaskCompletionSource<NetPeerDisconnected>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        client.Session.PeerDisconnected += e =>
+        {
+            if (e.PeerId == PeerId.Server)
+                clientDisconnected.TrySetResult(e);
+        };
+
+        await server.HostAsync(new HostOptions { BindAddress = System.Net.IPAddress.Loopback, Port = 0 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "127.0.0.1", Port = serverTransport.LocalEndPoint!.Port });
+
+        var kick = await server.KickAsync(join.PeerId);
+        var disconnected = await clientDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.That(kick.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(disconnected.Reason, Is.EqualTo(DisconnectReason.Kicked));
+    }
+
+    [Test]
     public async Task ClientLeave_ReportsLocalClosedReasonToServer()
     {
         var appId = Guid.NewGuid();

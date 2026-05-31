@@ -10,10 +10,12 @@ internal sealed record SessionPacket(
     PeerInfo[]? Peers,
     string? MessageFingerprint,
     NetSessionStatus Status,
-    string? Message)
+    string? Message,
+    DisconnectReason DisconnectReason = DisconnectReason.RemoteClosed)
 {
     public const string JoinRequest = "session.join.request";
     public const string JoinAccepted = "session.join.accepted";
     public const string JoinRejected = "session.join.rejected";
     public const string PeerDirectoryUpdated = "session.peer_directory.updated";
+    public const string DisconnectNotice = "session.disconnect.notice";
 }

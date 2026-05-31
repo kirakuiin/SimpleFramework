@@ -417,6 +417,12 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
 {
     private readonly object _gate = new();
     private readonly Dictionary<DiscoveryAdvertisementId, CancellationTokenSource> _advertisements = new();
+    private readonly TimeProvider _timeProvider;
+
+    public UdpDiscoveryNetwork(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
@@ -468,15 +474,15 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
         socket.ExclusiveAddressUse = false;
         socket.Bind(new IPEndPoint(IPAddress.Any, options.Port));
         using var client = new UdpClient { Client = socket };
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(duration);
+        using var timeout = new CancellationTokenSource(duration, _timeProvider);
+        using var linkedTimeout = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
 
-        while (!timeout.IsCancellationRequested)
+        while (!linkedTimeout.IsCancellationRequested)
         {
             UdpReceiveResult received;
             try
             {
-                received = await client.ReceiveAsync(timeout.Token).ConfigureAwait(false);
+                received = await client.ReceiveAsync(linkedTimeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -517,7 +523,7 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
             await StopAdvertiseAsync(id).ConfigureAwait(false);
     }
 
-    private static async Task AdvertiseLoopAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token)
+    private async Task AdvertiseLoopAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token)
     {
         using var client = new UdpClient(AddressFamily.InterNetwork)
         {
@@ -531,7 +537,7 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
             try
             {
                 await client.SendAsync(payload, endPoint, token).ConfigureAwait(false);
-                await Task.Delay(options.AdvertiseInterval, token).ConfigureAwait(false);
+                await Task.Delay(options.AdvertiseInterval, _timeProvider, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -543,7 +549,7 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
             }
             catch (SocketException)
             {
-                await Task.Delay(options.AdvertiseInterval, token).ConfigureAwait(false);
+                await Task.Delay(options.AdvertiseInterval, _timeProvider, token).ConfigureAwait(false);
             }
         }
     }
@@ -599,6 +605,8 @@ public sealed class NetDiscovery : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(info);
         if (_advertisementId != DiscoveryAdvertisementId.None)
             return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running.");
+        if (!ValidateMetadataSchema<TMetadata>(info.MetadataSchemaId, out var schemaError))
+            return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
         if (!TryCreatePacket(info, metadata, out var packet, out var error))
             return new NetSessionResult(NetSessionStatus.TransportFailed, error);
@@ -618,6 +626,8 @@ public sealed class NetDiscovery : IAsyncDisposable
 
         if (_advertisementId == DiscoveryAdvertisementId.None || _advertiseInfo is null)
             return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started.");
+        if (!ValidateMetadataSchema<TMetadata>(_advertiseInfo.MetadataSchemaId, out var schemaError))
+            return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
         if (!TryCreatePacket(_advertiseInfo, metadata, out var packet, out var error))
             return new NetSessionResult(NetSessionStatus.TransportFailed, error);
@@ -849,6 +859,25 @@ public sealed class NetDiscovery : IAsyncDisposable
         }
 
         return attribute.SchemaId;
+    }
+
+    private static bool ValidateMetadataSchema<TMetadata>(uint metadataSchemaId, out string? error)
+    {
+        var attribute = Attribute.GetCustomAttribute(typeof(TMetadata), typeof(DiscoveryMetadataAttribute)) as DiscoveryMetadataAttribute;
+        if (attribute is null)
+        {
+            error = null;
+            return true;
+        }
+
+        if (attribute.SchemaId == metadataSchemaId)
+        {
+            error = null;
+            return true;
+        }
+
+        error = $"MetadataSchemaId '{metadataSchemaId}' does not match metadata type '{typeof(TMetadata).FullName}' schema id '{attribute.SchemaId}'.";
+        return false;
     }
 }
 

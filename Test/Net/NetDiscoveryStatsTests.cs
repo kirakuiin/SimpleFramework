@@ -87,6 +87,25 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task StartAdvertise_WithMismatchedMetadataSchema_ReturnsInvalidState()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), network);
+
+        var result = await discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo
+            {
+                RoomId = "room-1",
+                GamePort = 7777,
+                MetadataSchemaId = DiscoveryMetadataRegistry.GetSchemaId("room.other.v1")
+            },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.InvalidState));
+        Assert.That(result.Message, Does.Contain("MetadataSchemaId"));
+    }
+
+    [Test]
     public async Task DiscoveryScan_WithMalformedMetadata_DropsPacketAndRecordsDiagnostic()
     {
         var appId = Guid.NewGuid();
@@ -259,7 +278,12 @@ public class NetDiscoveryStatsTests
         await using var discovery = new NetDiscovery(Options(Guid.NewGuid(), maxMetadataPayloadSize: 16), network);
 
         var result = await discovery.StartAdvertiseAsync(
-            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = 123 },
+            new LanAdvertiseInfo
+            {
+                RoomId = "room-1",
+                GamePort = 7777,
+                MetadataSchemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1")
+            },
             new RoomListMetadata(new string('x', 256), 1, 4, false));
 
         Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));

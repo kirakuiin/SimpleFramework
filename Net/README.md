@@ -65,6 +65,12 @@ await client.SendToServerAsync(new ChatLine("hello"));
 await server.BroadcastAsync(new ChatLine("welcome"));
 ```
 
+如果希望通过 attribute 扫描绑定处理器，可以使用 `RegisterAssemblyHandlers`。静态方法可直接绑定；实例方法需要提供目标实例或工厂。
+
+```csharp
+server.Messages.RegisterAssemblyHandlers(typeof(ChatHandlers).Assembly);
+```
+
 请求/响应适合一次性协商，不会在普通断线后自动恢复：
 
 ```csharp

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Text.Json;
 
 namespace SimpleFramework.Net;
@@ -70,15 +71,19 @@ public sealed class NetMessenger
     public void On<T>(Action<NetContext, T> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        Registry.Register<T>();
+        RegisterHandler(typeof(T), (ctx, message) => handler(ctx, (T)message));
+    }
 
-        if (!_handlers.TryGetValue(typeof(T), out var handlers))
+    private void RegisterHandler(Type messageType, Action<NetContext, object> handler)
+    {
+        Registry.Register(messageType);
+        if (!_handlers.TryGetValue(messageType, out var handlers))
         {
             handlers = new List<Action<NetContext, object>>();
-            _handlers[typeof(T)] = handlers;
+            _handlers[messageType] = handlers;
         }
 
-        handlers.Add((ctx, message) => handler(ctx, (T)message));
+        handlers.Add(handler);
     }
 
     /// <summary>
@@ -89,14 +94,62 @@ public sealed class NetMessenger
         ArgumentNullException.ThrowIfNull(handler);
         Registry.Register<TRequest>();
         Registry.Register<TResponse>();
+        RegisterRequestHandler(
+            typeof(TRequest),
+            typeof(TResponse),
+            (ctx, request) => handler(ctx, (TRequest)request)!);
+    }
 
-        var requestType = typeof(TRequest);
+    private void RegisterRequestHandler(Type requestType, Type responseType, Func<NetContext, object, object> handler)
+    {
+        Registry.Register(requestType);
+        Registry.Register(responseType);
         if (_requestHandlers.ContainsKey(requestType))
             throw new InvalidOperationException($"A request handler for '{requestType.FullName}' has already been registered.");
 
         _requestHandlers[requestType] = new RequestHandler(
-            typeof(TResponse),
-            (ctx, request) => handler(ctx, (TRequest)request)!);
+            responseType,
+            handler);
+    }
+
+    /// <summary>
+    /// 扫描程序集并绑定标注的消息、请求和流程处理器。
+    /// </summary>
+    public void RegisterAssemblyHandlers(Assembly assembly, object? target = null, Func<Type, object>? targetFactory = null, Func<Type, bool>? typeFilter = null)
+    {
+        var handlerCount = Registry.HandlerDescriptors.Count;
+        var requestHandlerCount = Registry.RequestHandlerDescriptors.Count;
+        var flowHandlerCount = Registry.FlowHandlerDescriptors.Count;
+        Registry.RegisterAssembly(assembly, typeFilter);
+        foreach (var descriptor in Registry.HandlerDescriptors.Skip(handlerCount))
+        {
+            if (typeFilter?.Invoke(descriptor.Method.DeclaringType!) == false)
+                continue;
+
+            var method = descriptor.Method;
+            RegisterHandler(descriptor.MessageType, (context, message) =>
+                method.Invoke(ResolveHandlerTarget(method, target, targetFactory), new[] { context, message }));
+        }
+
+        foreach (var descriptor in Registry.RequestHandlerDescriptors.Skip(requestHandlerCount))
+        {
+            if (typeFilter?.Invoke(descriptor.Method.DeclaringType!) == false)
+                continue;
+
+            var method = descriptor.Method;
+            RegisterRequestHandler(descriptor.RequestType, descriptor.ResponseType, (context, request) =>
+                method.Invoke(ResolveHandlerTarget(method, target, targetFactory), new[] { context, request })!);
+        }
+
+        foreach (var descriptor in Registry.FlowHandlerDescriptors.Skip(flowHandlerCount))
+        {
+            if (typeFilter?.Invoke(descriptor.Method.DeclaringType!) == false)
+                continue;
+
+            var method = descriptor.Method;
+            RegisterRequestHandler(descriptor.ProposalType, descriptor.ResponseType, (context, proposal) =>
+                method.Invoke(ResolveHandlerTarget(method, target, targetFactory), new[] { context, proposal })!);
+        }
     }
 
     /// <summary>
@@ -272,7 +325,7 @@ public sealed class NetMessenger
         if (packetBytes.Length > _maxPacketSize)
             return new NetRequestResult<TResponse> { Status = NetRequestStatus.PacketTooLarge, Message = "Packet is too large." };
 
-        var pending = new PendingRequest();
+        var pending = new PendingRequest(peerId);
         _pendingRequests[correlationId] = pending;
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
 
@@ -355,6 +408,29 @@ public sealed class NetMessenger
         }
 
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+    }
+
+    internal void CancelPendingRequestsForPeer(PeerId peerId, NetRequestStatus status, string? message = null)
+    {
+        foreach (var pair in _pendingRequests.ToArray())
+        {
+            if (pair.Value.PeerId != peerId)
+                continue;
+
+            if (_pendingRequests.TryRemove(pair.Key, out var pending))
+                pending.Completion.TrySetResult(new PendingResponse(status, Array.Empty<byte>(), message));
+        }
+
+        _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+    }
+
+    internal void CancelPendingRelays(NetSendStatus status, string? message = null)
+    {
+        foreach (var pair in _pendingRelays.ToArray())
+        {
+            if (_pendingRelays.TryRemove(pair.Key, out var pending))
+                pending.TrySetResult(new NetSendResult(status, message));
+        }
     }
 
     private bool HandleMessagePacket(int byteCount, NetPacket packet, PeerId senderId)
@@ -712,6 +788,21 @@ public sealed class NetMessenger
         }
     }
 
+    private static object? ResolveHandlerTarget(MethodInfo method, object? target, Func<Type, object>? targetFactory)
+    {
+        if (method.IsStatic)
+            return null;
+
+        var declaringType = method.DeclaringType
+            ?? throw new InvalidOperationException($"Handler method '{method.Name}' has no declaring type.");
+        if (target is not null && declaringType.IsInstanceOfType(target))
+            return target;
+        if (targetFactory is not null)
+            return targetFactory(declaringType);
+
+        throw new InvalidOperationException($"Handler method '{declaringType.FullName}.{method.Name}' requires a target instance.");
+    }
+
     private EncodedPacket EncodeMessagePacket<T>(T message)
     {
         var descriptor = Registry.Get<T>();
@@ -751,8 +842,10 @@ public sealed class NetMessenger
         public int SentInWindow { get; set; }
     }
 
-    private sealed class PendingRequest
+    private sealed class PendingRequest(PeerId peerId)
     {
+        public PeerId PeerId { get; } = peerId;
+
         public TaskCompletionSource<PendingResponse> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }

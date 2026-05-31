@@ -37,6 +37,15 @@ public sealed record ScanAlpha(int Value);
 [NetMessage("scan.beta")]
 public sealed record ScanBeta(int Value);
 
+[NetMessage("attribute.message")]
+public sealed record AttributeMessage(int Value);
+
+[NetMessage("attribute.request")]
+public sealed record AttributeRequest(int Value);
+
+[NetMessage("attribute.response")]
+public sealed record AttributeResponse(int Value);
+
 public sealed record MissingMessageAttribute(int Value);
 
 [NetMessage("")]
@@ -44,9 +53,12 @@ public sealed record EmptyMessageKey(int Value);
 
 public sealed class ScannedNetHandlers
 {
+    public static TaskCompletionSource<ScanBeta> ReceivedBeta { get; set; } = null!;
+
     [NetHandler(typeof(ScanBeta))]
     public static void HandleBeta(NetContext context, ScanBeta message)
     {
+        ReceivedBeta.TrySetResult(message);
     }
 
     [NetRequestHandler(typeof(ScanAlpha), typeof(ScanBeta))]
@@ -59,6 +71,23 @@ public sealed class ScannedNetHandlers
     public static ScanBeta HandleFlow(NetContext context, ScanAlpha proposal)
     {
         return new ScanBeta(proposal.Value);
+    }
+}
+
+public sealed class RuntimeAttributedHandlers
+{
+    public static TaskCompletionSource<AttributeMessage> ReceivedMessage { get; set; } = null!;
+
+    [NetHandler(typeof(AttributeMessage))]
+    public static void HandleMessage(NetContext context, AttributeMessage message)
+    {
+        ReceivedMessage.TrySetResult(message);
+    }
+
+    [NetRequestHandler(typeof(AttributeRequest), typeof(AttributeResponse))]
+    public static AttributeResponse HandleRequest(NetContext context, AttributeRequest request)
+    {
+        return new AttributeResponse(request.Value + 1);
     }
 }
 
@@ -692,6 +721,53 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RegisterAssemblyHandlers_BindsAttributedMessageAndRequestHandlers()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        RuntimeAttributedHandlers.ReceivedMessage = new TaskCompletionSource<AttributeMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterAssemblyHandlers(typeof(AttributeMessage).Assembly, typeFilter: IsRuntimeAttributedFixtureType);
+        client.Messages.RegisterMessage<AttributeMessage>();
+        client.Messages.RegisterMessage<AttributeRequest>();
+        client.Messages.RegisterMessage<AttributeResponse>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var send = await client.SendToServerAsync(new AttributeMessage(7));
+        var response = await client.RequestAsync<AttributeRequest, AttributeResponse>(
+            PeerId.Server,
+            new AttributeRequest(42),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(send.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That((await RuntimeAttributedHandlers.ReceivedMessage.Task.WaitAsync(TimeSpan.FromSeconds(1))).Value, Is.EqualTo(7));
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(response.Response!.Value, Is.EqualTo(43));
+    }
+
+    [Test]
+    public async Task CancelPendingRelays_CompletesInFlightRelay()
+    {
+        var diagnostics = new NetDiagnostics();
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+        messenger.RegisterMessage<PlayerReady>();
+
+        var relay = messenger.RelayAsync(new PeerId(2), new PlayerReady(true), TimeSpan.FromSeconds(30));
+
+        messenger.CancelPendingRelays(NetSendStatus.SessionClosed, "Session closed.");
+        var result = await relay.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.SessionClosed));
+        Assert.That(result.Message, Is.EqualTo("Session closed."));
+    }
+
+    [Test]
     public void Fingerprint_IsStableAndPolicyControlsMismatch()
     {
         var first = new NetMessageRegistry();
@@ -1035,6 +1111,14 @@ public class NetMessagingTests
         return type == typeof(ScanAlpha) ||
                type == typeof(ScanBeta) ||
                type == typeof(ScannedNetHandlers);
+    }
+
+    private static bool IsRuntimeAttributedFixtureType(Type type)
+    {
+        return type == typeof(AttributeMessage) ||
+               type == typeof(AttributeRequest) ||
+               type == typeof(AttributeResponse) ||
+               type == typeof(RuntimeAttributedHandlers);
     }
 
     private static NetMessenger CreateMessenger(

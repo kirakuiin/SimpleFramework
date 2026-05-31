@@ -37,7 +37,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork());
+        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork(_options.TimeProvider));
         Messages = new NetMessenger(
             SendToServerPacketAsync,
             SendToPeerPacketAsync,
@@ -70,7 +70,7 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
         Peers = new PeerDirectory();
-        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork());
+        Discovery = new NetDiscovery(_options, discoveryBackend ?? new UdpDiscoveryNetwork(_options.TimeProvider));
         Messages = new NetMessenger(
             SendToServerPacketAsync,
             SendToPeerPacketAsync,
@@ -419,6 +419,7 @@ public sealed class GameNet : IAsyncDisposable
                 return new NetSessionResult(NetSessionStatus.InvalidState, "Peer is not connected.");
         }
 
+        await SendDisconnectNoticeAsync(connectionId, reason).ConfigureAwait(false);
         await _transport.DisconnectAsync(connectionId, reason).ConfigureAwait(false);
         RemoveRemotePeer(peerId, reason);
         return NetSessionResult.Ok();
@@ -452,6 +453,7 @@ public sealed class GameNet : IAsyncDisposable
             await Discovery.StopAdvertiseAsync().ConfigureAwait(false);
             Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Session stopped.");
+            Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "Session stopped.");
             _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Cancelled, PeerId.None, "Session stopped."));
             _pendingJoin = null;
             if (_transport is not null && _state == NetLifecycleState.Client)
@@ -465,6 +467,7 @@ public sealed class GameNet : IAsyncDisposable
 
             if (_transport is not null)
             {
+                await SendDisconnectNoticesToAllPeersAsync(DisconnectReason.ServerClosed).ConfigureAwait(false);
                 var stop = await _transport.StopServerAsync(token).ConfigureAwait(false);
                 if (stop.Status is NetTransportStatus.ObjectDisposed)
                     return new NetSessionResult(NetSessionStatus.ObjectDisposed, stop.Message);
@@ -511,6 +514,7 @@ public sealed class GameNet : IAsyncDisposable
             await Discovery.DisposeAsync().ConfigureAwait(false);
             Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "GameNet was disposed.");
+            Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "GameNet was disposed.");
             ClearReconnectState();
         }
         finally
@@ -658,7 +662,8 @@ public sealed class GameNet : IAsyncDisposable
             return packet?.Kind is SessionPacket.JoinRequest
                 or SessionPacket.JoinAccepted
                 or SessionPacket.JoinRejected
-                or SessionPacket.PeerDirectoryUpdated;
+                or SessionPacket.PeerDirectoryUpdated
+                or SessionPacket.DisconnectNotice;
         }
         catch
         {
@@ -674,6 +679,7 @@ public sealed class GameNet : IAsyncDisposable
         if (disconnected.ConnectionId == _serverConnectionId)
         {
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Server connection was closed.");
+            Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "Server connection was closed.");
             ClearLocalSession(disconnected.Reason);
             return;
         }
@@ -720,6 +726,9 @@ public sealed class GameNet : IAsyncDisposable
                 return;
             case SessionPacket.PeerDirectoryUpdated:
                 HandlePeerDirectoryUpdated(sessionPacket);
+                return;
+            case SessionPacket.DisconnectNotice:
+                HandleDisconnectNotice(sessionPacket);
                 return;
         }
 
@@ -910,6 +919,36 @@ public sealed class GameNet : IAsyncDisposable
         await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
     }
 
+    private async Task SendDisconnectNoticeAsync(TransportConnectionId connectionId, DisconnectReason reason)
+    {
+        if (_transport is null)
+            return;
+
+        var notice = new SessionPacket(
+            SessionPacket.DisconnectNotice,
+            _options.Application.ApplicationId,
+            _options.Application.ProtocolVersion,
+            null,
+            null,
+            PeerId.None,
+            null,
+            Messages.Registry.GetFingerprint(),
+            NetSessionStatus.Ok,
+            null,
+            reason);
+        await _transport.SendAsync(connectionId, SerializePacket(notice), NetChannel.System).ConfigureAwait(false);
+    }
+
+    private async Task SendDisconnectNoticesToAllPeersAsync(DisconnectReason reason)
+    {
+        KeyValuePair<PeerId, TransportConnectionId>[] targets;
+        lock (_connectionPeers)
+            targets = _peerConnections.ToArray();
+
+        foreach (var target in targets)
+            await SendDisconnectNoticeAsync(target.Value, reason).ConfigureAwait(false);
+    }
+
     private void HandleJoinAccepted(SessionPacket packet)
     {
         var fingerprintCheck = CheckRemoteFingerprint(packet.MessageFingerprint, "server");
@@ -1011,6 +1050,16 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
         foreach (var raise in events)
             DispatchFrameworkEvent(raise);
+    }
+
+    private void HandleDisconnectNotice(SessionPacket packet)
+    {
+        if (Session.Role != NetSessionRole.Client)
+            return;
+
+        Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Server connection was closed.");
+        Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "Server connection was closed.");
+        ClearLocalSession(packet.DisconnectReason);
     }
 
     private NetFingerprintCheckResult CheckRemoteFingerprint(string? remoteFingerprint, string remoteName)
@@ -1132,7 +1181,7 @@ public sealed class GameNet : IAsyncDisposable
 
         Peers.Remove(peerId);
         Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
-        Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Peer connection was closed.");
+        Messages.CancelPendingRequestsForPeer(peerId, NetRequestStatus.SessionClosed, "Peer connection was closed.");
         if (raiseDisconnected)
             DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(peerId, reason)));
         DispatchFrameworkEvent(() => Session.RaisePeerLeft(new NetPeerLeft(peerId, reason)));
