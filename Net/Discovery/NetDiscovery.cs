@@ -30,6 +30,11 @@ public sealed class DiscoveryOptions
     /// 浏览器在未收到更新后保留房间的最长时间。
     /// </summary>
     public TimeSpan RoomTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// 连续浏览器每次刷新使用的默认扫描窗口。
+    /// </summary>
+    public TimeSpan DefaultScanTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
 }
 
 /// <summary>
@@ -171,16 +176,29 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     private readonly NetDiscovery _discovery;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _roomTimeout;
+    private readonly TimeSpan _refreshInterval;
+    private readonly TimeSpan _scanDuration;
     private readonly uint _metadataSchemaId;
     private readonly Dictionary<string, BrowserRoom<TMetadata>> _rooms = new();
+    private readonly CancellationTokenSource _refreshCancellation = new();
+    private readonly Task _refreshTask;
 
-    internal LanBrowser(NetDiscovery discovery, TimeProvider timeProvider, TimeSpan roomTimeout, uint metadataSchemaId)
+    internal LanBrowser(
+        NetDiscovery discovery,
+        TimeProvider timeProvider,
+        TimeSpan roomTimeout,
+        TimeSpan refreshInterval,
+        TimeSpan scanDuration,
+        uint metadataSchemaId)
     {
         _discovery = discovery;
         _timeProvider = timeProvider;
         _roomTimeout = roomTimeout;
+        _refreshInterval = refreshInterval;
+        _scanDuration = scanDuration;
         _metadataSchemaId = metadataSchemaId;
         Snapshot = new LanBrowserSnapshot<TMetadata> { Rooms = Array.Empty<LanScanResult<TMetadata>>() };
+        _refreshTask = RunRefreshLoopAsync(_refreshCancellation.Token);
     }
 
     /// <summary>
@@ -209,7 +227,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     public async Task RefreshAsync()
     {
         var now = _timeProvider.GetUtcNow();
-        var scanned = await _discovery.ScanAsync<TMetadata>(TimeSpan.Zero, _metadataSchemaId).ConfigureAwait(false);
+        var scanned = await _discovery.ScanAsync<TMetadata>(_scanDuration, _metadataSchemaId).ConfigureAwait(false);
         foreach (var room in scanned)
         {
             if (!_rooms.TryGetValue(room.RoomId, out var existing))
@@ -242,11 +260,29 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     /// <summary>
     /// 释放浏览器。
     /// </summary>
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        _refreshCancellation.Cancel();
+        try
+        {
+            await _refreshTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        _refreshCancellation.Dispose();
         _rooms.Clear();
         Snapshot = new LanBrowserSnapshot<TMetadata> { Rooms = Array.Empty<LanScanResult<TMetadata>>() };
-        return ValueTask.CompletedTask;
+    }
+
+    private async Task RunRefreshLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            await Task.Delay(_refreshInterval, _timeProvider, token).ConfigureAwait(false);
+            await RefreshAsync().ConfigureAwait(false);
+        }
     }
 
     private static bool AreSameRoom(LanScanResult<TMetadata> left, LanScanResult<TMetadata> right)
@@ -685,7 +721,13 @@ public sealed class NetDiscovery : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
 
-        return Task.FromResult(new LanBrowser<TMetadata>(this, _options.TimeProvider, _options.Discovery.RoomTimeout, metadataSchemaId));
+        return Task.FromResult(new LanBrowser<TMetadata>(
+            this,
+            _options.TimeProvider,
+            _options.Discovery.RoomTimeout,
+            _options.Discovery.AdvertiseInterval,
+            _options.Discovery.DefaultScanTimeout,
+            metadataSchemaId));
     }
 
     /// <summary>

@@ -175,6 +175,8 @@ public sealed class TcpNetTransport : INetTransport
             return new NetSendResult(NetSendStatus.TransportFailed, "Send was cancelled.");
         if (channel == NetChannel.Unreliable)
             return new NetSendResult(NetSendStatus.ChannelUnsupported);
+        if (data.Length > MaxFrameSize)
+            return new NetSendResult(NetSendStatus.PacketTooLarge, $"Packet length {data.Length} exceeds MaxFrameSize {MaxFrameSize}.");
         if (!_connections.TryGetValue(connectionId, out var connection))
             return new NetSendResult(NetSendStatus.ConnectionUnavailable);
 

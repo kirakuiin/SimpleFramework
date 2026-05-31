@@ -114,6 +114,44 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task ConcurrentJoin_WhenServerHasOneSlot_AllowsOnlyOneClient()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var authEntered = 0;
+        var bothAuthStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAuth = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var first = new GameNet(network.CreateTransport("first"), Options(appId));
+        await using var second = new GameNet(network.CreateTransport("second"), Options(appId));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            MaxPeers = 1,
+            Authenticator = async _ =>
+            {
+                if (Interlocked.Increment(ref authEntered) == 2)
+                    bothAuthStarted.TrySetResult();
+
+                await releaseAuth.Task.ConfigureAwait(false);
+                return AuthResult.Ok();
+            }
+        });
+
+        var firstJoin = first.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var secondJoin = second.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await bothAuthStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        releaseAuth.SetResult();
+
+        var joins = await Task.WhenAll(firstJoin, secondJoin);
+
+        Assert.That(joins.Count(join => join.Status == NetSessionStatus.Ok), Is.EqualTo(1));
+        Assert.That(joins.Count(join => join.Status == NetSessionStatus.CapacityFull), Is.EqualTo(1));
+        Assert.That(server.Peers.RemoteParticipants(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public async Task Join_WithRejectedAuthPayload_ReturnsAuthenticationFailed()
     {
         var appId = Guid.NewGuid();
@@ -420,6 +458,30 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task DisposeAsync_CancelsPendingJoinWithoutWaitingForJoinTimeout()
+    {
+        var network = new MemoryNetNetwork();
+        await using var silentServer = network.CreateTransport("silent-server");
+        var client = new GameNet(network.CreateTransport("client"), Options(Guid.NewGuid()));
+
+        await silentServer.StartServerAsync(new NetListenOptions { Port = 7777 });
+        var joinTask = client.JoinAsync(new JoinOptions
+        {
+            Host = "silent-server",
+            Port = 7777,
+            Timeout = TimeSpan.FromSeconds(30)
+        });
+        await Task.Delay(50);
+
+        var disposeTask = client.DisposeAsync().AsTask();
+        var completed = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(1)));
+
+        Assert.That(completed, Is.SameAs(disposeTask));
+        var join = await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(join.Status, Is.AnyOf(NetSessionStatus.Cancelled, NetSessionStatus.ObjectDisposed, NetSessionStatus.TransportFailed));
+    }
+
+    [Test]
     public async Task Join_WhenAlreadyInSession_ReturnsInvalidState()
     {
         var appId = Guid.NewGuid();
@@ -597,6 +659,43 @@ public class NetSessionTests
         Assert.That(secondJoin.PeerId, Is.EqualTo(firstJoin.PeerId));
         Assert.That(eventArgs.PeerId, Is.EqualTo(firstJoin.PeerId));
         Assert.That(server.Peers.Peers.Single(p => p.PeerId == firstJoin.PeerId).IsConnected, Is.True);
+    }
+
+    [Test]
+    public async Task Reconnect_TokenCannotBeReusedAfterSuccessfulReconnect()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var firstClient = new GameNet(network.CreateTransport("client-a"), Options(appId));
+        await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId));
+        await using var thirdClient = new GameNet(network.CreateTransport("client-c"), Options(appId));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => server.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
+
+        var secondJoin = await secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+        var thirdJoin = await thirdClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+
+        Assert.That(secondJoin.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(thirdJoin.Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
     }
 
     [Test]

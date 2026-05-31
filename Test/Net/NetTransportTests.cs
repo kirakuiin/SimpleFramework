@@ -318,6 +318,24 @@ public class NetTransportTests
     }
 
     [Test]
+    public async Task TcpTransport_SendLargerThanMaxFrame_ReturnsPacketTooLarge()
+    {
+        await using var server = new TcpNetTransport(maxFrameSize: 16);
+        await using var client = new TcpNetTransport(maxFrameSize: 16);
+
+        await server.StartServerAsync(new NetListenOptions
+        {
+            BindAddress = IPAddress.Loopback,
+            Port = 0
+        });
+        var connect = await client.ConnectAsync(new NetConnectOptions { Host = "127.0.0.1", Port = server.LocalEndPoint!.Port });
+
+        var result = await client.SendAsync(connect.ConnectionId, new byte[32], NetChannel.Reliable);
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.PacketTooLarge));
+    }
+
+    [Test]
     public async Task TcpTransport_UnreliableChannel_ReturnsChannelUnsupportedByDefault()
     {
         await using var server = new TcpNetTransport();

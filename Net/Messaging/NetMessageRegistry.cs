@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace SimpleFramework.Net;
 
@@ -235,7 +236,7 @@ public sealed class NetMessageRegistry
             "\n",
             _byKey.Values
                 .OrderBy(descriptor => descriptor.Key, StringComparer.Ordinal)
-                .Select(descriptor => $"{descriptor.Key}:{descriptor.MessageId}"));
+                .Select(descriptor => $"{descriptor.Key}:{descriptor.MessageId}:{GetPayloadShape(descriptor.MessageType)}"));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest)));
     }
 
@@ -268,6 +269,32 @@ public sealed class NetMessageRegistry
         }
 
         return hash;
+    }
+
+    private static string GetPayloadShape(Type messageType)
+    {
+        var properties = messageType
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.GetMethod is not null && property.GetIndexParameters().Length == 0)
+            .OrderBy(property => GetJsonMemberName(property), StringComparer.Ordinal)
+            .ThenBy(property => property.PropertyType.FullName, StringComparer.Ordinal)
+            .Select(property => $"{GetJsonMemberName(property)}:{GetStableTypeName(property.PropertyType)}");
+        return string.Join(",", properties);
+    }
+
+    private static string GetJsonMemberName(PropertyInfo property)
+    {
+        return property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? property.Name;
+    }
+
+    private static string GetStableTypeName(Type type)
+    {
+        if (!type.IsGenericType)
+            return type.FullName ?? type.Name;
+
+        var genericDefinition = type.GetGenericTypeDefinition().FullName ?? type.Name;
+        var arguments = string.Join(",", type.GetGenericArguments().Select(GetStableTypeName));
+        return $"{genericDefinition}<{arguments}>";
     }
 
     private static IEnumerable<MethodInfo> GetOrderedMethods(Type type)

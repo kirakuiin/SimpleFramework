@@ -16,6 +16,9 @@ public sealed record PlayerReady(bool Ready);
 [NetMessage("player.ready")]
 public sealed record DuplicatePlayerReady(bool Ready);
 
+[NetMessage("player.ready")]
+public sealed record PlayerReadyWithSchemaChange(bool Ready, int Revision);
+
 [NetMessage("big.message")]
 public sealed record BigMessage(string Text);
 
@@ -704,6 +707,35 @@ public class NetMessagingTests
         Assert.That(first.CheckFingerprint(different.GetFingerprint(), NetFingerprintPolicy.Strict).Status, Is.EqualTo(NetFingerprintStatus.Rejected));
         Assert.That(first.CheckFingerprint(different.GetFingerprint(), NetFingerprintPolicy.Warn).Status, Is.EqualTo(NetFingerprintStatus.Warning));
         Assert.That(first.CheckFingerprint(different.GetFingerprint(), NetFingerprintPolicy.Ignore).Status, Is.EqualTo(NetFingerprintStatus.Ignored));
+    }
+
+    [Test]
+    public void Fingerprint_ChangesWhenStableKeyPayloadShapeChanges()
+    {
+        var first = new NetMessageRegistry();
+        var changed = new NetMessageRegistry();
+
+        first.Register<PlayerReady>();
+        changed.Register<PlayerReadyWithSchemaChange>();
+
+        Assert.That(changed.GetFingerprint(), Is.Not.EqualTo(first.GetFingerprint()));
+    }
+
+    [Test]
+    public async Task JoinAsync_WithStrictFingerprintSameKeyDifferentPayloadShape_IsRejected()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Strict));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, fingerprintPolicy: NetFingerprintPolicy.Strict));
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<PlayerReadyWithSchemaChange>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.IncompatibleProtocol));
     }
 
     [Test]

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -301,6 +302,49 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task StartBrowserAsync_RefreshesContinuously()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(Options(appId, advertiseInterval: TimeSpan.FromMilliseconds(25)), network);
+        await using var discovery = new NetDiscovery(Options(appId, advertiseInterval: TimeSpan.FromMilliseconds(25)), network);
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+        var found = new TaskCompletionSource<LanScanResult<RoomListMetadata>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        browser.RoomFound += room => found.TrySetResult(room);
+
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-auto", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Auto", 1, 4, false));
+
+        var room = await found.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(room.RoomId, Is.EqualTo("room-auto"));
+    }
+
+    [Test]
+    public async Task BrowserRefresh_UsesPositiveScanDuration()
+    {
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        var backend = new DurationCapturingDiscoveryBackend(new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            "room-1",
+            7777,
+            schemaId,
+            JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false))));
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+
+        await browser.RefreshAsync();
+
+        Assert.That(backend.LastScanDuration, Is.GreaterThan(TimeSpan.Zero));
+        Assert.That(browser.Snapshot.Rooms, Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public async Task BrowserEvents_UseDispatcherAndContainCallbackFailures()
     {
         var network = new MemoryDiscoveryNetwork();
@@ -546,6 +590,36 @@ public class NetDiscoveryStatsTests
 
         public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default) =>
             Task.FromResult<IReadOnlyList<DiscoveryPacket>>(new[] { _packet });
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DurationCapturingDiscoveryBackend : IDiscoveryBackend
+    {
+        private readonly DiscoveryPacket _packet;
+
+        public DurationCapturingDiscoveryBackend(DiscoveryPacket packet)
+        {
+            _packet = packet;
+        }
+
+        public TimeSpan LastScanDuration { get; private set; }
+
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+        {
+            LastScanDuration = duration;
+            var packets = duration > TimeSpan.Zero ? new[] { _packet } : Array.Empty<DiscoveryPacket>();
+            return Task.FromResult<IReadOnlyList<DiscoveryPacket>>(packets);
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
