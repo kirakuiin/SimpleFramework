@@ -14,21 +14,32 @@ public sealed class TcpNetTransport : INetTransport
     private long _nextConnectionId;
     private TcpListener? _listener;
     private Task? _acceptTask;
+    private TimeProvider _timeProvider;
     private int _disposed;
     private int _running;
 
-    public TcpNetTransport(int maxFrameSize = 64 * 1024)
+    public TcpNetTransport(int maxFrameSize = 64 * 1024, TimeProvider? timeProvider = null)
     {
         if (maxFrameSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxFrameSize), "Max frame size must be greater than zero.");
 
         MaxFrameSize = maxFrameSize;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
     /// 读取 TCP 帧前允许的最大声明长度，应与上层 MaxPacketSize 保持一致。
     /// </summary>
     public int MaxFrameSize { get; set; }
+
+    /// <summary>
+    /// 用于连接超时的时间源。
+    /// </summary>
+    public TimeProvider TimeProvider
+    {
+        get => _timeProvider;
+        set => _timeProvider = value ?? TimeProvider.System;
+    }
 
     /// <summary>
     /// 监听成功后的本地终结点；端口为 0 时可从这里读取实际端口。
@@ -86,7 +97,7 @@ public sealed class TcpNetTransport : INetTransport
         if (string.IsNullOrWhiteSpace(options.Host) || options.Port <= 0 || options.Port > 65535)
             return new TransportConnectResult(NetTransportStatus.InvalidEndpoint, TransportConnectionId.None, "Host and port must be valid.");
 
-        using var timeoutCts = new CancellationTokenSource(options.Timeout);
+        using var timeoutCts = new CancellationTokenSource(options.Timeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token, _disposeCts.Token);
         var tcpClient = new TcpClient();
 

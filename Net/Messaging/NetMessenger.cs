@@ -243,6 +243,9 @@ public sealed class NetMessenger
         if (timeout <= TimeSpan.Zero)
             return new NetSendResult(NetSendStatus.TransportFailed, "Relay timed out.");
 
+        if (!TryEnsureProtocolTypesCanBind(out var bindError, typeof(T)))
+            return new NetSendResult(NetSendStatus.TransportFailed, bindError);
+
         var descriptor = Registry.Get<T>();
         byte[] payload;
         try
@@ -311,6 +314,9 @@ public sealed class NetMessenger
             return new NetRequestResult<TResponse> { Status = NetRequestStatus.Cancelled };
         if (timeout <= TimeSpan.Zero)
             return new NetRequestResult<TResponse> { Status = NetRequestStatus.Timeout };
+
+        if (!TryEnsureProtocolTypesCanBind(out var bindError, typeof(TRequest), typeof(TResponse)))
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.TransportFailed, Message = bindError };
 
         var requestDescriptor = Registry.Get<TRequest>();
         var responseDescriptor = Registry.Get<TResponse>();
@@ -464,6 +470,21 @@ public sealed class NetMessenger
         {
             if (!Registry.Contains(messageType))
                 throw new InvalidOperationException("Message protocol manifest is frozen after the session starts.");
+        }
+    }
+
+    private bool TryEnsureProtocolTypesCanBind(out string? error, params Type[] messageTypes)
+    {
+        try
+        {
+            EnsureProtocolTypesCanBind(messageTypes);
+            error = null;
+            return true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            error = ex.Message;
+            return false;
         }
     }
 
@@ -851,6 +872,9 @@ public sealed class NetMessenger
 
     private EncodedPacket EncodeMessagePacket<T>(T message)
     {
+        if (!TryEnsureProtocolTypesCanBind(out var bindError, typeof(T)))
+            return new EncodedPacket(NetSendStatus.TransportFailed, null, bindError);
+
         var descriptor = Registry.Get<T>();
         byte[] payload;
         try

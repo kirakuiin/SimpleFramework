@@ -33,7 +33,7 @@ public sealed class PeerDirectory
     /// <summary>
     /// 设置本地对等体标识。
     /// </summary>
-    public void SetLocalPeer(PeerId peerId)
+    internal void SetLocalPeer(PeerId peerId)
     {
         LocalPeerId = peerId;
     }
@@ -41,7 +41,7 @@ public sealed class PeerDirectory
     /// <summary>
     /// 添加或更新一个对等体。
     /// </summary>
-    public void Upsert(PeerInfo peer)
+    internal void Upsert(PeerInfo peer)
     {
         lock (_gate)
             _peers[peer.PeerId] = peer;
@@ -50,7 +50,7 @@ public sealed class PeerDirectory
     /// <summary>
     /// 用给定集合替换整个目录。
     /// </summary>
-    public void Replace(IEnumerable<PeerInfo> peers)
+    internal void Replace(IEnumerable<PeerInfo> peers)
     {
         lock (_gate)
         {
@@ -63,7 +63,7 @@ public sealed class PeerDirectory
     /// <summary>
     /// 移除指定对等体。
     /// </summary>
-    public bool Remove(PeerId peerId)
+    internal bool Remove(PeerId peerId)
     {
         lock (_gate)
             return _peers.Remove(peerId);

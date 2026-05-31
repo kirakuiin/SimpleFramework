@@ -18,6 +18,9 @@ public sealed record RoomListMetadata(string RoomName, int CurrentPlayers, int M
 [DiscoveryMetadata("room.other.v1")]
 public sealed record OtherRoomListMetadata(string Name);
 
+[DiscoveryMetadata("room.list.v1")]
+public sealed record ConflictingRoomListMetadata(string Name);
+
 public sealed record UnsafeRoomMetadata(string Password);
 
 [TestFixture]
@@ -219,6 +222,27 @@ public class NetDiscoveryStatsTests
             registry.Register<OtherRoomListMetadata>("room.list.v1"));
 
         Assert.That(ex!.Message, Does.Contain("room.list.v1"));
+    }
+
+    [Test]
+    public async Task NetDiscovery_StartAdvertiseWithConflictingMetadataSchema_ReturnsInvalidState()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryDiscoveryNetwork();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var discovery = new NetDiscovery(Options(appId), network);
+
+        var first = await discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+        await discovery.StopAdvertiseAsync();
+        var second = await discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-2", GamePort = 7777, MetadataSchemaId = schemaId },
+            new ConflictingRoomListMetadata("Other"));
+
+        Assert.That(first.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(second.Status, Is.EqualTo(NetSessionStatus.InvalidState));
+        Assert.That(second.Message, Does.Contain("conflicts"));
     }
 
     [Test]

@@ -30,6 +30,65 @@ public class NetSessionTests
     }
 
     [Test]
+    public void PeerDirectory_DoesNotExposePublicMutationMethods()
+    {
+        var methods = typeof(PeerDirectory)
+            .GetMethods()
+            .Where(method => method.DeclaringType == typeof(PeerDirectory))
+            .Where(method => method.IsPublic)
+            .Select(method => method.Name)
+            .ToArray();
+
+        Assert.That(methods, Does.Not.Contain("SetLocalPeer"));
+        Assert.That(methods, Does.Not.Contain("Upsert"));
+        Assert.That(methods, Does.Not.Contain("Replace"));
+        Assert.That(methods, Does.Not.Contain("Remove"));
+    }
+
+    [Test]
+    public async Task Join_WithOversizedAuthPayload_ReturnsTransportFailedBeforeSending()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(
+            network.CreateTransport("client"),
+            Options(appId, maxPacketSize: 128));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        var join = await client.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            AuthPayload = new byte[1024]
+        });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(join.Message, Does.Contain("MaxPacketSize"));
+        Assert.That(server.Peers.RemoteParticipants(), Is.Empty);
+    }
+
+    [Test]
+    public async Task Join_WhenAcceptedPacketExceedsServerLimit_ReturnsTransportFailedAndRollsBackPeer()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(
+            network.CreateTransport("server"),
+            Options(appId, maxPacketSize: 128));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(join.Message, Does.Contain("Transport disconnected"));
+        Assert.That(server.Peers.RemoteParticipants(), Is.Empty);
+    }
+
+    [Test]
     public async Task Join_WithWrongApplication_IsRejected()
     {
         var network = new MemoryNetNetwork();
@@ -832,7 +891,12 @@ public class NetSessionTests
         return keys.Single();
     }
 
-    private static GameNetOptions Options(Guid appId, int protocolVersion = 1, INetEventDispatcher dispatcher = null, TimeProvider timeProvider = null) => new()
+    private static GameNetOptions Options(
+        Guid appId,
+        int protocolVersion = 1,
+        INetEventDispatcher dispatcher = null,
+        TimeProvider timeProvider = null,
+        int maxPacketSize = 64 * 1024) => new()
     {
         Application = new NetApplicationInfo
         {
@@ -840,7 +904,8 @@ public class NetSessionTests
             ProtocolVersion = protocolVersion
         },
         EventDispatcher = dispatcher,
-        TimeProvider = timeProvider ?? TimeProvider.System
+        TimeProvider = timeProvider ?? TimeProvider.System,
+        MaxPacketSize = maxPacketSize
     };
 
     private sealed class InlineCountingDispatcher : INetEventDispatcher

@@ -454,12 +454,12 @@ public class NetFlowTests
     [Test]
     public async Task Flow_OversizedProposal_ReturnsRejectedWithPacketTooLargeResponse()
     {
-        var fixture = await TwoPeerFixture.StartAsync(appId => Options(appId, maxPacketSize: 16));
+        var fixture = await TwoPeerFixture.StartAsync(appId => Options(appId, maxPacketSize: 1024));
         await using (fixture)
         {
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
                 fixture.Server.Peers.RemoteParticipants(),
-                new LoadSceneProposal(new string('x', 200)),
+                new LoadSceneProposal(new string('x', 5000)),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1));
 

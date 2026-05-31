@@ -68,7 +68,10 @@ public sealed class GameNet : IAsyncDisposable
 
         _transport = transport;
         if (_transport is TcpNetTransport tcpTransport)
+        {
             tcpTransport.MaxFrameSize = options.MaxPacketSize;
+            tcpTransport.TimeProvider = options.TimeProvider;
+        }
         _options = options;
         Diagnostics = new NetDiagnostics(_options.EventDispatcher);
         Session = new NetSession();
@@ -314,7 +317,15 @@ public sealed class GameNet : IAsyncDisposable
                 Messages.Registry.GetFingerprint(),
                 NetSessionStatus.Ok,
                 null);
-            var send = await _transport.SendAsync(connectionId, SerializePacket(request), NetChannel.System, operationToken).ConfigureAwait(false);
+            if (!TrySerializeSessionPacket(request, out var requestPayload, out var requestError))
+            {
+                _pendingJoin = null;
+                await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                await ResetConnectingStateAsync().ConfigureAwait(false);
+                return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, requestError);
+            }
+
+            var send = await _transport.SendAsync(connectionId, requestPayload, NetChannel.System, operationToken).ConfigureAwait(false);
             if (!send.Succeeded)
             {
                 _pendingJoin = null;
@@ -839,8 +850,6 @@ public sealed class GameNet : IAsyncDisposable
             _serverJoinGate.Release();
         }
 
-        DispatchFrameworkEvent(() => Session.RaisePeerJoined(new NetPeerJoined(peer)));
-
         var accepted = new SessionPacket(
             SessionPacket.JoinAccepted,
             _options.Application.ApplicationId,
@@ -852,7 +861,15 @@ public sealed class GameNet : IAsyncDisposable
             Messages.Registry.GetFingerprint(),
             NetSessionStatus.Ok,
             null);
-        await _transport.SendAsync(connectionId, SerializePacket(accepted), NetChannel.System).ConfigureAwait(false);
+        var acceptedSend = await SendSessionPacketAsync(connectionId, accepted).ConfigureAwait(false);
+        if (!acceptedSend.Succeeded)
+        {
+            RemoveRemotePeerFinal(peerId, DisconnectReason.TransportFailed, raiseDisconnected: false);
+            await _transport.DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
+            return;
+        }
+
+        DispatchFrameworkEvent(() => Session.RaisePeerJoined(new NetPeerJoined(peer)));
         await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);
     }
 
@@ -866,6 +883,7 @@ public sealed class GameNet : IAsyncDisposable
 
         ReconnectEntry entry;
         PeerInfo peer;
+        PeerInfo? existingPeer = null;
         await _serverJoinGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -883,8 +901,8 @@ public sealed class GameNet : IAsyncDisposable
                 return;
             }
 
-            var existing = Peers.Peers.FirstOrDefault(p => p.PeerId == entry.PeerId);
-            if (existing is not null && existing.IsConnected)
+            existingPeer = Peers.Peers.FirstOrDefault(p => p.PeerId == entry.PeerId);
+            if (existingPeer is not null && existingPeer.IsConnected)
             {
                 await SendJoinRejectedAsync(connectionId, NetSessionStatus.AuthenticationFailed, "Reconnect token has already been used.").ConfigureAwait(false);
                 return;
@@ -898,9 +916,9 @@ public sealed class GameNet : IAsyncDisposable
                 _peerConnections[entry.PeerId] = connectionId;
             }
 
-            peer = existing is null
+            peer = existingPeer is null
                 ? new PeerInfo(entry.PeerId, IsServer: false, IsLocal: false, JoinedAt: _options.TimeProvider.GetUtcNow())
-                : existing with { IsConnected = true };
+                : existingPeer with { IsConnected = true };
             Peers.Upsert(peer);
             Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
         }
@@ -908,8 +926,6 @@ public sealed class GameNet : IAsyncDisposable
         {
             _serverJoinGate.Release();
         }
-
-        DispatchFrameworkEvent(() => Session.RaisePeerReconnected(new NetPeerReconnected(entry.PeerId)));
 
         var accepted = new SessionPacket(
             SessionPacket.JoinAccepted,
@@ -922,7 +938,18 @@ public sealed class GameNet : IAsyncDisposable
             Messages.Registry.GetFingerprint(),
             NetSessionStatus.Ok,
             null);
-        await _transport.SendAsync(connectionId, SerializePacket(accepted), NetChannel.System).ConfigureAwait(false);
+        var acceptedSend = await SendSessionPacketAsync(connectionId, accepted).ConfigureAwait(false);
+        if (!acceptedSend.Succeeded)
+        {
+            if (existingPeer is null)
+                RemoveRemotePeerFinal(entry.PeerId, DisconnectReason.TransportFailed, raiseDisconnected: false);
+            else
+                Peers.Upsert(existingPeer);
+            await _transport.DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
+            return;
+        }
+
+        DispatchFrameworkEvent(() => Session.RaisePeerReconnected(new NetPeerReconnected(entry.PeerId)));
         await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);
     }
 
@@ -942,7 +969,7 @@ public sealed class GameNet : IAsyncDisposable
             Messages.Registry.GetFingerprint(),
             status,
             message);
-        await _transport.SendAsync(connectionId, SerializePacket(rejected), NetChannel.System).ConfigureAwait(false);
+        await SendSessionPacketAsync(connectionId, rejected).ConfigureAwait(false);
         await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
     }
 
@@ -963,7 +990,7 @@ public sealed class GameNet : IAsyncDisposable
             NetSessionStatus.Ok,
             null,
             reason);
-        await _transport.SendAsync(connectionId, SerializePacket(notice), NetChannel.System).ConfigureAwait(false);
+        await SendSessionPacketAsync(connectionId, notice).ConfigureAwait(false);
     }
 
     private async Task SendDisconnectNoticesToAllPeersAsync(DisconnectReason reason)
@@ -1023,13 +1050,20 @@ public sealed class GameNet : IAsyncDisposable
             Messages.Registry.GetFingerprint(),
             NetSessionStatus.Ok,
             null);
-        var payload = SerializePacket(update);
+        if (!TrySerializeSessionPacket(update, out var payload, out var error))
+        {
+            Diagnostics.RecordError(new NetError("SessionPacketTooLarge", error ?? "Session packet exceeds MaxPacketSize."));
+            return;
+        }
+
         foreach (var target in targets)
         {
             if (target.Value == exceptConnectionId)
                 continue;
 
-            await _transport.SendAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
+            var send = await _transport.SendAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
+            if (!send.Succeeded)
+                Diagnostics.RecordError(new NetError("SessionPacketSendFailed", send.Message ?? send.Status.ToString()));
         }
     }
 
@@ -1181,7 +1215,33 @@ public sealed class GameNet : IAsyncDisposable
         }
     }
 
-    private static byte[] SerializePacket(SessionPacket packet) => JsonSerializer.SerializeToUtf8Bytes(packet);
+    private bool TrySerializeSessionPacket(SessionPacket packet, out byte[] payload, out string? error)
+    {
+        payload = JsonSerializer.SerializeToUtf8Bytes(packet);
+        if (payload.Length <= _options.MaxPacketSize)
+        {
+            error = null;
+            return true;
+        }
+
+        error = $"Session packet length {payload.Length} exceeds MaxPacketSize {_options.MaxPacketSize}.";
+        Diagnostics.AddDroppedPacket();
+        Diagnostics.RecordError(new NetError("SessionPacketTooLarge", error));
+        return false;
+    }
+
+    private async ValueTask<NetSendResult> SendSessionPacketAsync(TransportConnectionId connectionId, SessionPacket packet)
+    {
+        if (_transport is null)
+            return new NetSendResult(NetSendStatus.SessionClosed);
+        if (!TrySerializeSessionPacket(packet, out var payload, out var error))
+            return new NetSendResult(NetSendStatus.PacketTooLarge, error);
+
+        var send = await _transport.SendAsync(connectionId, payload, NetChannel.System).ConfigureAwait(false);
+        if (!send.Succeeded)
+            Diagnostics.RecordError(new NetError("SessionPacketSendFailed", send.Message ?? send.Status.ToString()));
+        return send;
+    }
 
     private ValueTask<NetSendResult> SendToServerPacketAsync(byte[] packet)
     {

@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Net;
+using Test.Net.TestDoubles;
 
 namespace Test.Net;
 
@@ -266,6 +267,25 @@ public class NetTransportTests
 
         Assert.That(start.Status, Is.EqualTo(NetTransportStatus.Cancelled));
         Assert.That(connect.Status, Is.EqualTo(NetTransportStatus.Cancelled));
+    }
+
+    [Test]
+    public async Task TcpTransport_ConnectTimeout_UsesConfiguredTimeProvider()
+    {
+        var clock = new ManualTimeProvider();
+        await using var client = new TcpNetTransport(timeProvider: clock);
+
+        var connectTask = client.ConnectAsync(new NetConnectOptions
+        {
+            Host = "10.255.255.1",
+            Port = 65000,
+            Timeout = TimeSpan.FromSeconds(5)
+        });
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        var result = await connectTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetTransportStatus.Timeout));
     }
 
     [Test]

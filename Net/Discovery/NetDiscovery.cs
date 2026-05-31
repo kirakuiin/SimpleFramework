@@ -577,6 +577,9 @@ public sealed class NetDiscovery : IAsyncDisposable
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly CancellationTokenSource _disposeCancellation = new();
     private readonly SemaphoreSlim _advertiseGate = new(1, 1);
+    private readonly object _schemaGate = new();
+    private readonly Dictionary<uint, Type> _metadataTypesBySchemaId = new();
+    private readonly Dictionary<Type, uint> _schemaIdsByMetadataType = new();
     private DiscoveryAdvertisementId _advertisementId;
     private LanAdvertiseInfo? _advertiseInfo;
     private int _disposed;
@@ -624,7 +627,7 @@ public sealed class NetDiscovery : IAsyncDisposable
                 return new NetSessionResult(NetSessionStatus.ObjectDisposed);
             if (_advertisementId != DiscoveryAdvertisementId.None)
                 return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running.");
-            if (!ValidateMetadataSchema<TMetadata>(info.MetadataSchemaId, out var schemaError))
+            if (!ValidateAndRegisterMetadataSchema<TMetadata>(info.MetadataSchemaId, out var schemaError))
                 return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
             if (!TryCreatePacket(info, metadata, out var packet, out var error))
@@ -656,7 +659,7 @@ public sealed class NetDiscovery : IAsyncDisposable
 
             if (_advertisementId == DiscoveryAdvertisementId.None || _advertiseInfo is null)
                 return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise has not started.");
-            if (!ValidateMetadataSchema<TMetadata>(_advertiseInfo.MetadataSchemaId, out var schemaError))
+            if (!ValidateAndRegisterMetadataSchema<TMetadata>(_advertiseInfo.MetadataSchemaId, out var schemaError))
                 return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
             if (!TryCreatePacket(_advertiseInfo, metadata, out var packet, out var error))
@@ -713,6 +716,8 @@ public sealed class NetDiscovery : IAsyncDisposable
     public async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration, uint metadataSchemaId)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (!ValidateAndRegisterMetadataSchema<TMetadata>(metadataSchemaId, out var schemaError))
+            throw new InvalidOperationException(schemaError);
 
         var results = new List<LanScanResult<TMetadata>>();
         foreach (var packet in await _backend.ScanAsync(duration, _options.Discovery).ConfigureAwait(false))
@@ -776,6 +781,8 @@ public sealed class NetDiscovery : IAsyncDisposable
     public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>(uint metadataSchemaId)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (!ValidateAndRegisterMetadataSchema<TMetadata>(metadataSchemaId, out var schemaError))
+            throw new InvalidOperationException(schemaError);
 
         return Task.FromResult(new LanBrowser<TMetadata>(
             this,
@@ -918,23 +925,46 @@ public sealed class NetDiscovery : IAsyncDisposable
         return attribute.SchemaId;
     }
 
-    private static bool ValidateMetadataSchema<TMetadata>(uint metadataSchemaId, out string? error)
+    private bool ValidateAndRegisterMetadataSchema<TMetadata>(uint metadataSchemaId, out string? error)
     {
-        var attribute = Attribute.GetCustomAttribute(typeof(TMetadata), typeof(DiscoveryMetadataAttribute)) as DiscoveryMetadataAttribute;
+        var metadataType = typeof(TMetadata);
+        var attribute = Attribute.GetCustomAttribute(metadataType, typeof(DiscoveryMetadataAttribute)) as DiscoveryMetadataAttribute;
         if (attribute is null)
         {
-            error = null;
-            return true;
+            return RegisterMetadataSchema(metadataType, metadataSchemaId, metadataSchemaId.ToString(), out error);
         }
 
         if (attribute.SchemaId == metadataSchemaId)
+            return RegisterMetadataSchema(metadataType, metadataSchemaId, attribute.SchemaKey, out error);
+
+        error = $"MetadataSchemaId '{metadataSchemaId}' does not match metadata type '{metadataType.FullName}' schema id '{attribute.SchemaId}'.";
+        return false;
+    }
+
+    private bool RegisterMetadataSchema(Type metadataType, uint metadataSchemaId, string schemaKey, out string? error)
+    {
+        lock (_schemaGate)
         {
-            error = null;
-            return true;
+            if (_metadataTypesBySchemaId.TryGetValue(metadataSchemaId, out var existingType) &&
+                existingType != metadataType)
+            {
+                error = $"Discovery metadata schema '{schemaKey}' conflicts with '{existingType.FullName}'.";
+                return false;
+            }
+
+            if (_schemaIdsByMetadataType.TryGetValue(metadataType, out var existingSchemaId) &&
+                existingSchemaId != metadataSchemaId)
+            {
+                error = $"Discovery metadata type '{metadataType.FullName}' is already registered with schema id '{existingSchemaId}'.";
+                return false;
+            }
+
+            _metadataTypesBySchemaId[metadataSchemaId] = metadataType;
+            _schemaIdsByMetadataType[metadataType] = metadataSchemaId;
         }
 
-        error = $"MetadataSchemaId '{metadataSchemaId}' does not match metadata type '{typeof(TMetadata).FullName}' schema id '{attribute.SchemaId}'.";
-        return false;
+        error = null;
+        return true;
     }
 }
 

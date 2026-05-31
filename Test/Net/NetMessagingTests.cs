@@ -22,6 +22,9 @@ public sealed record PlayerReadyWithSchemaChange(bool Ready, int Revision);
 [NetMessage("big.message")]
 public sealed record BigMessage(string Text);
 
+[NetMessage("late.message")]
+public sealed record LateMessage(int Value);
+
 [NetMessage("handler.check")]
 public sealed record HandlerCheck(int Value);
 
@@ -119,6 +122,28 @@ public class NetMessagingTests
         var result = await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.That(result.Sender, Is.EqualTo(join.PeerId));
         Assert.That(result.Message.Ready, Is.True);
+    }
+
+    [Test]
+    public async Task SendToServer_AfterJoinWithUnregisteredMessage_ReturnsFailureAndDoesNotMutateFingerprint()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        var fingerprintBeforeJoin = client.Messages.Registry.GetFingerprint();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var send = await client.SendToServerAsync(new LateMessage(1));
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(send.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(send.Message, Does.Contain("frozen"));
+        Assert.That(client.Messages.Registry.GetFingerprint(), Is.EqualTo(fingerprintBeforeJoin));
     }
 
     [Test]
