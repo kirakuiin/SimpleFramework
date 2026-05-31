@@ -342,6 +342,43 @@ public class NetFlowTests
     }
 
     [Test]
+    public async Task Flow_ResendToUnavailablePendingPeer_ReturnsPeerUnavailableAndKeepsPending()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            fixture.Client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) =>
+            {
+                received.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+                return new LoadSceneAck(true, string.Empty);
+            });
+
+            var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipants(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromMilliseconds(150));
+
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            var flowId = fixture.Server.Flow.PendingFlowIds[0];
+            var targetPeer = fixture.Client.Peers.LocalPeerId;
+            await fixture.Server.KickAsync(targetPeer);
+
+            var resend = await fixture.Server.Flow.ResendPendingToAsync(flowId, targetPeer);
+
+            Assert.That(resend.Status, Is.EqualTo(NetSendStatus.PeerUnavailable));
+            Assert.That(fixture.Server.Flow.GetPendingPeers(flowId), Is.EqualTo(new[] { targetPeer }));
+
+            var result = await flow.WaitAsync(TimeSpan.FromSeconds(1));
+            release.SetResult();
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Timeout));
+        }
+    }
+
+    [Test]
     public async Task Flow_DisconnectOnePeer_DoesNotCancelOtherPeerPendingResponse()
     {
         var fixture = await ThreePeerFixture.StartAsync();
@@ -476,6 +513,7 @@ public class NetFlowTests
             var clientOptions = createOptions(appId);
             var server = new GameNet(network.CreateTransport("server"), serverOptions);
             var client = new GameNet(network.CreateTransport("client"), clientOptions);
+            RegisterFlowMessages(server, client);
 
             await server.HostAsync(new HostOptions { Port = 7777 });
             await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
@@ -509,6 +547,7 @@ public class NetFlowTests
             var server = new GameNet(network.CreateTransport("server"), Options(appId));
             var clientA = new GameNet(network.CreateTransport("client-a"), Options(appId));
             var clientB = new GameNet(network.CreateTransport("client-b"), Options(appId));
+            RegisterFlowMessages(server, clientA, clientB);
 
             await server.HostAsync(new HostOptions { Port = 7777 });
             await clientA.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
@@ -533,4 +572,13 @@ public class NetFlowTests
         MaxPacketSize = maxPacketSize,
         MaxSendQueueBytesPerPeer = maxSendQueueBytesPerPeer
     };
+
+    private static void RegisterFlowMessages(params GameNet[] peers)
+    {
+        foreach (var peer in peers)
+        {
+            peer.Messages.RegisterMessage<LoadSceneProposal>();
+            peer.Messages.RegisterMessage<LoadSceneAck>();
+        }
+    }
 }

@@ -51,6 +51,7 @@ await client.SendToServerAsync(new PlayerReady(true));
 ## 消息
 
 消息类型应使用 `[NetMessage("stable.key")]` 标注稳定协议键。重命名 C# 类型时不要改变这个键，否则会破坏协议兼容性。
+所有会参与握手指纹的消息类型必须在 `HostAsync` / `StartServerAsync` / `JoinAsync` 前注册；会话启动后协议 manifest 会被冻结。启动后仍可以为已注册的消息追加 handler，但不能首次注册新的消息类型。
 
 ```csharp
 [NetMessage("chat.line")]
@@ -148,6 +149,11 @@ public sealed record LoadSceneProposal(string SceneName);
 
 [NetMessage("load.scene.ack")]
 public sealed record LoadSceneAck(bool Accepted, string Reason);
+
+server.Messages.RegisterMessage<LoadSceneProposal>();
+server.Messages.RegisterMessage<LoadSceneAck>();
+client.Messages.RegisterMessage<LoadSceneProposal>();
+client.Messages.RegisterMessage<LoadSceneAck>();
 
 client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((ctx, proposal) =>
     new LoadSceneAck(Accepted: true, Reason: ""));

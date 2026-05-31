@@ -346,6 +346,19 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task DiscoveryDispose_CancelsActiveBrowserLoop()
+    {
+        var clock = new ManualTimeProvider();
+        var discovery = new NetDiscovery(Options(Guid.NewGuid(), timeProvider: clock), new MemoryDiscoveryNetwork());
+        var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+
+        await discovery.DisposeAsync();
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.DoesNotThrowAsync(async () => await browser.DisposeAsync());
+    }
+
+    [Test]
     public async Task BrowserRefresh_UsesPositiveScanDuration()
     {
         var appId = Guid.NewGuid();
@@ -488,6 +501,27 @@ public class NetDiscoveryStatsTests
 
         Assert.That(result.Status, Is.EqualTo(NetStatsStatus.Timeout));
         Assert.That(result.PeerStats.ProbeLoss, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task Stats_DisposeWhileProbePending_CompletesObjectDisposed()
+    {
+        var clock = new ManualTimeProvider();
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+        var client = new GameNet(network.CreateTransport("client"), Options(appId, timeProvider: clock));
+        server.Stats.DropProbeResponses = true;
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var probe = client.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.FromSeconds(30));
+        await client.DisposeAsync();
+
+        var result = await probe.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetStatsStatus.ObjectDisposed));
     }
 
     [Test]

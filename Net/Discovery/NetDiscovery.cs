@@ -181,6 +181,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     private readonly uint _metadataSchemaId;
     private readonly Dictionary<string, BrowserRoom<TMetadata>> _rooms = new();
     private readonly CancellationTokenSource _refreshCancellation = new();
+    private readonly CancellationTokenRegistration _ownerCancellationRegistration;
     private readonly Task _refreshTask;
 
     internal LanBrowser(
@@ -189,7 +190,8 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
         TimeSpan roomTimeout,
         TimeSpan refreshInterval,
         TimeSpan scanDuration,
-        uint metadataSchemaId)
+        uint metadataSchemaId,
+        CancellationToken ownerCancellation)
     {
         _discovery = discovery;
         _timeProvider = timeProvider;
@@ -198,6 +200,8 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
         _scanDuration = scanDuration;
         _metadataSchemaId = metadataSchemaId;
         Snapshot = new LanBrowserSnapshot<TMetadata> { Rooms = Array.Empty<LanScanResult<TMetadata>>() };
+        _ownerCancellationRegistration = ownerCancellation.Register(static state =>
+            ((CancellationTokenSource)state!).Cancel(), _refreshCancellation);
         _refreshTask = RunRefreshLoopAsync(_refreshCancellation.Token);
     }
 
@@ -271,6 +275,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
         {
         }
 
+        await _ownerCancellationRegistration.DisposeAsync().ConfigureAwait(false);
         _refreshCancellation.Dispose();
         _rooms.Clear();
         Snapshot = new LanBrowserSnapshot<TMetadata> { Rooms = Array.Empty<LanScanResult<TMetadata>>() };
@@ -280,8 +285,15 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     {
         while (!token.IsCancellationRequested)
         {
-            await Task.Delay(_refreshInterval, _timeProvider, token).ConfigureAwait(false);
-            await RefreshAsync().ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(_refreshInterval, _timeProvider, token).ConfigureAwait(false);
+                await RefreshAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
         }
     }
 
@@ -563,6 +575,7 @@ public sealed class NetDiscovery : IAsyncDisposable
     private readonly GameNetOptions _options;
     private readonly IDiscoveryBackend _backend;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly CancellationTokenSource _disposeCancellation = new();
     private DiscoveryAdvertisementId _advertisementId;
     private LanAdvertiseInfo? _advertiseInfo;
     private int _disposed;
@@ -737,7 +750,8 @@ public sealed class NetDiscovery : IAsyncDisposable
             _options.Discovery.RoomTimeout,
             _options.Discovery.AdvertiseInterval,
             _options.Discovery.DefaultScanTimeout,
-            metadataSchemaId));
+            metadataSchemaId,
+            _disposeCancellation.Token));
     }
 
     /// <summary>
@@ -748,6 +762,7 @@ public sealed class NetDiscovery : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
             return;
 
+        _disposeCancellation.Cancel();
         if (_advertisementId != DiscoveryAdvertisementId.None)
         {
             await _backend.StopAdvertiseAsync(_advertisementId).ConfigureAwait(false);
@@ -756,6 +771,7 @@ public sealed class NetDiscovery : IAsyncDisposable
         }
 
         await _backend.DisposeAsync().ConfigureAwait(false);
+        _disposeCancellation.Dispose();
     }
 
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;

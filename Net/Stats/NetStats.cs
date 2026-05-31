@@ -167,6 +167,17 @@ public sealed class NetStats
                 Message = "Stats probe was cancelled."
             };
         }
+        catch (NetStatsProbeCancelledException ex)
+        {
+            _pending.TryRemove(sequence, out _);
+            RecordProbeFailure(peerId);
+            return new NetStatsResult
+            {
+                Status = ex.Status,
+                PeerStats = GetPeerStats(peerId),
+                Message = ex.Message
+            };
+        }
     }
 
     /// <summary>
@@ -191,6 +202,15 @@ public sealed class NetStats
     {
         if (_pending.TryRemove(pong.Sequence, out var pending))
             pending.Completion.TrySetResult(pong);
+    }
+
+    internal void CancelPendingProbes(NetStatsStatus status, string? message = null)
+    {
+        foreach (var pair in _pending.ToArray())
+        {
+            if (_pending.TryRemove(pair.Key, out var pending))
+                pending.Completion.TrySetException(new NetStatsProbeCancelledException(status, message));
+        }
     }
 
     private void RecordProbeAttempt(PeerId peerId)
@@ -280,6 +300,11 @@ public sealed class NetStats
                 LastSeenAt = LastSeenAt
             };
         }
+    }
+
+    private sealed class NetStatsProbeCancelledException(NetStatsStatus status, string? message) : Exception(message)
+    {
+        public NetStatsStatus Status { get; } = status;
     }
 }
 

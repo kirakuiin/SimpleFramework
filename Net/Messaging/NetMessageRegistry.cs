@@ -183,6 +183,8 @@ public sealed class NetMessageRegistry
     /// </summary>
     public bool TryGet(ulong messageId, out NetMessageDescriptor descriptor) => _byId.TryGetValue(messageId, out descriptor!);
 
+    internal bool Contains(Type messageType) => _byType.ContainsKey(messageType);
+
     /// <summary>
     /// 扫描程序集中的消息类型和处理器标记。
     /// </summary>

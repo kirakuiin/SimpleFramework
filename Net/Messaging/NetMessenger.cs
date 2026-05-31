@@ -28,6 +28,7 @@ public sealed class NetMessenger
     private readonly ConcurrentDictionary<long, PendingRequest> _pendingRequests = new();
     private readonly ConcurrentDictionary<long, TaskCompletionSource<NetSendResult>> _pendingRelays = new();
     private long _nextCorrelationId;
+    private int _protocolManifestFrozen;
 
     internal NetMessenger(
         Func<byte[], ValueTask<NetSendResult>> sendToServer,
@@ -63,7 +64,11 @@ public sealed class NetMessenger
     /// <summary>
     /// 注册消息类型。
     /// </summary>
-    public NetMessageDescriptor RegisterMessage<T>() => Registry.Register<T>();
+    public NetMessageDescriptor RegisterMessage<T>()
+    {
+        EnsureProtocolManifestCanMutate();
+        return Registry.Register<T>();
+    }
 
     /// <summary>
     /// 注册普通消息处理器。
@@ -71,6 +76,7 @@ public sealed class NetMessenger
     public void On<T>(Action<NetContext, T> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        EnsureProtocolTypesCanBind(typeof(T));
         RegisterHandler(typeof(T), (ctx, message) => handler(ctx, (T)message));
     }
 
@@ -92,6 +98,7 @@ public sealed class NetMessenger
     public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, TResponse> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        EnsureProtocolTypesCanBind(typeof(TRequest), typeof(TResponse));
         Registry.Register<TRequest>();
         Registry.Register<TResponse>();
         RegisterRequestHandler(
@@ -117,6 +124,7 @@ public sealed class NetMessenger
     /// </summary>
     public void RegisterAssemblyHandlers(Assembly assembly, object? target = null, Func<Type, object>? targetFactory = null, Func<Type, bool>? typeFilter = null)
     {
+        EnsureProtocolManifestCanMutate();
         var handlerCount = Registry.HandlerDescriptors.Count;
         var requestHandlerCount = Registry.RequestHandlerDescriptors.Count;
         var flowHandlerCount = Registry.FlowHandlerDescriptors.Count;
@@ -158,8 +166,14 @@ public sealed class NetMessenger
     public void AllowRelay<T>(Func<NetRelayContext, T, bool> policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
+        EnsureProtocolTypesCanBind(typeof(T));
         Registry.Register<T>();
         _relayPolicies[typeof(T)] = (context, message) => policy(context, (T)message);
+    }
+
+    internal void FreezeProtocolManifest()
+    {
+        Interlocked.Exchange(ref _protocolManifestFrozen, 1);
     }
 
     /// <summary>
@@ -430,6 +444,26 @@ public sealed class NetMessenger
         {
             if (_pendingRelays.TryRemove(pair.Key, out var pending))
                 pending.TrySetResult(new NetSendResult(status, message));
+        }
+    }
+
+    private bool IsProtocolManifestFrozen => Volatile.Read(ref _protocolManifestFrozen) == 1;
+
+    private void EnsureProtocolManifestCanMutate()
+    {
+        if (IsProtocolManifestFrozen)
+            throw new InvalidOperationException("Message protocol manifest is frozen after the session starts.");
+    }
+
+    private void EnsureProtocolTypesCanBind(params Type[] messageTypes)
+    {
+        if (!IsProtocolManifestFrozen)
+            return;
+
+        foreach (var messageType in messageTypes)
+        {
+            if (!Registry.Contains(messageType))
+                throw new InvalidOperationException("Message protocol manifest is frozen after the session starts.");
         }
     }
 

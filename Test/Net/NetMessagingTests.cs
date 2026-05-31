@@ -870,6 +870,21 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task MessageRegistry_AfterSessionStart_RejectsProtocolMutation()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        Assert.Throws<InvalidOperationException>(() => server.Messages.RegisterMessage<PlayerReady>());
+        Assert.Throws<InvalidOperationException>(() => server.On<PlayerReady>((_, _) => { }));
+        Assert.Throws<InvalidOperationException>(() =>
+            server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) => new JoinRoomResponse(true, string.Empty)));
+    }
+
+    [Test]
     public async Task RequestAsync_ReturnsTypedResponse()
     {
         var appId = Guid.NewGuid();
@@ -1074,6 +1089,47 @@ public class NetMessagingTests
         Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
 
         releaseHandler.SetResult();
+    }
+
+    [Test]
+    public async Task RequestAsync_ReconnectEnabledPeerDisconnect_CompletesSessionClosed()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        client.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            releaseHandler.Task.GetAwaiter().GetResult();
+            return new JoinRoomResponse(true, string.Empty);
+        });
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var request = server.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            join.PeerId,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(30));
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await client.LeaveAsync();
+        var result = await request.WaitAsync(TimeSpan.FromSeconds(1));
+        releaseHandler.SetResult();
+
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.SessionClosed));
     }
 
     [Test]

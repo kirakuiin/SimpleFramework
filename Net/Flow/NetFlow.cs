@@ -109,6 +109,7 @@ public sealed class NetFlow
     private readonly NetMessenger _messenger;
     private readonly NetDiagnostics _diagnostics;
     private readonly Func<NetSessionRole> _getRole;
+    private readonly Func<PeerId, bool> _canReachPeer;
     private readonly TimeProvider _timeProvider;
     private readonly Func<bool> _isDisposed;
     private readonly ConcurrentDictionary<long, IPendingFlow> _pendingFlows = new();
@@ -119,12 +120,14 @@ public sealed class NetFlow
         NetDiagnostics diagnostics,
         TimeProvider timeProvider,
         Func<NetSessionRole> getRole,
+        Func<PeerId, bool>? canReachPeer = null,
         Func<bool>? isDisposed = null)
     {
         _messenger = messenger;
         _diagnostics = diagnostics;
         _timeProvider = timeProvider;
         _getRole = getRole;
+        _canReachPeer = canReachPeer ?? (_ => true);
         _isDisposed = isDisposed ?? (() => false);
     }
 
@@ -328,6 +331,9 @@ public sealed class NetFlow
                 if (!_pendingPeers.Contains(peerId))
                     return Task.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable, "Peer is not pending in this flow."));
             }
+
+            if (!_owner._canReachPeer(peerId))
+                return Task.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable, "Peer is not connected."));
 
             LaunchRequest(peerId);
             return Task.FromResult(NetSendResult.Ok());
