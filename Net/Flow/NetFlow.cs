@@ -171,6 +171,17 @@ public sealed class NetFlow
     }
 
     /// <summary>
+    /// 注册本地客户端收到流程提案时的异步处理器。
+    /// </summary>
+    public void OnProposal<TProposal, TResponse>(Func<NetContext, TProposal, Task<TResponse>> handler)
+    {
+        if (_isDisposed())
+            throw new ObjectDisposedException(nameof(NetFlow));
+
+        _messenger.OnRequest(handler);
+    }
+
+    /// <summary>
     /// 由服务器向一组目标发起流程提案。
     /// </summary>
     public async Task<FlowResult<TResponse>> ProposeAsync<TProposal, TResponse>(
@@ -390,6 +401,12 @@ public sealed class NetFlow
                 if (response.Message == NetRequestStatus.SessionClosed.ToString() ||
                     response.Message == NetRequestStatus.TransportFailed.ToString())
                 {
+                    return;
+                }
+
+                if (response.Message == NetRequestStatus.Cancelled.ToString())
+                {
+                    Complete(FlowEndReason.Cancelled);
                     return;
                 }
 

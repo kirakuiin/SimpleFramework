@@ -26,7 +26,7 @@ public class NetFlowTests
             fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1));
@@ -78,7 +78,7 @@ public class NetFlowTests
             fixture.Client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1));
@@ -98,7 +98,7 @@ public class NetFlowTests
             fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AnyAccepted(),
                 TimeSpan.FromSeconds(1));
@@ -117,12 +117,12 @@ public class NetFlowTests
             fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
 
             var majority = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.MajorityAccepted(),
                 TimeSpan.FromSeconds(1));
             var quorum = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.Quorum(1),
                 TimeSpan.FromSeconds(1));
@@ -142,7 +142,7 @@ public class NetFlowTests
             fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(false, "busy"));
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.Custom((accepted, total) => accepted == 1 && total == 2),
                 TimeSpan.FromSeconds(1));
@@ -165,7 +165,7 @@ public class NetFlowTests
             });
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromMilliseconds(50));
@@ -185,11 +185,43 @@ public class NetFlowTests
             cancellation.Cancel();
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1),
                 cancellation.Token);
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Cancelled));
+        }
+    }
+
+    [Test]
+    public async Task Flow_CancelledWhilePending_CompletesCancelled()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            using var cancellation = new CancellationTokenSource();
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            fixture.Client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>(async (_, _) =>
+            {
+                received.TrySetResult();
+                await release.Task;
+                return new LoadSceneAck(true, string.Empty);
+            });
+
+            var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipantIds(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.AllAccepted(),
+                TimeSpan.FromSeconds(30),
+                cancellation.Token);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            cancellation.Cancel();
+            var result = await flow.WaitAsync(TimeSpan.FromSeconds(1));
+            release.SetResult();
 
             Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Cancelled));
         }
@@ -211,7 +243,7 @@ public class NetFlowTests
             });
 
             var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1));
@@ -255,7 +287,7 @@ public class NetFlowTests
             });
 
             var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(2));
@@ -292,7 +324,7 @@ public class NetFlowTests
             });
 
             var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(10));
@@ -322,7 +354,7 @@ public class NetFlowTests
             });
 
             var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromMilliseconds(150));
@@ -357,7 +389,7 @@ public class NetFlowTests
             });
 
             var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromMilliseconds(150));
@@ -401,7 +433,7 @@ public class NetFlowTests
             });
 
             var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromMilliseconds(300));
@@ -435,7 +467,7 @@ public class NetFlowTests
             });
 
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AnyAccepted(),
                 TimeSpan.FromSeconds(1));
@@ -458,7 +490,7 @@ public class NetFlowTests
         await using (fixture)
         {
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal(new string('x', 5000)),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1));
@@ -478,7 +510,7 @@ public class NetFlowTests
         await using (fixture)
         {
             var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-                fixture.Server.Peers.RemoteParticipants(),
+                fixture.Server.Peers.RemoteParticipantIds(),
                 new LoadSceneProposal("Battle01"),
                 FlowPolicy.AllAccepted(),
                 TimeSpan.FromSeconds(1));

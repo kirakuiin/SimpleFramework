@@ -21,7 +21,7 @@ public sealed class NetMessenger
     private readonly int _maxSendQueuePacketsPerPeer;
     private readonly int _maxSendsPerSecondPerPeer;
     private readonly object _sendLimitGate = new();
-    private readonly Dictionary<Type, List<Action<NetContext, object>>> _handlers = new();
+    private readonly Dictionary<Type, List<Func<NetContext, object, ValueTask>>> _handlers = new();
     private readonly Dictionary<Type, RequestHandler> _requestHandlers = new();
     private readonly Dictionary<Type, Func<NetRelayContext, object, bool>> _relayPolicies = new();
     private readonly Dictionary<PeerId, SendLimitState> _sendLimits = new();
@@ -77,15 +77,29 @@ public sealed class NetMessenger
     {
         ArgumentNullException.ThrowIfNull(handler);
         EnsureProtocolTypesCanBind(typeof(T));
-        RegisterHandler(typeof(T), (ctx, message) => handler(ctx, (T)message));
+        RegisterHandler(typeof(T), (ctx, message) =>
+        {
+            handler(ctx, (T)message);
+            return ValueTask.CompletedTask;
+        });
     }
 
-    private void RegisterHandler(Type messageType, Action<NetContext, object> handler)
+    /// <summary>
+    /// 注册异步普通消息处理器。
+    /// </summary>
+    public void On<T>(Func<NetContext, T, Task> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        EnsureProtocolTypesCanBind(typeof(T));
+        RegisterHandler(typeof(T), async (ctx, message) => await handler(ctx, (T)message).ConfigureAwait(false));
+    }
+
+    private void RegisterHandler(Type messageType, Func<NetContext, object, ValueTask> handler)
     {
         Registry.Register(messageType);
         if (!_handlers.TryGetValue(messageType, out var handlers))
         {
-            handlers = new List<Action<NetContext, object>>();
+            handlers = new List<Func<NetContext, object, ValueTask>>();
             _handlers[messageType] = handlers;
         }
 
@@ -104,10 +118,25 @@ public sealed class NetMessenger
         RegisterRequestHandler(
             typeof(TRequest),
             typeof(TResponse),
-            (ctx, request) => handler(ctx, (TRequest)request)!);
+            (ctx, request) => ValueTask.FromResult<object>(handler(ctx, (TRequest)request)!));
     }
 
-    private void RegisterRequestHandler(Type requestType, Type responseType, Func<NetContext, object, object> handler)
+    /// <summary>
+    /// 注册异步请求处理器；每个请求类型只允许一个处理器。
+    /// </summary>
+    public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, Task<TResponse>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        EnsureProtocolTypesCanBind(typeof(TRequest), typeof(TResponse));
+        Registry.Register<TRequest>();
+        Registry.Register<TResponse>();
+        RegisterRequestHandler(
+            typeof(TRequest),
+            typeof(TResponse),
+            async (ctx, request) => (await handler(ctx, (TRequest)request).ConfigureAwait(false))!);
+    }
+
+    private void RegisterRequestHandler(Type requestType, Type responseType, Func<NetContext, object, ValueTask<object>> handler)
     {
         Registry.Register(requestType);
         Registry.Register(responseType);
@@ -136,7 +165,7 @@ public sealed class NetMessenger
 
             var method = descriptor.Method;
             RegisterHandler(descriptor.MessageType, (context, message) =>
-                method.Invoke(ResolveHandlerTarget(method, target, targetFactory), new[] { context, message }));
+                InvokeHandlerMethodAsync(method, ResolveHandlerTarget(method, target, targetFactory), context, message));
         }
 
         foreach (var descriptor in Registry.RequestHandlerDescriptors.Skip(requestHandlerCount))
@@ -146,7 +175,7 @@ public sealed class NetMessenger
 
             var method = descriptor.Method;
             RegisterRequestHandler(descriptor.RequestType, descriptor.ResponseType, (context, request) =>
-                method.Invoke(ResolveHandlerTarget(method, target, targetFactory), new[] { context, request })!);
+                InvokeRequestHandlerMethodAsync(method, ResolveHandlerTarget(method, target, targetFactory), context, request));
         }
 
         foreach (var descriptor in Registry.FlowHandlerDescriptors.Skip(flowHandlerCount))
@@ -156,7 +185,7 @@ public sealed class NetMessenger
 
             var method = descriptor.Method;
             RegisterRequestHandler(descriptor.ProposalType, descriptor.ResponseType, (context, proposal) =>
-                method.Invoke(ResolveHandlerTarget(method, target, targetFactory), new[] { context, proposal })!);
+                InvokeRequestHandlerMethodAsync(method, ResolveHandlerTarget(method, target, targetFactory), context, proposal));
         }
     }
 
@@ -410,7 +439,7 @@ public sealed class NetMessenger
 
         return packet.Kind switch
         {
-            NetPacket.Message => HandleMessagePacket(data.Length, packet, senderId),
+            NetPacket.Message => await HandleMessagePacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
             NetPacket.Request => await HandleRequestPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
             NetPacket.Response => HandleResponsePacket(data.Length, packet, senderId),
             NetPacket.Relay => await HandleRelayPacketAsync(data.Length, packet, senderId).ConfigureAwait(false),
@@ -488,7 +517,7 @@ public sealed class NetMessenger
         }
     }
 
-    private bool HandleMessagePacket(int byteCount, NetPacket packet, PeerId senderId)
+    private async Task<bool> HandleMessagePacketAsync(int byteCount, NetPacket packet, PeerId senderId)
     {
         _diagnostics.AddPacketReceived(byteCount);
         if (!Registry.TryGet(packet.MessageId, out var descriptor))
@@ -516,17 +545,17 @@ public sealed class NetMessenger
         var context = new NetContext(packet.SenderId == PeerId.None ? senderId : packet.SenderId);
         foreach (var handler in handlers.ToArray())
         {
-            DispatchHandler(() =>
+            await DispatchHandlerAsync(async () =>
             {
                 try
                 {
-                    handler(context, message);
+                    await handler(context, message).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     _diagnostics.RecordError(new NetError("MessageHandlerError", ex.Message, ex));
                 }
-            });
+            }).ConfigureAwait(false);
         }
 
         return true;
@@ -562,7 +591,7 @@ public sealed class NetMessenger
                 return true;
             }
 
-            var response = handler.Invoke(new NetContext(senderId), request);
+            var response = await handler.Invoke(new NetContext(senderId), request).ConfigureAwait(false);
             var responsePayload = _codec.Encode(response);
             await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.Ok, responsePayload, null).ConfigureAwait(false);
         }
@@ -837,21 +866,88 @@ public sealed class NetMessenger
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
     }
 
-    private void DispatchHandler(Action action)
+    private async ValueTask DispatchHandlerAsync(Func<ValueTask> action)
     {
         if (_dispatcher is null)
         {
-            action();
+            await action().ConfigureAwait(false);
             return;
         }
 
         try
         {
-            _dispatcher.Post(action);
+            _dispatcher.Post(() =>
+            {
+                try
+                {
+                    action().AsTask().GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    _diagnostics.RecordError(new NetError("MessageHandlerError", ex.Message, ex));
+                }
+            });
         }
         catch (Exception ex)
         {
             _diagnostics.RecordError(new NetError("EventDispatchFailed", ex.Message, ex));
+        }
+    }
+
+    private static async ValueTask InvokeHandlerMethodAsync(MethodInfo method, object? target, NetContext context, object message)
+    {
+        var result = method.Invoke(target, new[] { context, message });
+        await AwaitPossibleAsyncResult(result).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<object> InvokeRequestHandlerMethodAsync(MethodInfo method, object? target, NetContext context, object request)
+    {
+        var result = method.Invoke(target, new[] { context, request });
+        return await UnwrapPossibleAsyncResultAsync(result).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Request handler returned null.");
+    }
+
+    private static async ValueTask AwaitPossibleAsyncResult(object? result)
+    {
+        switch (result)
+        {
+            case Task task:
+                await task.ConfigureAwait(false);
+                break;
+            case ValueTask valueTask:
+                await valueTask.ConfigureAwait(false);
+                break;
+        }
+    }
+
+    private static async ValueTask<object?> UnwrapPossibleAsyncResultAsync(object? result)
+    {
+        if (result is not null && IsGenericValueTask(result.GetType()))
+        {
+            var task = (Task)result.GetType().GetMethod("AsTask")!.Invoke(result, Array.Empty<object>())!;
+            await task.ConfigureAwait(false);
+            return GetTaskResult(task);
+        }
+
+        switch (result)
+        {
+            case Task task:
+                await task.ConfigureAwait(false);
+                return GetTaskResult(task);
+            case ValueTask valueTask:
+                await valueTask.ConfigureAwait(false);
+                return null;
+            default:
+                return result;
+        }
+
+        static bool IsGenericValueTask(Type type) =>
+            type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>);
+
+        static object? GetTaskResult(Task task)
+        {
+            var type = task.GetType();
+            return type.IsGenericType ? type.GetProperty("Result")?.GetValue(task) : null;
         }
     }
 
@@ -902,7 +998,7 @@ public sealed class NetMessenger
 
     private readonly record struct EncodedPacket(NetSendStatus Status, byte[]? Data, string? Message);
     private readonly record struct PendingResponse(NetRequestStatus Status, byte[] Payload, string? Message);
-    private sealed record RequestHandler(Type ResponseType, Func<NetContext, object, object> Invoke);
+    private sealed record RequestHandler(Type ResponseType, Func<NetContext, object, ValueTask<object>> Invoke);
 
     private sealed class SendLimitState
     {

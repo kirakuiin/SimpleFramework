@@ -31,6 +31,33 @@ public sealed class PeerDirectory
     }
 
     /// <summary>
+    /// 查找指定对等体的快照。
+    /// </summary>
+    public PeerInfo? Get(PeerId peerId)
+    {
+        lock (_gate)
+            return _peers.GetValueOrDefault(peerId);
+    }
+
+    /// <summary>
+    /// 指定对等体是否是本地对等体。
+    /// </summary>
+    public bool IsLocal(PeerId peerId)
+    {
+        lock (_gate)
+            return _peers.TryGetValue(peerId, out var peer) && peer.IsLocal;
+    }
+
+    /// <summary>
+    /// 指定对等体是否是权威服务器。
+    /// </summary>
+    public bool IsServer(PeerId peerId)
+    {
+        lock (_gate)
+            return _peers.TryGetValue(peerId, out var peer) && peer.IsServer;
+    }
+
+    /// <summary>
     /// 设置本地对等体标识。
     /// </summary>
     internal void SetLocalPeer(PeerId peerId)
@@ -70,9 +97,27 @@ public sealed class PeerDirectory
     }
 
     /// <summary>
-    /// 获取非本地、非服务器的远端参与者标识。
+    /// 获取游戏参与者快照。
     /// </summary>
-    public IReadOnlyCollection<PeerId> RemoteParticipants()
+    public IReadOnlyCollection<PeerInfo> Participants()
+    {
+        lock (_gate)
+            return _peers.Values.Where(p => !p.IsServer || p.IsLocal).ToArray();
+    }
+
+    /// <summary>
+    /// 获取非本地、非服务器的远端参与者快照。
+    /// </summary>
+    public IReadOnlyCollection<PeerInfo> RemoteParticipants()
+    {
+        lock (_gate)
+            return _peers.Values.Where(p => !p.IsLocal && !p.IsServer).ToArray();
+    }
+
+    /// <summary>
+    /// 获取非本地、非服务器的远端参与者 ID。
+    /// </summary>
+    public IReadOnlyCollection<PeerId> RemoteParticipantIds()
     {
         lock (_gate)
             return _peers.Values.Where(p => !p.IsLocal && !p.IsServer).Select(p => p.PeerId).ToArray();

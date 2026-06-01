@@ -80,6 +80,7 @@ public sealed class ScannedNetHandlers
 public sealed class RuntimeAttributedHandlers
 {
     public static TaskCompletionSource<AttributeMessage> ReceivedMessage { get; set; } = null!;
+    public static TaskCompletionSource<AttributeRequest> AsyncRequestStarted { get; set; } = null!;
 
     [NetHandler(typeof(AttributeMessage))]
     public static void HandleMessage(NetContext context, AttributeMessage message)
@@ -91,6 +92,17 @@ public sealed class RuntimeAttributedHandlers
     public static AttributeResponse HandleRequest(NetContext context, AttributeRequest request)
     {
         return new AttributeResponse(request.Value + 1);
+    }
+}
+
+public sealed class RuntimeAsyncAttributedHandlers
+{
+    [NetRequestHandler(typeof(AttributeRequest), typeof(AttributeResponse))]
+    public static async Task<AttributeResponse> HandleRequestAsync(NetContext context, AttributeRequest request)
+    {
+        RuntimeAttributedHandlers.AsyncRequestStarted.TrySetResult(request);
+        await Task.Yield();
+        return new AttributeResponse(request.Value + 10);
     }
 }
 
@@ -775,6 +787,32 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RegisterAssemblyHandlers_AwaitsAsyncAttributedRequestHandlers()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        RuntimeAttributedHandlers.AsyncRequestStarted = new TaskCompletionSource<AttributeRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterAssemblyHandlers(typeof(RuntimeAsyncAttributedHandlers).Assembly, typeFilter: type => type == typeof(RuntimeAsyncAttributedHandlers));
+        client.Messages.RegisterMessage<AttributeRequest>();
+        client.Messages.RegisterMessage<AttributeResponse>();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var response = await client.RequestAsync<AttributeRequest, AttributeResponse>(
+            PeerId.Server,
+            new AttributeRequest(5),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That((await RuntimeAttributedHandlers.AsyncRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(1))).Value, Is.EqualTo(5));
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(response.Response!.Value, Is.EqualTo(15));
+    }
+
+    [Test]
     public async Task CancelPendingRelays_CompletesInFlightRelay()
     {
         var diagnostics = new NetDiagnostics();
@@ -937,6 +975,40 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RequestAsync_AwaitsAsyncHandler()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>(async (_, req) =>
+        {
+            handlerStarted.TrySetResult();
+            await Task.Yield();
+            return new JoinRoomResponse(req.RoomId == "room-1", "async");
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var response = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(response.Response!.Accepted, Is.True);
+        Assert.That(response.Response.Reason, Is.EqualTo("async"));
+    }
+
+    [Test]
     public async Task RequestAsync_WithoutHandler_ReturnsNoHandler()
     {
         var appId = Guid.NewGuid();
@@ -972,8 +1044,9 @@ public class NetMessagingTests
         server.Messages.RegisterMessage<JoinRoomResponse>();
         client.Messages.RegisterMessage<JoinRoomRequest>();
         client.Messages.RegisterMessage<JoinRoomResponse>();
-        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
-            throw new InvalidOperationException("boom"));
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>(
+            (Func<NetContext, JoinRoomRequest, JoinRoomResponse>)((_, _) =>
+                throw new InvalidOperationException("boom")));
 
         await server.HostAsync(new HostOptions { Port = 7777 });
         await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });

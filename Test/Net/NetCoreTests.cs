@@ -354,6 +354,55 @@ public class NetCoreTests
     }
 
     [Test]
+    public async Task GameNet_Stop_ClearsPeerDirectoryAndConnectedPeerDiagnostics()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = appId }
+        });
+        await using var client = new GameNet(network.CreateTransport("client"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = appId }
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var stop = await server.StopAsync();
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Peers.Peers, Is.Empty);
+        Assert.That(server.Peers.LocalPeerId, Is.EqualTo(PeerId.None));
+        Assert.That(server.Diagnostics.GetSnapshot().ConnectedPeerCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task GameNet_Dispose_ClearsPeerDirectoryAndConnectedPeerDiagnostics()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var server = new GameNet(network.CreateTransport("server"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = appId }
+        });
+        await using var client = new GameNet(network.CreateTransport("client"), new GameNetOptions
+        {
+            Application = new NetApplicationInfo { ApplicationId = appId }
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await server.DisposeAsync();
+
+        Assert.That(server.Peers.Peers, Is.Empty);
+        Assert.That(server.Peers.LocalPeerId, Is.EqualTo(PeerId.None));
+        Assert.That(server.Diagnostics.GetSnapshot().ConnectedPeerCount, Is.EqualTo(0));
+    }
+
+    [Test]
     public async Task GameNet_Stop_WithCancelledToken_ReturnsCancelled_AndKeepsSessionActive()
     {
         var network = new MemoryNetNetwork();
@@ -462,6 +511,7 @@ public class NetCoreTests
                     "broken-room",
                     7777,
                     DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+                    2,
                     new byte[] { 0xff, 0x00 })
             });
 

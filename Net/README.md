@@ -160,7 +160,7 @@ client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((ctx, proposal) =>
     new LoadSceneAck(Accepted: true, Reason: ""));
 
 var result = await server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
-    server.Peers.RemoteParticipants(),
+    server.Peers.RemoteParticipantIds(),
     new LoadSceneProposal("Battle01"),
     FlowPolicy.AllAccepted(),
     TimeSpan.FromSeconds(5));

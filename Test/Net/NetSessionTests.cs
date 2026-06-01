@@ -302,9 +302,32 @@ public class NetSessionTests
         var joinB = await clientB.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
 
         var participants = server.Peers.RemoteParticipants();
+        var participantIds = participants.Select(peer => peer.PeerId).ToArray();
 
-        Assert.That(participants, Is.EquivalentTo(new[] { joinA.PeerId, joinB.PeerId }));
-        Assert.That(participants, Does.Not.Contain(PeerId.Server));
+        Assert.That(participantIds, Is.EquivalentTo(new[] { joinA.PeerId, joinB.PeerId }));
+        Assert.That(participantIds, Does.Not.Contain(PeerId.Server));
+        Assert.That(server.Peers.RemoteParticipantIds(), Is.EquivalentTo(new[] { joinA.PeerId, joinB.PeerId }));
+    }
+
+    [Test]
+    public async Task PeerDirectory_ReadOnlyHelpersReflectSinglePeerStore()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var participant = server.Peers.Get(join.PeerId);
+
+        Assert.That(participant, Is.Not.Null);
+        Assert.That(server.Peers.IsServer(PeerId.Server), Is.True);
+        Assert.That(server.Peers.IsLocal(PeerId.Server), Is.True);
+        Assert.That(server.Peers.IsLocal(join.PeerId), Is.False);
+        Assert.That(server.Peers.Participants().Select(peer => peer.PeerId), Is.EquivalentTo(new[] { PeerId.Server, join.PeerId }));
+        Assert.That(server.Peers.RemoteParticipants().Select(peer => peer.PeerId), Is.EquivalentTo(new[] { join.PeerId }));
     }
 
     [Test]

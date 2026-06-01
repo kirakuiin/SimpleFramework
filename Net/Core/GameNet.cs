@@ -143,12 +143,23 @@ public sealed class GameNet : IAsyncDisposable
     public void On<T>(Action<NetContext, T> handler) => Messages.On(handler);
 
     /// <summary>
+    /// 注册异步类型化消息处理器。
+    /// </summary>
+    public void On<T>(Func<NetContext, T, Task> handler) => Messages.On(handler);
+
+    /// <summary>
     /// 注册类型化请求处理器；同一请求类型只允许一个处理器。
     /// </summary>
     /// <typeparam name="TRequest">请求消息类型。</typeparam>
     /// <typeparam name="TResponse">响应消息类型。</typeparam>
     /// <param name="handler">收到请求时执行的处理器。</param>
     public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, TResponse> handler) =>
+        Messages.OnRequest(handler);
+
+    /// <summary>
+    /// 注册异步类型化请求处理器。
+    /// </summary>
+    public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, Task<TResponse>> handler) =>
         Messages.OnRequest(handler);
 
     /// <summary>
@@ -509,6 +520,7 @@ public sealed class GameNet : IAsyncDisposable
             _serverConnectionId = TransportConnectionId.None;
             _lastJoinOptions = null;
             _lastReconnectToken = null;
+            Diagnostics.SetConnectedPeerCount(0);
             return NetSessionResult.Ok();
         }
         finally
@@ -539,6 +551,16 @@ public sealed class GameNet : IAsyncDisposable
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "GameNet was disposed.");
             Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "GameNet was disposed.");
             Stats.CancelPendingProbes(NetStatsStatus.ObjectDisposed, "GameNet was disposed.");
+            Peers.Replace(Array.Empty<PeerInfo>());
+            Peers.SetLocalPeer(PeerId.None);
+            lock (_connectionPeers)
+            {
+                _connectionPeers.Clear();
+                _peerConnections.Clear();
+            }
+
+            _serverConnectionId = TransportConnectionId.None;
+            Diagnostics.SetConnectedPeerCount(0);
             ClearReconnectState();
             _lastJoinOptions = null;
             _lastReconnectToken = null;

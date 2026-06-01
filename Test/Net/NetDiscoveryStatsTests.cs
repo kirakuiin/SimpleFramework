@@ -120,7 +120,32 @@ public class NetDiscoveryStatsTests
             "broken-room",
             7777,
             DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            2,
             new byte[] { 0xff, 0x00 }));
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+
+        Assert.That(rooms, Is.Empty);
+        Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+        Assert.That(discovery.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task DiscoveryScan_WithPayloadLengthMismatch_DropsPacketAndRecordsDiagnostic()
+    {
+        var appId = Guid.NewGuid();
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false));
+        var backend = new StaticDiscoveryBackend(new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            "broken-room",
+            7777,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            payload.Length + 1,
+            payload));
         await using var discovery = new NetDiscovery(Options(appId), backend);
 
         var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
@@ -408,6 +433,7 @@ public class NetDiscoveryStatsTests
     {
         var appId = Guid.NewGuid();
         var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false));
         var backend = new DurationCapturingDiscoveryBackend(new DiscoveryPacket(
             DiscoveryPacket.ExpectedMagic,
             DiscoveryPacket.CurrentPacketVersion,
@@ -416,7 +442,8 @@ public class NetDiscoveryStatsTests
             "room-1",
             7777,
             schemaId,
-            JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false))));
+            payload.Length,
+            payload));
         await using var discovery = new NetDiscovery(Options(appId), backend);
         await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
 

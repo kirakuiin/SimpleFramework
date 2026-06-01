@@ -729,6 +729,13 @@ public sealed class NetDiscovery : IAsyncDisposable
             if (packet.MetadataPayload.Length > _options.Discovery.MaxMetadataPayloadSize)
             {
                 Diagnostics.AddDroppedPacket();
+                Diagnostics.RecordError(new NetError("DiscoveryPacketTooLarge", "Discovery metadata payload exceeds MaxMetadataPayloadSize."));
+                continue;
+            }
+            if (packet.PayloadLength != packet.MetadataPayload.Length)
+            {
+                Diagnostics.AddDroppedPacket();
+                Diagnostics.RecordError(new NetError("DiscoveryPayloadLengthMismatch", "Discovery metadata payload length does not match the envelope."));
                 continue;
             }
 
@@ -886,6 +893,7 @@ public sealed class NetDiscovery : IAsyncDisposable
             RoomId: info.RoomId,
             GamePort: info.GamePort,
             MetadataSchemaId: info.MetadataSchemaId,
+            PayloadLength: payload.Length,
             MetadataPayload: payload);
         error = null;
         return true;
@@ -976,6 +984,7 @@ public sealed record DiscoveryPacket(
     string RoomId,
     int GamePort,
     uint MetadataSchemaId,
+    int PayloadLength,
     byte[] MetadataPayload)
 {
     public const uint ExpectedMagic = 0x53464E44;
