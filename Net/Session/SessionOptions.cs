@@ -164,8 +164,47 @@ public readonly record struct AuthResult(bool Succeeded, string? Message = null)
 /// <summary>
 /// 客户端加入服务器的结果。
 /// </summary>
-public readonly record struct JoinResult(NetSessionStatus Status, PeerId PeerId, string? Message = null, string? ReconnectToken = null)
+public readonly record struct JoinResult
 {
+    public JoinResult(
+        NetSessionStatus status,
+        PeerId peerId,
+        string? message = null,
+        string? reconnectToken = null,
+        IReadOnlyCollection<PeerInfo>? peerDirectorySnapshot = null)
+    {
+        Status = status;
+        PeerId = peerId;
+        Message = message;
+        ReconnectToken = reconnectToken;
+        PeerDirectorySnapshot = peerDirectorySnapshot ?? Array.Empty<PeerInfo>();
+    }
+
+    /// <summary>
+    /// 加入结果状态。
+    /// </summary>
+    public NetSessionStatus Status { get; }
+
+    /// <summary>
+    /// 成功加入时分配给本地客户端的对等体标识。
+    /// </summary>
+    public PeerId PeerId { get; }
+
+    /// <summary>
+    /// 可选错误或诊断信息。
+    /// </summary>
+    public string? Message { get; }
+
+    /// <summary>
+    /// 可选重连令牌。
+    /// </summary>
+    public string? ReconnectToken { get; }
+
+    /// <summary>
+    /// 成功加入时服务端返回的对等体目录快照。
+    /// </summary>
+    public IReadOnlyCollection<PeerInfo> PeerDirectorySnapshot { get; }
+
     /// <summary>
     /// 是否加入成功。
     /// </summary>

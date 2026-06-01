@@ -58,6 +58,9 @@ await client.SendToServerAsync(new PlayerReady(true));
 [NetMessage("chat.line")]
 public sealed record ChatLine(string Text);
 
+server.Messages.RegisterMessage<ChatLine>();
+client.Messages.RegisterMessage<ChatLine>();
+
 server.On<ChatLine>((ctx, message) =>
 {
     Console.WriteLine($"from {ctx.SenderId.Value}: {message.Text}");
@@ -81,6 +84,11 @@ public sealed record JoinRoomRequest(string RoomId);
 
 [NetMessage("join.room.response")]
 public sealed record JoinRoomResponse(bool Accepted, string Reason);
+
+server.Messages.RegisterMessage<JoinRoomRequest>();
+server.Messages.RegisterMessage<JoinRoomResponse>();
+client.Messages.RegisterMessage<JoinRoomRequest>();
+client.Messages.RegisterMessage<JoinRoomResponse>();
 
 server.OnRequest<JoinRoomRequest, JoinRoomResponse>((ctx, request) =>
     new JoinRoomResponse(request.RoomId == "room-1", ""));

@@ -23,6 +23,10 @@ public sealed record ConflictingRoomListMetadata(string Name);
 
 public sealed record UnsafeRoomMetadata(string Password);
 
+public sealed record NestedUnsafeRoomMetadata(RoomSecret Credentials);
+
+public sealed record RoomSecret(string Token);
+
 [TestFixture]
 public class NetDiscoveryStatsTests
 {
@@ -217,6 +221,32 @@ public class NetDiscoveryStatsTests
         var rooms = await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(100));
 
         Assert.That(rooms.Single().EstimatedLatency, Is.Null);
+    }
+
+    [Test]
+    public async Task DiscoveryScan_WhenPacketIncludesMeasuredLatency_ExposesEstimatedLatency()
+    {
+        var appId = Guid.NewGuid();
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false));
+        var expectedLatency = TimeSpan.FromMilliseconds(42);
+        var backend = new StaticDiscoveryBackend(new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            "room-latency",
+            7777,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            payload.Length,
+            payload)
+        {
+            EstimatedLatency = expectedLatency
+        });
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+
+        Assert.That(rooms.Single().EstimatedLatency, Is.EqualTo(expectedLatency));
     }
 
     [Test]
@@ -521,6 +551,20 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task StartAdvertise_WithNestedPrivateMetadataField_ReturnsTransportFailed()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), network);
+
+        var result = await discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = 123 },
+            new NestedUnsafeRoomMetadata(new RoomSecret("secret-token")));
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(result.Message, Does.Contain("Token"));
+    }
+
+    [Test]
     public async Task ManualIpJoin_WorksWithoutDiscoveryRoom()
     {
         var appId = Guid.NewGuid();
@@ -573,6 +617,7 @@ public class NetDiscoveryStatsTests
 
         Assert.That(result.Status, Is.EqualTo(NetStatsStatus.Timeout));
         Assert.That(result.PeerStats.ProbeLoss, Is.GreaterThan(0));
+        Assert.That(result.PeerStats.TimeoutCount, Is.EqualTo(1));
     }
 
     [Test]

@@ -43,6 +43,11 @@ public sealed class NetPeerStats
     public double ProbeLoss { get; init; }
 
     /// <summary>
+    /// 应用层探测超时次数。
+    /// </summary>
+    public long TimeoutCount { get; init; }
+
+    /// <summary>
     /// 传输层丢包率；TCP 和内存传输无法提供时保持为空。
     /// </summary>
     public double? TransportLoss { get; init; }
@@ -153,7 +158,7 @@ public sealed class NetStats
 
             await delay.ConfigureAwait(false);
             _pending.TryRemove(sequence, out _);
-            RecordProbeFailure(peerId);
+            RecordProbeTimeout(peerId);
             return new NetStatsResult { Status = NetStatsStatus.Timeout, PeerStats = GetPeerStats(peerId) };
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -229,6 +234,16 @@ public sealed class NetStats
             GetMutableStats(peerId).ProbeFailures++;
     }
 
+    private void RecordProbeTimeout(PeerId peerId)
+    {
+        lock (_statsGate)
+        {
+            var stats = GetMutableStats(peerId);
+            stats.ProbeFailures++;
+            stats.TimeoutCount++;
+        }
+    }
+
     private NetPeerStats RecordProbeSuccess(PeerId peerId, TimeSpan rtt, DateTimeOffset now)
     {
         lock (_statsGate)
@@ -289,6 +304,7 @@ public sealed class NetStats
         public TimeSpan? Jitter { get; set; }
         public long ProbeCount { get; set; }
         public long ProbeFailures { get; set; }
+        public long TimeoutCount { get; set; }
         public int SuccessCount { get; set; }
         public DateTimeOffset LastSeenAt { get; set; }
 
@@ -300,6 +316,7 @@ public sealed class NetStats
                 AverageRtt = AverageRtt,
                 Jitter = Jitter,
                 ProbeLoss = ProbeCount == 0 ? 0 : (double)ProbeFailures / ProbeCount,
+                TimeoutCount = TimeoutCount,
                 TransportLoss = null,
                 LastSeenAt = LastSeenAt
             };

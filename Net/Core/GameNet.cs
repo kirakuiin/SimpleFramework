@@ -1052,7 +1052,7 @@ public sealed class GameNet : IAsyncDisposable
         Peers.SetLocalPeer(packet.PeerId);
         Peers.Replace(peers.Select(p => p.PeerId == packet.PeerId ? p with { IsLocal = true } : p));
         Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
-        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message, packet.ReconnectToken));
+        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message, packet.ReconnectToken, peers));
         _pendingJoin = null;
     }
 

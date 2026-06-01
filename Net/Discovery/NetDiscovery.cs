@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -767,7 +768,7 @@ public sealed class NetDiscovery : IAsyncDisposable
                 MetadataSchemaId = packet.MetadataSchemaId,
                 Metadata = metadata,
                 EndPoint = packet.RemoteEndPoint,
-                EstimatedLatency = null
+                EstimatedLatency = packet.EstimatedLatency
             });
         }
 
@@ -901,24 +902,84 @@ public sealed class NetDiscovery : IAsyncDisposable
 
     private static bool TryValidatePublicMetadata(Type metadataType, out string? error)
     {
-        foreach (var property in metadataType.GetProperties())
+        return TryValidatePublicMetadata(metadataType, new HashSet<Type>(), out error);
+    }
+
+    private static bool TryValidatePublicMetadata(Type metadataType, HashSet<Type> visitedTypes, out string? error)
+    {
+        metadataType = Nullable.GetUnderlyingType(metadataType) ?? metadataType;
+        if (IsTerminalMetadataType(metadataType) || !visitedTypes.Add(metadataType))
+        {
+            error = null;
+            return true;
+        }
+
+        foreach (var property in metadataType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             if (property.Name == "HasPassword" && property.PropertyType == typeof(bool))
                 continue;
 
-            var name = property.Name;
-            if (name.Contains("Password", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("Token", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("PrivateKey", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("Secret", StringComparison.OrdinalIgnoreCase))
+            var name = property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? property.Name;
+            if (IsPrivateMetadataName(name))
             {
                 error = $"Discovery metadata property '{property.Name}' is private data and cannot be advertised.";
                 return false;
+            }
+
+            foreach (var nestedType in GetNestedMetadataTypes(property.PropertyType))
+            {
+                if (!TryValidatePublicMetadata(nestedType, visitedTypes, out error))
+                    return false;
             }
         }
 
         error = null;
         return true;
+    }
+
+    private static bool IsPrivateMetadataName(string name)
+    {
+        return name.Contains("Password", StringComparison.OrdinalIgnoreCase) ||
+               name.Contains("Token", StringComparison.OrdinalIgnoreCase) ||
+               name.Contains("PrivateKey", StringComparison.OrdinalIgnoreCase) ||
+               name.Contains("Secret", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<Type> GetNestedMetadataTypes(Type type)
+    {
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        if (IsTerminalMetadataType(type))
+            yield break;
+
+        if (type.IsArray)
+        {
+            var elementType = type.GetElementType();
+            if (elementType is not null)
+                yield return elementType;
+            yield break;
+        }
+
+        if (type.IsGenericType &&
+            type.GetGenericTypeDefinition() != typeof(KeyValuePair<,>))
+        {
+            foreach (var argument in type.GetGenericArguments())
+                yield return argument;
+            yield break;
+        }
+
+        yield return type;
+    }
+
+    private static bool IsTerminalMetadataType(Type type)
+    {
+        return type.IsPrimitive ||
+               type.IsEnum ||
+               type == typeof(string) ||
+               type == typeof(decimal) ||
+               type == typeof(Guid) ||
+               type == typeof(DateTime) ||
+               type == typeof(DateTimeOffset) ||
+               type == typeof(TimeSpan);
     }
 
     private static uint GetRequiredMetadataSchemaId<TMetadata>()
@@ -992,4 +1053,7 @@ public sealed record DiscoveryPacket(
 
     [JsonIgnore]
     public IPEndPoint? RemoteEndPoint { get; init; }
+
+    [JsonIgnore]
+    public TimeSpan? EstimatedLatency { get; init; }
 }

@@ -26,6 +26,8 @@ public class NetSessionTests
 
         Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Ok));
         Assert.That(join.PeerId, Is.Not.EqualTo(PeerId.None));
+        Assert.That(join.PeerDirectorySnapshot.Select(peer => peer.PeerId), Does.Contain(PeerId.Server));
+        Assert.That(join.PeerDirectorySnapshot.Select(peer => peer.PeerId), Does.Contain(join.PeerId));
         Assert.That(server.Peers.Peers.Any(p => p.PeerId == join.PeerId), Is.True);
         Assert.That(client.Peers.LocalPeerId, Is.EqualTo(join.PeerId));
     }
