@@ -377,6 +377,19 @@ public sealed class NetMessenger
         var pending = new PendingRequest(peerId, responseDescriptor.MessageId);
         _pendingRequests[correlationId] = pending;
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+        using var cancellationRegistration = token.CanBeCanceled
+            ? token.Register(static state =>
+            {
+                var cancellation = (PendingRequestCancellation)state!;
+                cancellation.Owner.CancelPendingRequest(
+                    cancellation.CorrelationId,
+                    NetRequestStatus.Cancelled,
+                    "Request was cancelled.");
+            }, new PendingRequestCancellation(this, correlationId))
+            : default;
+
+        if (token.IsCancellationRequested)
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Cancelled };
 
         var send = await SendPacketToPeerAsync(peerId, packetBytes).ConfigureAwait(false);
         if (!send.Succeeded)
@@ -663,7 +676,7 @@ public sealed class NetMessenger
         catch (Exception ex)
         {
             _diagnostics.RecordError(new NetError("RelayPolicyError", ex.Message, ex));
-            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PermissionDenied, ex.Message)).ConfigureAwait(false);
+            await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PermissionDenied, "Relay policy denied the message.")).ConfigureAwait(false);
             return true;
         }
 
@@ -716,13 +729,27 @@ public sealed class NetMessenger
             SenderId = PeerId.None,
             Payload = payload,
             RequestStatus = status,
-            Error = error
+            Error = LimitError(error)
         };
         var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
         if (packetBytes.Length > _maxPacketSize)
         {
-            _diagnostics.RecordError(new NetError("ResponsePacketTooLarge", "Response packet exceeds MaxPacketSize."));
-            return;
+            if (status != NetRequestStatus.PacketTooLarge)
+            {
+                packet = packet with
+                {
+                    Payload = Array.Empty<byte>(),
+                    RequestStatus = NetRequestStatus.PacketTooLarge,
+                    Error = "Response packet exceeds MaxPacketSize."
+                };
+                packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+            }
+
+            if (packetBytes.Length > _maxPacketSize)
+            {
+                _diagnostics.RecordError(new NetError("ResponsePacketTooLarge", "Response packet exceeds MaxPacketSize."));
+                return;
+            }
         }
 
         var send = await SendPacketToPeerAsync(recipient, packetBytes).ConfigureAwait(false);
@@ -737,9 +764,21 @@ public sealed class NetMessenger
             Kind = NetPacket.RelayResult,
             CorrelationId = correlationId,
             SendStatus = result.Status,
-            Error = result.Message
+            Error = LimitError(result.Message)
         };
         var packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        if (packetBytes.Length > _maxPacketSize)
+        {
+            packet = packet with { Error = "Relay result exceeded MaxPacketSize." };
+            packetBytes = JsonSerializer.SerializeToUtf8Bytes(packet);
+        }
+
+        if (packetBytes.Length > _maxPacketSize)
+        {
+            _diagnostics.RecordError(new NetError("RelayResultPacketTooLarge", "Relay result packet exceeds MaxPacketSize."));
+            return;
+        }
+
         var send = await SendPacketToPeerAsync(recipient, packetBytes).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packetBytes.Length);
@@ -864,6 +903,23 @@ public sealed class NetMessenger
     {
         _pendingRequests.TryRemove(correlationId, out _);
         _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+    }
+
+    private void CancelPendingRequest(long correlationId, NetRequestStatus status, string? message)
+    {
+        if (_pendingRequests.TryRemove(correlationId, out var pending))
+        {
+            _diagnostics.SetPendingRequestCount(_pendingRequests.Count);
+            pending.Completion.TrySetResult(new PendingResponse(status, Array.Empty<byte>(), message));
+        }
+    }
+
+    private static string? LimitError(string? error)
+    {
+        const int maxErrorLength = 256;
+        return error is null || error.Length <= maxErrorLength
+            ? error
+            : error[..maxErrorLength] + "...";
     }
 
     private async ValueTask DispatchHandlerAsync(Func<ValueTask> action)
@@ -999,6 +1055,7 @@ public sealed class NetMessenger
     private readonly record struct EncodedPacket(NetSendStatus Status, byte[]? Data, string? Message);
     private readonly record struct PendingResponse(NetRequestStatus Status, byte[] Payload, string? Message);
     private sealed record RequestHandler(Type ResponseType, Func<NetContext, object, ValueTask<object>> Invoke);
+    private sealed record PendingRequestCancellation(NetMessenger Owner, long CorrelationId);
 
     private sealed class SendLimitState
     {

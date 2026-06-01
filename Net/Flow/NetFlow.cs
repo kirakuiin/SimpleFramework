@@ -299,7 +299,7 @@ public sealed class NetFlow
         private readonly TProposal _proposal;
         private readonly FlowPolicy _policy;
         private readonly TimeSpan _timeout;
-        private readonly CancellationToken _token;
+        private readonly CancellationTokenSource _cancellation;
         private readonly object _gate = new();
         private bool _completed;
 
@@ -319,7 +319,7 @@ public sealed class NetFlow
             _proposal = proposal;
             _policy = policy;
             _timeout = timeout;
-            _token = token;
+            _cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
         }
 
         public long FlowId { get; }
@@ -368,6 +368,7 @@ public sealed class NetFlow
 
                 _completed = true;
                 _pendingPeers.Clear();
+                _cancellation.Cancel();
                 result = new FlowResult<TResponse>
                 {
                     FlowId = FlowId,
@@ -387,7 +388,7 @@ public sealed class NetFlow
 
         private async Task AwaitPeerAsync(PeerId peerId)
         {
-            var response = await _owner.RequestPeerAsync<TProposal, TResponse>(peerId, _proposal, _timeout, _token).ConfigureAwait(false);
+            var response = await _owner.RequestPeerAsync<TProposal, TResponse>(peerId, _proposal, _timeout, _cancellation.Token).ConfigureAwait(false);
             ApplyResponse(response);
         }
 
@@ -441,12 +442,13 @@ public sealed class NetFlow
         {
             try
             {
-                await Task.Delay(_timeout, _owner._timeProvider, _token).ConfigureAwait(false);
+                await Task.Delay(_timeout, _owner._timeProvider, _cancellation.Token).ConfigureAwait(false);
                 Complete(FlowEndReason.Timeout);
             }
-            catch (OperationCanceledException) when (_token.IsCancellationRequested)
+            catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
             {
-                Complete(FlowEndReason.Cancelled);
+                if (!_completed)
+                    Complete(FlowEndReason.Cancelled);
             }
         }
     }

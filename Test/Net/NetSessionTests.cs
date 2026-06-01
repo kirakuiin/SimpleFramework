@@ -483,6 +483,32 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task ServerKick_WhenTransportAlsoRaisesLocalDisconnect_RemovesPeerOnce()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var serverTransport = new LocalDisconnectEchoTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var disconnectedCount = 0;
+        var leftCount = 0;
+
+        server.Session.PeerDisconnected += _ => Interlocked.Increment(ref disconnectedCount);
+        server.Session.PeerLeft += _ => Interlocked.Increment(ref leftCount);
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var kick = await server.KickAsync(join.PeerId);
+        await WaitUntilAsync(() => Volatile.Read(ref leftCount) > 0);
+        await Task.Delay(50);
+
+        Assert.That(kick.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(disconnectedCount, Is.EqualTo(1));
+        Assert.That(leftCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task TcpSession_ServerKick_NotifiesClientWithKickedReason()
     {
         var appId = Guid.NewGuid();
@@ -1050,5 +1076,44 @@ public class NetSessionTests
                 return false;
             }
         }
+    }
+
+    private sealed class LocalDisconnectEchoTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public LocalDisconnectEchoTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            _inner.ConnectAsync(options, token);
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            _inner.StopServerAsync(token);
+
+        public async Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed)
+        {
+            await _inner.DisconnectAsync(connectionId, reason);
+            PeerDisconnected?.Invoke(new TransportPeerDisconnected(connectionId, reason));
+        }
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            _inner.SendAsync(connectionId, data, channel, token);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 }

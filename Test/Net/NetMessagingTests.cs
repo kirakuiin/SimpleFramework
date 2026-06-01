@@ -831,6 +831,29 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RelayAsync_WhenPolicyErrorMessageIsLarge_ReturnsBoundedError()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, maxPacketSize: 2048));
+        await using var clientA = new GameNet(network.CreateTransport("client-a"), Options(appId, maxPacketSize: 2048));
+        await using var clientB = new GameNet(network.CreateTransport("client-b"), Options(appId, maxPacketSize: 2048));
+        server.Messages.RegisterMessage<PlayerReady>();
+        clientA.Messages.RegisterMessage<PlayerReady>();
+        clientB.Messages.RegisterMessage<PlayerReady>();
+        server.Messages.AllowRelay<PlayerReady>((_, _) => throw new InvalidOperationException(new string('x', 4096)));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await clientA.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var joinB = await clientB.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var result = await clientA.RelayAsync(joinB.PeerId, new PlayerReady(true), TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.PermissionDenied));
+        Assert.That(result.Message, Does.Not.Contain(new string('x', 128)));
+    }
+
+    [Test]
     public void Fingerprint_IsStableAndPolicyControlsMismatch()
     {
         var first = new NetMessageRegistry();
@@ -1058,6 +1081,39 @@ public class NetMessagingTests
 
         Assert.That(response.Status, Is.EqualTo(NetRequestStatus.HandlerException));
         Assert.That(response.Message, Does.Contain("boom"));
+    }
+
+    [Test]
+    public async Task RequestAsync_WhenResponseExceedsPacketLimit_ReturnsPacketTooLarge()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock, maxPacketSize: 2048));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId, timeProvider: clock, maxPacketSize: 2048));
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+            new JoinRoomResponse(true, new string('x', 4096)));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var request = client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(5));
+        await Task.Delay(50);
+        if (!request.IsCompleted)
+            clock.Advance(TimeSpan.FromSeconds(6));
+
+        var response = await request.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(response.Status, Is.EqualTo(NetRequestStatus.PacketTooLarge));
+        Assert.That(client.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
     }
 
     [Test]
@@ -1360,12 +1416,14 @@ public class NetMessagingTests
         Guid appId,
         INetEventDispatcher dispatcher = null,
         TimeProvider timeProvider = null,
-        NetFingerprintPolicy fingerprintPolicy = NetFingerprintPolicy.Strict) => new()
+        NetFingerprintPolicy fingerprintPolicy = NetFingerprintPolicy.Strict,
+        int maxPacketSize = 64 * 1024) => new()
     {
         Application = new NetApplicationInfo { ApplicationId = appId },
         EventDispatcher = dispatcher,
         TimeProvider = timeProvider ?? TimeProvider.System,
-        MessageFingerprintPolicy = fingerprintPolicy
+        MessageFingerprintPolicy = fingerprintPolicy,
+        MaxPacketSize = maxPacketSize
     };
 
     private static bool IsScanFixtureType(Type type)

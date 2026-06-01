@@ -1370,7 +1370,9 @@ public sealed class GameNet : IAsyncDisposable
                 _reconnectTokens.Remove(token);
         }
 
-        Peers.Remove(peerId);
+        if (!Peers.Remove(peerId))
+            return;
+
         Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
         Messages.CancelPendingRequestsForPeer(peerId, NetRequestStatus.SessionClosed, "Peer connection was closed.");
         if (raiseDisconnected)

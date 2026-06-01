@@ -108,6 +108,38 @@ public class NetFlowTests
     }
 
     [Test]
+    public async Task Flow_EarlyAccepted_CancelsOutstandingRequests()
+    {
+        var fixture = await ThreePeerFixture.StartAsync();
+        var releaseSlowPeer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using (fixture)
+        {
+            try
+            {
+                fixture.ClientA.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
+                fixture.ClientB.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) =>
+                {
+                    releaseSlowPeer.Task.GetAwaiter().GetResult();
+                    return new LoadSceneAck(true, string.Empty);
+                });
+
+                var result = await fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                    fixture.Server.Peers.RemoteParticipantIds(),
+                    new LoadSceneProposal("Battle01"),
+                    FlowPolicy.AnyAccepted(),
+                    TimeSpan.FromSeconds(30));
+
+                Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Accepted));
+                Assert.That(fixture.Server.Diagnostics.GetSnapshot().PendingRequestCount, Is.EqualTo(0));
+            }
+            finally
+            {
+                releaseSlowPeer.TrySetResult();
+            }
+        }
+    }
+
+    [Test]
     public async Task Flow_MajorityAndQuorum_UseAcceptedCounts()
     {
         var fixture = await ThreePeerFixture.StartAsync();
