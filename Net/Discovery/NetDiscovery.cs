@@ -767,7 +767,7 @@ public sealed class NetDiscovery : IAsyncDisposable
                 MetadataSchemaId = packet.MetadataSchemaId,
                 Metadata = metadata,
                 EndPoint = packet.RemoteEndPoint,
-                EstimatedLatency = TimeSpan.Zero
+                EstimatedLatency = null
             });
         }
 

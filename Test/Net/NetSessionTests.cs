@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -897,6 +898,47 @@ public class NetSessionTests
         Assert.That(secondJoin.Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
     }
 
+    [Test]
+    public async Task Reconnect_WhenAcceptedSendFails_RetainsPendingReconnectUntilGraceExpires()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        var serverTransport = new FailingJoinAcceptedTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId, timeProvider: clock));
+        await using var firstClient = new GameNet(network.CreateTransport("client-a"), Options(appId, timeProvider: clock));
+        await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId, timeProvider: clock));
+        await using var thirdClient = new GameNet(network.CreateTransport("client-c"), Options(appId, timeProvider: clock));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(5))
+        });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => server.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
+
+        serverTransport.FailNextJoinAcceptedSend = true;
+        var failedReconnect = await secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+
+        var retryReconnect = await thirdClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+
+        Assert.That(failedReconnect.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(retryReconnect.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(retryReconnect.PeerId, Is.EqualTo(firstJoin.PeerId));
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
@@ -947,6 +989,64 @@ public class NetSessionTests
         public void Post(Action action)
         {
             throw new InvalidOperationException("post failed");
+        }
+    }
+
+    private sealed class FailingJoinAcceptedTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public FailingJoinAcceptedTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public bool FailNextJoinAcceptedSend { get; set; }
+
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            _inner.ConnectAsync(options, token);
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            _inner.StopServerAsync(token);
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            _inner.DisconnectAsync(connectionId, reason);
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
+        {
+            if (FailNextJoinAcceptedSend && IsJoinAccepted(data))
+            {
+                FailNextJoinAcceptedSend = false;
+                return ValueTask.FromResult(new NetSendResult(NetSendStatus.TransportFailed, "join accepted send failed"));
+            }
+
+            return _inner.SendAsync(connectionId, data, channel, token);
+        }
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+
+        private static bool IsJoinAccepted(ReadOnlyMemory<byte> data)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<SessionPacket>(data.Span)?.Kind == SessionPacket.JoinAccepted;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
         }
     }
 }

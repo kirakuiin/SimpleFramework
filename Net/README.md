@@ -102,6 +102,8 @@ public sealed record RoomMetadata(string RoomName, int CurrentPlayers, int MaxPl
 await using var server = new GameNet(new TcpNetTransport(), options);
 await using var client = new GameNet(new TcpNetTransport(), options);
 
+await server.HostAsync(new HostOptions { Port = 7777 });
+
 var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.metadata.v1");
 await server.Discovery.StartAdvertiseAsync(
     new LanAdvertiseInfo

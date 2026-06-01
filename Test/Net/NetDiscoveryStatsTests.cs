@@ -202,7 +202,7 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
-    public async Task DiscoveryScan_ExposesEstimatedLatencyWhenAvailable()
+    public async Task DiscoveryScan_WhenBackendDoesNotMeasureLatency_ReturnsNullLatency()
     {
         var network = new MemoryDiscoveryNetwork();
         var appId = Guid.NewGuid();
@@ -216,7 +216,7 @@ public class NetDiscoveryStatsTests
 
         var rooms = await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(100));
 
-        Assert.That(rooms.Single().EstimatedLatency, Is.Not.Null);
+        Assert.That(rooms.Single().EstimatedLatency, Is.Null);
     }
 
     [Test]
@@ -573,6 +573,35 @@ public class NetDiscoveryStatsTests
 
         Assert.That(result.Status, Is.EqualTo(NetStatsStatus.Timeout));
         Assert.That(result.PeerStats.ProbeLoss, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task Stats_IgnoresPongFromWrongPeer()
+    {
+        var clock = new ManualTimeProvider();
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+        await using var clientA = new GameNet(network.CreateTransport("client-a"), Options(appId, timeProvider: clock));
+        await using var clientB = new GameNet(network.CreateTransport("client-b"), Options(appId, timeProvider: clock));
+        clientA.Stats.DropProbeResponses = true;
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var joinA = await clientA.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await clientB.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var probe = server.Stats.GetLatencyAsync(joinA.PeerId, TimeSpan.FromSeconds(5));
+        var wrongPeerPong = await clientB.SendToServerAsync(new NetPong(1, clock.GetUtcNow(), clock.GetUtcNow()));
+        var earlyCompletion = await Task.WhenAny(probe, Task.Delay(100));
+
+        Assert.That(wrongPeerPong.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(earlyCompletion, Is.Not.EqualTo(probe));
+
+        clock.Advance(TimeSpan.FromSeconds(6));
+        var result = await probe.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetStatsStatus.Timeout));
+        Assert.That(result.PeerStats.Rtt, Is.Null);
     }
 
     [Test]

@@ -930,10 +930,8 @@ public sealed class GameNet : IAsyncDisposable
                 return;
             }
 
-            CancelReconnectExpiry(entry.PeerId);
             lock (_connectionPeers)
             {
-                _reconnectTokens.Remove(reconnectToken);
                 _connectionPeers[connectionId] = entry.PeerId;
                 _peerConnections[entry.PeerId] = connectionId;
             }
@@ -963,13 +961,28 @@ public sealed class GameNet : IAsyncDisposable
         var acceptedSend = await SendSessionPacketAsync(connectionId, accepted).ConfigureAwait(false);
         if (!acceptedSend.Succeeded)
         {
+            lock (_connectionPeers)
+            {
+                _connectionPeers.Remove(connectionId);
+                if (_peerConnections.TryGetValue(entry.PeerId, out var mappedConnection) &&
+                    mappedConnection == connectionId)
+                {
+                    _peerConnections.Remove(entry.PeerId);
+                }
+            }
+
             if (existingPeer is null)
-                RemoveRemotePeerFinal(entry.PeerId, DisconnectReason.TransportFailed, raiseDisconnected: false);
+                Peers.Remove(entry.PeerId);
             else
                 Peers.Upsert(existingPeer);
+            Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
             await _transport.DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
             return;
         }
+
+        CancelReconnectExpiry(entry.PeerId);
+        lock (_connectionPeers)
+            _reconnectTokens.Remove(reconnectToken);
 
         DispatchFrameworkEvent(() => Session.RaisePeerReconnected(new NetPeerReconnected(entry.PeerId)));
         await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);

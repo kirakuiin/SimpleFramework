@@ -200,7 +200,11 @@ public sealed class NetStats
 
     private void HandlePong(NetContext context, NetPong pong)
     {
-        if (_pending.TryRemove(pong.Sequence, out var pending))
+        if (!_pending.TryGetValue(pong.Sequence, out var pending))
+            return;
+        if (pending.PeerId != context.SenderId)
+            return;
+        if (_pending.TryRemove(pong.Sequence, out pending))
             pending.Completion.TrySetResult(pong);
     }
 
