@@ -9,8 +9,8 @@ namespace SimpleFramework.Net;
 /// </summary>
 public sealed class NetMessenger
 {
-    private readonly Func<byte[], ValueTask<NetSendResult>> _sendToServer;
-    private readonly Func<PeerId, byte[], ValueTask<NetSendResult>> _sendToPeer;
+    private readonly Func<byte[], CancellationToken, ValueTask<NetSendResult>> _sendToServer;
+    private readonly Func<PeerId, byte[], CancellationToken, ValueTask<NetSendResult>> _sendToPeer;
     private readonly Func<IReadOnlyCollection<PeerId>> _getBroadcastTargets;
     private readonly NetDiagnostics _diagnostics;
     private readonly INetCodec _codec;
@@ -21,18 +21,21 @@ public sealed class NetMessenger
     private readonly int _maxSendQueuePacketsPerPeer;
     private readonly int _maxSendsPerSecondPerPeer;
     private readonly object _sendLimitGate = new();
+    private readonly object _handlerGate = new();
     private readonly Dictionary<Type, List<Func<NetContext, object, ValueTask>>> _handlers = new();
     private readonly Dictionary<Type, RequestHandler> _requestHandlers = new();
     private readonly Dictionary<Type, Func<NetRelayContext, object, bool>> _relayPolicies = new();
+    private readonly HashSet<(MethodInfo Method, AssemblyHandlerKind Kind)> _assemblyHandlerBindings = new();
     private readonly Dictionary<PeerId, SendLimitState> _sendLimits = new();
     private readonly ConcurrentDictionary<long, PendingRequest> _pendingRequests = new();
     private readonly ConcurrentDictionary<long, TaskCompletionSource<NetSendResult>> _pendingRelays = new();
     private long _nextCorrelationId;
     private int _protocolManifestFrozen;
+    private int _protocolManifestPermanentlyFrozen;
 
     internal NetMessenger(
-        Func<byte[], ValueTask<NetSendResult>> sendToServer,
-        Func<PeerId, byte[], ValueTask<NetSendResult>> sendToPeer,
+        Func<byte[], CancellationToken, ValueTask<NetSendResult>> sendToServer,
+        Func<PeerId, byte[], CancellationToken, ValueTask<NetSendResult>> sendToPeer,
         Func<IReadOnlyCollection<PeerId>> getBroadcastTargets,
         NetDiagnostics diagnostics,
         int maxPacketSize,
@@ -66,8 +69,11 @@ public sealed class NetMessenger
     /// </summary>
     public NetMessageDescriptor RegisterMessage<T>()
     {
-        EnsureProtocolManifestCanMutate();
-        return Registry.Register<T>();
+        lock (_handlerGate)
+        {
+            EnsureProtocolManifestCanMutate();
+            return Registry.Register<T>();
+        }
     }
 
     /// <summary>
@@ -96,14 +102,18 @@ public sealed class NetMessenger
 
     private void RegisterHandler(Type messageType, Func<NetContext, object, ValueTask> handler)
     {
-        Registry.Register(messageType);
-        if (!_handlers.TryGetValue(messageType, out var handlers))
+        lock (_handlerGate)
         {
-            handlers = new List<Func<NetContext, object, ValueTask>>();
-            _handlers[messageType] = handlers;
-        }
+            EnsureProtocolTypesCanBind(messageType);
+            Registry.Register(messageType);
+            if (!_handlers.TryGetValue(messageType, out var handlers))
+            {
+                handlers = new List<Func<NetContext, object, ValueTask>>();
+                _handlers[messageType] = handlers;
+            }
 
-        handlers.Add(handler);
+            handlers.Add(handler);
+        }
     }
 
     /// <summary>
@@ -113,8 +123,6 @@ public sealed class NetMessenger
     {
         ArgumentNullException.ThrowIfNull(handler);
         EnsureProtocolTypesCanBind(typeof(TRequest), typeof(TResponse));
-        Registry.Register<TRequest>();
-        Registry.Register<TResponse>();
         RegisterRequestHandler(
             typeof(TRequest),
             typeof(TResponse),
@@ -128,8 +136,6 @@ public sealed class NetMessenger
     {
         ArgumentNullException.ThrowIfNull(handler);
         EnsureProtocolTypesCanBind(typeof(TRequest), typeof(TResponse));
-        Registry.Register<TRequest>();
-        Registry.Register<TResponse>();
         RegisterRequestHandler(
             typeof(TRequest),
             typeof(TResponse),
@@ -138,14 +144,15 @@ public sealed class NetMessenger
 
     private void RegisterRequestHandler(Type requestType, Type responseType, Func<NetContext, object, ValueTask<object>> handler)
     {
-        Registry.Register(requestType);
-        Registry.Register(responseType);
-        if (_requestHandlers.ContainsKey(requestType))
-            throw new InvalidOperationException($"A request handler for '{requestType.FullName}' has already been registered.");
+        lock (_handlerGate)
+        {
+            EnsureProtocolTypesCanBind(requestType, responseType);
+            if (_requestHandlers.ContainsKey(requestType))
+                throw new InvalidOperationException($"A request handler for '{requestType.FullName}' has already been registered.");
 
-        _requestHandlers[requestType] = new RequestHandler(
-            responseType,
-            handler);
+            Registry.RegisterBatch(requestType, responseType);
+            _requestHandlers[requestType] = new RequestHandler(responseType, handler);
+        }
     }
 
     /// <summary>
@@ -153,39 +160,148 @@ public sealed class NetMessenger
     /// </summary>
     public void RegisterAssemblyHandlers(Assembly assembly, object? target = null, Func<Type, object>? targetFactory = null, Func<Type, bool>? typeFilter = null)
     {
+        ArgumentNullException.ThrowIfNull(assembly);
         EnsureProtocolManifestCanMutate();
-        var handlerCount = Registry.HandlerDescriptors.Count;
-        var requestHandlerCount = Registry.RequestHandlerDescriptors.Count;
-        var flowHandlerCount = Registry.FlowHandlerDescriptors.Count;
-        Registry.RegisterAssembly(assembly, typeFilter);
-        foreach (var descriptor in Registry.HandlerDescriptors.Skip(handlerCount))
-        {
-            if (typeFilter?.Invoke(descriptor.Method.DeclaringType!) == false)
-                continue;
+        var selectedTypes = assembly.GetTypes()
+            .Where(type => typeFilter?.Invoke(type) ?? true)
+            .ToHashSet();
+        var bindings = CreateAssemblyHandlerBindings(selectedTypes, target, targetFactory);
 
-            var method = descriptor.Method;
-            RegisterHandler(descriptor.MessageType, (context, message) =>
-                InvokeHandlerMethodAsync(method, ResolveHandlerTarget(method, target, targetFactory), context, message));
+        lock (_handlerGate)
+        {
+            EnsureProtocolManifestCanMutate();
+            var pending = bindings
+                .Where(binding => !_assemblyHandlerBindings.Contains((binding.Method, binding.Kind)))
+                .ToArray();
+            var duplicateRequest = pending
+                .Where(binding => binding.Kind is AssemblyHandlerKind.Request or AssemblyHandlerKind.Flow)
+                .GroupBy(binding => binding.MessageType)
+                .FirstOrDefault(group => group.Count() > 1 || _requestHandlers.ContainsKey(group.Key));
+            if (duplicateRequest is not null)
+            {
+                throw new InvalidOperationException(
+                    $"A request handler for '{duplicateRequest.Key.FullName}' has already been registered.");
+            }
+
+            Registry.RegisterAssembly(assembly, selectedTypes.Contains);
+            foreach (var binding in pending)
+            {
+                if (binding.Kind == AssemblyHandlerKind.Message)
+                {
+                    if (!_handlers.TryGetValue(binding.MessageType, out var handlers))
+                    {
+                        handlers = new List<Func<NetContext, object, ValueTask>>();
+                        _handlers[binding.MessageType] = handlers;
+                    }
+
+                    handlers.Add((context, message) =>
+                        InvokeHandlerMethodAsync(binding.Method, binding.Target, context, message));
+                }
+                else
+                {
+                    _requestHandlers[binding.MessageType] = new RequestHandler(
+                        binding.ResponseType!,
+                        (context, request) => InvokeRequestHandlerMethodAsync(
+                            binding.Method,
+                            binding.Target,
+                            context,
+                            request));
+                }
+
+                _assemblyHandlerBindings.Add((binding.Method, binding.Kind));
+            }
+        }
+    }
+
+    private static IReadOnlyList<AssemblyHandlerBinding> CreateAssemblyHandlerBindings(
+        IReadOnlyCollection<Type> selectedTypes,
+        object? target,
+        Func<Type, object>? targetFactory)
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic |
+                                   BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+        var resolvedTargets = new Dictionary<Type, object?>();
+        var bindings = new List<AssemblyHandlerBinding>();
+        foreach (var type in selectedTypes.OrderBy(type => type.FullName, StringComparer.Ordinal))
+        {
+            foreach (var method in type.GetMethods(flags)
+                         .OrderBy(method => method.Name, StringComparer.Ordinal)
+                         .ThenBy(method => method.MetadataToken))
+            {
+                var message = method.GetCustomAttribute<NetHandlerAttribute>();
+                var request = method.GetCustomAttribute<NetRequestHandlerAttribute>();
+                var flow = method.GetCustomAttribute<NetFlowHandlerAttribute>();
+                if (message is null && request is null && flow is null)
+                    continue;
+
+                if (message is not null)
+                    ValidateAssemblyHandlerSignature(method, message.MessageType, null);
+                if (request is not null)
+                    ValidateAssemblyHandlerSignature(method, request.RequestType, request.ResponseType);
+                if (flow is not null)
+                    ValidateAssemblyHandlerSignature(method, flow.ProposalType, flow.ResponseType);
+
+                object? resolvedTarget = null;
+                if (!method.IsStatic)
+                {
+                    if (!resolvedTargets.TryGetValue(type, out resolvedTarget))
+                    {
+                        resolvedTarget = ResolveHandlerTarget(method, target, targetFactory);
+                        resolvedTargets[type] = resolvedTarget;
+                    }
+                }
+
+                if (message is not null)
+                {
+                    bindings.Add(new AssemblyHandlerBinding(
+                        method, AssemblyHandlerKind.Message, message.MessageType, null, resolvedTarget));
+                }
+                if (request is not null)
+                {
+                    bindings.Add(new AssemblyHandlerBinding(
+                        method, AssemblyHandlerKind.Request, request.RequestType, request.ResponseType, resolvedTarget));
+                }
+                if (flow is not null)
+                {
+                    bindings.Add(new AssemblyHandlerBinding(
+                        method, AssemblyHandlerKind.Flow, flow.ProposalType, flow.ResponseType, resolvedTarget));
+                }
+            }
         }
 
-        foreach (var descriptor in Registry.RequestHandlerDescriptors.Skip(requestHandlerCount))
-        {
-            if (typeFilter?.Invoke(descriptor.Method.DeclaringType!) == false)
-                continue;
+        return bindings;
+    }
 
-            var method = descriptor.Method;
-            RegisterRequestHandler(descriptor.RequestType, descriptor.ResponseType, (context, request) =>
-                InvokeRequestHandlerMethodAsync(method, ResolveHandlerTarget(method, target, targetFactory), context, request));
+    private static void ValidateAssemblyHandlerSignature(MethodInfo method, Type messageType, Type? responseType)
+    {
+        var parameters = method.GetParameters();
+        if (method.ContainsGenericParameters ||
+            parameters.Length != 2 ||
+            parameters[0].ParameterType != typeof(NetContext) ||
+            parameters[1].ParameterType != messageType)
+        {
+            throw new InvalidOperationException(
+                $"Handler method '{method.DeclaringType?.FullName}.{method.Name}' must accept (NetContext, {messageType.Name}).");
         }
 
-        foreach (var descriptor in Registry.FlowHandlerDescriptors.Skip(flowHandlerCount))
+        var returnType = method.ReturnType;
+        if (responseType is null &&
+            returnType == typeof(void) &&
+            method.GetCustomAttribute<System.Runtime.CompilerServices.AsyncStateMachineAttribute>() is not null)
         {
-            if (typeFilter?.Invoke(descriptor.Method.DeclaringType!) == false)
-                continue;
-
-            var method = descriptor.Method;
-            RegisterRequestHandler(descriptor.ProposalType, descriptor.ResponseType, (context, proposal) =>
-                InvokeRequestHandlerMethodAsync(method, ResolveHandlerTarget(method, target, targetFactory), context, proposal));
+            throw new InvalidOperationException(
+                $"Handler method '{method.DeclaringType?.FullName}.{method.Name}' cannot use async void; return Task or ValueTask.");
+        }
+        var validReturn = responseType is null
+            ? returnType == typeof(void) || returnType == typeof(Task) || returnType == typeof(ValueTask)
+            : returnType == responseType ||
+              returnType == typeof(Task<>).MakeGenericType(responseType) ||
+              returnType == typeof(ValueTask<>).MakeGenericType(responseType);
+        if (!validReturn)
+        {
+            var expected = responseType is null ? "void, Task, or ValueTask" : responseType.Name;
+            throw new InvalidOperationException(
+                $"Handler method '{method.DeclaringType?.FullName}.{method.Name}' must return {expected} (synchronously or asynchronously).");
         }
     }
 
@@ -196,13 +312,36 @@ public sealed class NetMessenger
     {
         ArgumentNullException.ThrowIfNull(policy);
         EnsureProtocolTypesCanBind(typeof(T));
-        Registry.Register<T>();
-        _relayPolicies[typeof(T)] = (context, message) => policy(context, (T)message);
+        lock (_handlerGate)
+        {
+            EnsureProtocolTypesCanBind(typeof(T));
+            Registry.Register<T>();
+            _relayPolicies[typeof(T)] = (context, message) => policy(context, (T)message);
+        }
     }
 
     internal void FreezeProtocolManifest()
     {
-        Interlocked.Exchange(ref _protocolManifestFrozen, 1);
+        lock (_handlerGate)
+        {
+            Registry.Freeze();
+            Interlocked.Exchange(ref _protocolManifestPermanentlyFrozen, 1);
+            Interlocked.Exchange(ref _protocolManifestFrozen, 1);
+        }
+    }
+
+    internal ProtocolManifestReservation ReserveProtocolManifest()
+    {
+        lock (_handlerGate)
+        {
+            if (Volatile.Read(ref _protocolManifestPermanentlyFrozen) == 1)
+                return new ProtocolManifestReservation(this, completed: true);
+
+            EnsureProtocolManifestCanMutate();
+            var registryReservation = Registry.Reserve();
+            Interlocked.Exchange(ref _protocolManifestFrozen, 1);
+            return new ProtocolManifestReservation(this, registryReservation);
+        }
     }
 
     /// <summary>
@@ -226,11 +365,16 @@ public sealed class NetMessenger
     /// </summary>
     public async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
     {
+        return await SendAsync(peerId, message, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message, CancellationToken token)
+    {
         var packet = EncodeMessagePacket(message);
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
-        var send = await SendPacketToPeerAsync(peerId, packet.Data!).ConfigureAwait(false);
+        var send = await SendPacketToPeerAsync(peerId, packet.Data!, token).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packet.Data!.Length);
 
@@ -238,7 +382,7 @@ public sealed class NetMessenger
     }
 
     /// <summary>
-    /// 从服务器向所有远端对等体广播类型化消息。
+    /// 从服务器向所有远端对等体广播类型化消息；单个目标失败不会阻止后续发送，结果返回首个失败。
     /// </summary>
     public async ValueTask<NetSendResult> BroadcastAsync<T>(T message)
     {
@@ -246,16 +390,20 @@ public sealed class NetMessenger
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
+        NetSendResult? firstFailure = null;
         foreach (var peerId in _getBroadcastTargets())
         {
             var send = await SendPacketToPeerAsync(peerId, packet.Data!).ConfigureAwait(false);
             if (!send.Succeeded)
-                return send;
+            {
+                firstFailure ??= send;
+                continue;
+            }
 
             _diagnostics.AddPacketSent(packet.Data!.Length);
         }
 
-        return NetSendResult.Ok();
+        return firstFailure ?? NetSendResult.Ok();
     }
 
     /// <summary>
@@ -303,7 +451,12 @@ public sealed class NetMessenger
         var pending = new TaskCompletionSource<NetSendResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingRelays[correlationId] = pending;
 
-        var send = await SendPacketToServerAsync(packetBytes).ConfigureAwait(false);
+        var send = await SendPacketToServerAsync(packetBytes, token).ConfigureAwait(false);
+        if (token.IsCancellationRequested)
+        {
+            _pendingRelays.TryRemove(correlationId, out _);
+            return new NetSendResult(NetSendStatus.TransportFailed, "Relay was cancelled.");
+        }
         if (!send.Succeeded)
         {
             _pendingRelays.TryRemove(correlationId, out _);
@@ -391,7 +544,12 @@ public sealed class NetMessenger
         if (token.IsCancellationRequested)
             return new NetRequestResult<TResponse> { Status = NetRequestStatus.Cancelled };
 
-        var send = await SendPacketToPeerAsync(peerId, packetBytes).ConfigureAwait(false);
+        var send = await SendPacketToPeerAsync(peerId, packetBytes, token).ConfigureAwait(false);
+        if (token.IsCancellationRequested)
+        {
+            RemovePending(correlationId);
+            return new NetRequestResult<TResponse> { Status = NetRequestStatus.Cancelled };
+        }
         if (!send.Succeeded)
         {
             RemovePending(correlationId);
@@ -495,12 +653,44 @@ public sealed class NetMessenger
         }
     }
 
+    internal void RemovePeerState(PeerId peerId)
+    {
+        lock (_sendLimitGate)
+            _sendLimits.Remove(peerId);
+    }
+
+    internal void ClearPeerState()
+    {
+        lock (_sendLimitGate)
+            _sendLimits.Clear();
+    }
+
     private bool IsProtocolManifestFrozen => Volatile.Read(ref _protocolManifestFrozen) == 1;
 
     private void EnsureProtocolManifestCanMutate()
     {
         if (IsProtocolManifestFrozen)
             throw new InvalidOperationException("Message protocol manifest is frozen after the session starts.");
+    }
+
+    private void CommitProtocolManifestReservation(NetMessageRegistry.RegistryReservation? registryReservation)
+    {
+        lock (_handlerGate)
+        {
+            registryReservation?.Commit();
+            Interlocked.Exchange(ref _protocolManifestPermanentlyFrozen, 1);
+            Interlocked.Exchange(ref _protocolManifestFrozen, 1);
+        }
+    }
+
+    private void ReleaseProtocolManifestReservation(NetMessageRegistry.RegistryReservation? registryReservation)
+    {
+        lock (_handlerGate)
+        {
+            if (Volatile.Read(ref _protocolManifestPermanentlyFrozen) == 0)
+                Interlocked.Exchange(ref _protocolManifestFrozen, 0);
+            registryReservation?.Dispose();
+        }
     }
 
     private void EnsureProtocolTypesCanBind(params Type[] messageTypes)
@@ -552,11 +742,16 @@ public sealed class NetMessenger
 
         if (message is null)
             return true;
-        if (!_handlers.TryGetValue(descriptor.MessageType, out var handlers))
-            return true;
+        Func<NetContext, object, ValueTask>[] handlers;
+        lock (_handlerGate)
+        {
+            if (!_handlers.TryGetValue(descriptor.MessageType, out var registeredHandlers))
+                return true;
+            handlers = registeredHandlers.ToArray();
+        }
 
         var context = new NetContext(packet.SenderId == PeerId.None ? senderId : packet.SenderId);
-        foreach (var handler in handlers.ToArray())
+        foreach (var handler in handlers)
         {
             await DispatchHandlerAsync(async () =>
             {
@@ -583,7 +778,10 @@ public sealed class NetMessenger
             return true;
         }
 
-        if (!_requestHandlers.TryGetValue(requestDescriptor.MessageType, out var handler))
+        RequestHandler? handler;
+        lock (_handlerGate)
+            _requestHandlers.TryGetValue(requestDescriptor.MessageType, out handler);
+        if (handler is null)
         {
             await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.NoHandler, Array.Empty<byte>(), null).ConfigureAwait(false);
             return true;
@@ -604,7 +802,8 @@ public sealed class NetMessenger
                 return true;
             }
 
-            var response = await handler.Invoke(new NetContext(senderId), request).ConfigureAwait(false);
+            var response = await DispatchRequestHandlerAsync(
+                () => handler.Invoke(new NetContext(senderId), request)).ConfigureAwait(false);
             var responsePayload = _codec.Encode(response);
             await SendRequestResponseAsync(senderId, packet.CorrelationId, packet.ResponseMessageId, NetRequestStatus.Ok, responsePayload, null).ConfigureAwait(false);
         }
@@ -661,7 +860,10 @@ public sealed class NetMessenger
             return true;
         }
 
-        if (message is null || !_relayPolicies.TryGetValue(descriptor.MessageType, out var policy))
+        Func<NetRelayContext, object, bool>? policy = null;
+        lock (_handlerGate)
+            _relayPolicies.TryGetValue(descriptor.MessageType, out policy);
+        if (message is null || policy is null)
         {
             await SendRelayResultAsync(senderId, packet.CorrelationId, new NetSendResult(NetSendStatus.PermissionDenied)).ConfigureAwait(false);
             return true;
@@ -809,17 +1011,17 @@ public sealed class NetMessenger
         throw new TimeoutException();
     }
 
-    private ValueTask<NetSendResult> SendPacketToPeerAsync(PeerId peerId, byte[] packet)
+    private ValueTask<NetSendResult> SendPacketToPeerAsync(PeerId peerId, byte[] packet, CancellationToken token = default)
     {
         return SendPacketWithLimitsAsync(
             peerId,
             packet,
-            () => peerId == PeerId.Server ? _sendToServer(packet) : _sendToPeer(peerId, packet));
+            () => peerId == PeerId.Server ? _sendToServer(packet, token) : _sendToPeer(peerId, packet, token));
     }
 
-    private ValueTask<NetSendResult> SendPacketToServerAsync(byte[] packet)
+    private ValueTask<NetSendResult> SendPacketToServerAsync(byte[] packet, CancellationToken token = default)
     {
-        return SendPacketWithLimitsAsync(PeerId.Server, packet, () => _sendToServer(packet));
+        return SendPacketWithLimitsAsync(PeerId.Server, packet, () => _sendToServer(packet, token));
     }
 
     private async ValueTask<NetSendResult> SendPacketWithLimitsAsync(PeerId peerId, byte[] packet, Func<ValueTask<NetSendResult>> send)
@@ -930,24 +1132,69 @@ public sealed class NetMessenger
             return;
         }
 
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             _dispatcher.Post(() =>
             {
-                try
+                _ = CompleteAsync();
+
+                async Task CompleteAsync()
                 {
-                    action().AsTask().GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    _diagnostics.RecordError(new NetError("MessageHandlerError", ex.Message, ex));
+                    try
+                    {
+                        await action().ConfigureAwait(true);
+                        completion.TrySetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        _diagnostics.RecordError(new NetError("MessageHandlerError", ex.Message, ex));
+                        completion.TrySetResult();
+                    }
                 }
             });
         }
         catch (Exception ex)
         {
             _diagnostics.RecordError(new NetError("EventDispatchFailed", ex.Message, ex));
+            completion.TrySetResult();
         }
+
+        await completion.Task.ConfigureAwait(false);
+    }
+
+    private async ValueTask<object> DispatchRequestHandlerAsync(Func<ValueTask<object>> action)
+    {
+        if (_dispatcher is null)
+            return await action().ConfigureAwait(false);
+
+        var completion = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            _dispatcher.Post(() =>
+            {
+                _ = CompleteAsync();
+
+                async Task CompleteAsync()
+                {
+                    try
+                    {
+                        completion.TrySetResult(await action().ConfigureAwait(true));
+                    }
+                    catch (Exception ex)
+                    {
+                        completion.TrySetException(ex);
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.RecordError(new NetError("EventDispatchFailed", ex.Message, ex));
+            completion.TrySetException(ex);
+        }
+
+        return await completion.Task.ConfigureAwait(false);
     }
 
     private static async ValueTask InvokeHandlerMethodAsync(MethodInfo method, object? target, NetContext context, object message)
@@ -1017,7 +1264,12 @@ public sealed class NetMessenger
         if (target is not null && declaringType.IsInstanceOfType(target))
             return target;
         if (targetFactory is not null)
-            return targetFactory(declaringType);
+        {
+            var resolved = targetFactory(declaringType);
+            if (resolved is not null && declaringType.IsInstanceOfType(resolved))
+                return resolved;
+            throw new InvalidOperationException($"Handler target factory returned an incompatible instance for '{declaringType.FullName}'.");
+        }
 
         throw new InvalidOperationException($"Handler method '{declaringType.FullName}.{method.Name}' requires a target instance.");
     }
@@ -1054,8 +1306,48 @@ public sealed class NetMessenger
 
     private readonly record struct EncodedPacket(NetSendStatus Status, byte[]? Data, string? Message);
     private readonly record struct PendingResponse(NetRequestStatus Status, byte[] Payload, string? Message);
+    private sealed record AssemblyHandlerBinding(
+        MethodInfo Method,
+        AssemblyHandlerKind Kind,
+        Type MessageType,
+        Type? ResponseType,
+        object? Target);
+    private enum AssemblyHandlerKind { Message, Request, Flow }
     private sealed record RequestHandler(Type ResponseType, Func<NetContext, object, ValueTask<object>> Invoke);
     private sealed record PendingRequestCancellation(NetMessenger Owner, long CorrelationId);
+
+    internal sealed class ProtocolManifestReservation : IDisposable
+    {
+        private readonly NetMessenger _owner;
+        private readonly NetMessageRegistry.RegistryReservation? _registryReservation;
+        private int _completed;
+
+        public ProtocolManifestReservation(
+            NetMessenger owner,
+            NetMessageRegistry.RegistryReservation? registryReservation = null,
+            bool completed = false)
+        {
+            _owner = owner;
+            _registryReservation = registryReservation;
+            _completed = completed ? 1 : 0;
+        }
+
+        public void Commit()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 1)
+                return;
+
+            _owner.CommitProtocolManifestReservation(_registryReservation);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 1)
+                return;
+
+            _owner.ReleaseProtocolManifestReservation(_registryReservation);
+        }
+    }
 
     private sealed class SendLimitState
     {

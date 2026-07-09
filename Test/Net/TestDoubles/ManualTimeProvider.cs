@@ -28,6 +28,15 @@ public sealed class ManualTimeProvider : TimeProvider
             return _utcNow;
     }
 
+    public int ActiveTimerCount
+    {
+        get
+        {
+            lock (_gate)
+                return _timers.Count;
+        }
+    }
+
     public void Advance(TimeSpan delta)
     {
         ManualTimer[] dueTimers;

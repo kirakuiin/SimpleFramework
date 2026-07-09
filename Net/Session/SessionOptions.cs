@@ -80,7 +80,13 @@ public sealed class ReconnectPolicy
     /// <summary>
     /// 启用重连并指定宽限时间。
     /// </summary>
-    public static ReconnectPolicy Enabled(TimeSpan graceWindow) => new(true, graceWindow);
+    public static ReconnectPolicy Enabled(TimeSpan graceWindow)
+    {
+        if (graceWindow <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(graceWindow), "Reconnect grace window must be greater than zero.");
+
+        return new ReconnectPolicy(true, graceWindow);
+    }
 
     /// <summary>
     /// 客户端使用固定间隔自动重试。

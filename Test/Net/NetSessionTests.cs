@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -239,6 +240,113 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task Join_WhenAuthenticatorThrows_ReturnsAuthenticationFailedAndRecordsError()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            Authenticator = _ => throw new InvalidOperationException("auth failed")
+        });
+
+        var join = await client.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            Timeout = TimeSpan.FromMilliseconds(200)
+        });
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
+        Assert.That(join.Message, Does.Contain("auth failed"));
+        Assert.That(server.Diagnostics.GetSnapshot().ErrorCount, Is.GreaterThanOrEqualTo(1));
+    }
+
+    [Test]
+    public async Task StopAsync_DuringAuthentication_DoesNotAddPeerAfterShutdown()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var authStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAuth = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var serverTransport = new BlockingPostStopSendTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            Authenticator = async _ =>
+            {
+                authStarted.TrySetResult();
+                await releaseAuth.Task;
+                return AuthResult.Ok();
+            }
+        });
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await authStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await server.StopAsync();
+        serverTransport.BlockSends = true;
+        releaseAuth.TrySetResult();
+        await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
+        var postStopSend = await Task.WhenAny(serverTransport.SendStarted.Task, Task.Delay(100));
+        serverTransport.ReleaseSend.TrySetResult();
+
+        Assert.That(postStopSend, Is.Not.SameAs(serverTransport.SendStarted.Task));
+        Assert.That(server.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(server.Peers.Peers, Is.Empty);
+        Assert.That(server.Diagnostics.GetSnapshot().ConnectedPeerCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task StopAsync_DuringBlockedInitialAcceptance_DoesNotRaiseStaleJoin()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var serverTransport = new BlockingPostStopSendTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var joinedCount = 0;
+        server.Session.PeerJoined += _ => Interlocked.Increment(ref joinedCount);
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        serverTransport.BlockSends = true;
+        serverTransport.SucceedBlockedSendAfterRelease = true;
+        var join = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await serverTransport.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        serverTransport.BlockSends = false;
+        var stop = await server.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        serverTransport.ReleaseSend.TrySetResult();
+        var joinResult = await join.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(joinResult.Status, Is.Not.EqualTo(NetSessionStatus.Ok));
+        Assert.That(Volatile.Read(ref joinedCount), Is.Zero);
+        Assert.That(server.Peers.Peers, Is.Empty);
+    }
+
+    [Test]
+    public async Task StopAsync_WhenTransportStopFails_ReturnsFailureAndCanRetry()
+    {
+        var transport = new FailingStopResultTransport();
+        await using var server = new GameNet(transport, Options(Guid.NewGuid()));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        var failed = await server.StopAsync();
+
+        Assert.That(failed.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(server.Session.Role, Is.EqualTo(NetSessionRole.Host));
+        transport.FailStop = false;
+        var retry = await server.StopAsync();
+        Assert.That(retry.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Session.Role, Is.EqualTo(NetSessionRole.None));
+    }
+
+    [Test]
     public async Task Join_WithAcceptedPasswordAuthPayload_Succeeds()
     {
         var appId = Guid.NewGuid();
@@ -378,9 +486,9 @@ public class NetSessionTests
         await using var secondClient = new GameNet(network.CreateTransport("client-b"), Options(appId, timeProvider: clock));
         var events = new List<string>();
 
-        observer.Session.PeerDisconnected += e => events.Add($"disconnected:{e.PeerId.Value}");
-        observer.Session.PeerReconnected += e => events.Add($"reconnected:{e.PeerId.Value}");
-        observer.Session.PeerLeft += e => events.Add($"left:{e.PeerId.Value}");
+        observer.Session.PeerDisconnected += e => { lock (events) events.Add($"disconnected:{e.PeerId.Value}"); };
+        observer.Session.PeerReconnected += e => { lock (events) events.Add($"reconnected:{e.PeerId.Value}"); };
+        observer.Session.PeerLeft += e => { lock (events) events.Add($"left:{e.PeerId.Value}"); };
 
         await server.HostAsync(new HostOptions
         {
@@ -405,15 +513,17 @@ public class NetSessionTests
         await WaitUntilAsync(() => observer.Peers.Peers.Any(p => p.PeerId == firstJoin.PeerId && !p.IsConnected));
         clock.Advance(TimeSpan.FromSeconds(6));
         await WaitUntilAsync(() => observer.Peers.Peers.All(p => p.PeerId != firstJoin.PeerId));
+        await WaitUntilAsync(() => { lock (events) return events.Count == 4; });
 
         Assert.That(reconnect.PeerId, Is.EqualTo(firstJoin.PeerId));
-        Assert.That(events, Is.EqualTo(new[]
-        {
-            $"disconnected:{firstJoin.PeerId.Value}",
-            $"reconnected:{firstJoin.PeerId.Value}",
-            $"disconnected:{firstJoin.PeerId.Value}",
-            $"left:{firstJoin.PeerId.Value}"
-        }));
+        lock (events)
+            Assert.That(events, Is.EqualTo(new[]
+            {
+                $"disconnected:{firstJoin.PeerId.Value}",
+                $"reconnected:{firstJoin.PeerId.Value}",
+                $"disconnected:{firstJoin.PeerId.Value}",
+                $"left:{firstJoin.PeerId.Value}"
+            }));
     }
 
     [Test]
@@ -582,6 +692,25 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task Join_WithNonPositiveTimeout_ReturnsStableFailureWithoutConnecting()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        var zero = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777, Timeout = TimeSpan.Zero });
+        var negative = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777, Timeout = TimeSpan.FromMilliseconds(-2) });
+        var valid = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(zero.Status, Is.EqualTo(NetSessionStatus.InvalidState));
+        Assert.That(negative.Status, Is.EqualTo(NetSessionStatus.InvalidState));
+        Assert.That(valid.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Peers.RemoteParticipants(), Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public async Task Join_WithCancelledToken_ReturnsCancelled()
     {
         var network = new MemoryNetNetwork();
@@ -592,6 +721,13 @@ public class NetSessionTests
         var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 }, cts.Token);
 
         Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Cancelled));
+    }
+
+    [Test]
+    public void ReconnectPolicy_EnabledRejectsNonPositiveGraceWindow()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ReconnectPolicy.Enabled(TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ReconnectPolicy.Enabled(TimeSpan.FromSeconds(-1)));
     }
 
     [Test]
@@ -616,6 +752,271 @@ public class NetSessionTests
         Assert.That(completed, Is.SameAs(disposeTask));
         var join = await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.That(join.Status, Is.AnyOf(NetSessionStatus.Cancelled, NetSessionStatus.ObjectDisposed, NetSessionStatus.TransportFailed));
+    }
+
+    [Test]
+    public async Task ConcurrentDisposeAsync_AllCallersAwaitOwnedResourceCleanup()
+    {
+        var transport = new BlockingDisposeTransport();
+        var net = new GameNet(transport, Options(Guid.NewGuid()));
+
+        var firstDispose = net.DisposeAsync().AsTask();
+        await transport.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var secondDispose = net.DisposeAsync().AsTask();
+
+        Assert.That(firstDispose.IsCompleted, Is.False);
+        Assert.That(secondDispose.IsCompleted, Is.False);
+        transport.ReleaseDispose.TrySetResult();
+        await Task.WhenAll(firstDispose, secondDispose).WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task StopAsync_CancelsConnectInProgress_AndJoinCannotRestartSession()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        var transport = new BlockingConnectTransport(network.CreateTransport("client"));
+        await using var client = new GameNet(transport, Options(appId));
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await transport.ConnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var stop = await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        transport.ReleaseConnect.TrySetResult();
+        var join = await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Cancelled));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(client.Peers.Peers, Is.Empty);
+    }
+
+    [Test]
+    public async Task StopAsync_CancellationAfterShutdownStarts_CompletesConsistentShutdown()
+    {
+        var transport = new BlockingStopTransport(new MemoryNetNetwork().CreateTransport("server"));
+        await using var server = new GameNet(transport, Options(Guid.NewGuid()));
+        using var cancellation = new CancellationTokenSource();
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var stopTask = server.StopAsync(cancellation.Token);
+        await transport.StopStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        transport.ReleaseStop.TrySetResult();
+        var stop = await stopTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(server.Peers.Peers, Is.Empty);
+    }
+
+    [Test]
+    public async Task StopAsync_DropsBusinessPacketsBufferedDuringJoin()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+        var markerHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        client.Messages.RegisterMessage<PlayerReady>();
+        client.On<PlayerReady>((_, _) => markerHandled.TrySetResult());
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await transport.JoinRequestSent.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        transport.EmitMessage(client.Messages.Registry.Get<PlayerReady>().MessageId, new PlayerReady(true));
+
+        var stop = await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        var join = await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.Cancelled));
+        Assert.That(markerHandled.Task.IsCompleted, Is.False);
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(client.Peers.Peers, Is.Empty);
+    }
+
+    [Test]
+    public async Task Join_ImmediateBusinessPacket_WaitsUntilClientSessionIsCommitted()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+        var received = new TaskCompletionSource<(PeerId Sender, NetSessionRole Role)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Messages.RegisterMessage<PlayerReady>();
+        client.On<PlayerReady>((context, _) => received.TrySetResult((context.SenderId, client.Session.Role)));
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var connectionId = await transport.WaitForJoinRequestAsync();
+        var lifecycleGate = (SemaphoreSlim)typeof(GameNet)
+            .GetField("_lifecycleGate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(client)!;
+        await lifecycleGate.WaitAsync();
+        try
+        {
+            transport.EmitJoinAccepted(connectionId, appId, new PeerId(2), client.Messages.Registry.GetFingerprint());
+            transport.EmitMessage(client.Messages.Registry.Get<PlayerReady>().MessageId, new PlayerReady(true));
+            await Task.Delay(50);
+            Assert.That(received.Task.IsCompleted, Is.False);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+
+        Assert.That((await joinTask.WaitAsync(TimeSpan.FromSeconds(1))).Status, Is.EqualTo(NetSessionStatus.Ok));
+        var handled = await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(handled.Sender, Is.EqualTo(PeerId.Server));
+        Assert.That(handled.Role, Is.EqualTo(NetSessionRole.Client));
+    }
+
+    [Test]
+    public async Task Join_BusinessPacketBeforeAccept_WaitsUntilClientSessionIsCommitted()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+        var received = new TaskCompletionSource<PeerId>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Messages.RegisterMessage<PlayerReady>();
+        client.On<PlayerReady>((context, _) => received.TrySetResult(context.SenderId));
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var connectionId = await transport.WaitForJoinRequestAsync();
+        transport.EmitMessage(client.Messages.Registry.Get<PlayerReady>().MessageId, new PlayerReady(true));
+        await Task.Delay(50);
+        Assert.That(received.Task.IsCompleted, Is.False);
+
+        transport.EmitJoinAccepted(connectionId, appId, new PeerId(2), client.Messages.Registry.GetFingerprint());
+
+        Assert.That((await joinTask.WaitAsync(TimeSpan.FromSeconds(1))).Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(await received.Task.WaitAsync(TimeSpan.FromSeconds(1)), Is.EqualTo(PeerId.Server));
+    }
+
+    [Test]
+    public async Task JoinRejected_DoesNotPermanentlyFreezeMessageRegistration()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var connectionId = await transport.WaitForJoinRequestAsync();
+        transport.EmitJoinRejected(connectionId, appId, NetSessionStatus.AuthenticationFailed, "Rejected.");
+
+        var join = await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(join.Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
+        Assert.DoesNotThrow(() => client.Messages.RegisterMessage<PlayerReady>());
+    }
+
+    [Test]
+    public async Task JoinPending_DirectRegistryMutation_IsRejectedAndFingerprintStaysStable()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+        client.Messages.RegisterMessage<PlayerReady>();
+        var fingerprintBeforeJoin = client.Messages.Registry.GetFingerprint();
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var connectionId = await transport.WaitForJoinRequestAsync();
+
+        Assert.Throws<InvalidOperationException>(() => client.Messages.Registry.Register<LateMessage>());
+        Assert.That(client.Messages.Registry.GetFingerprint(), Is.EqualTo(fingerprintBeforeJoin));
+
+        transport.EmitJoinRejected(connectionId, appId, NetSessionStatus.AuthenticationFailed, "Rejected.");
+        Assert.That((await joinTask.WaitAsync(TimeSpan.FromSeconds(1))).Status, Is.EqualTo(NetSessionStatus.AuthenticationFailed));
+    }
+
+    [Test]
+    public async Task Join_StaleDisconnectFromPreviousAttempt_DoesNotFailCurrentAttempt()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+        using var firstCancellation = new CancellationTokenSource();
+
+        var firstJoinTask = client.JoinAsync(
+            new JoinOptions { Host = "server", Port = 7777 },
+            firstCancellation.Token);
+        var firstConnection = await transport.WaitForJoinRequestAsync();
+        firstCancellation.Cancel();
+        Assert.That((await firstJoinTask).Status, Is.EqualTo(NetSessionStatus.Cancelled));
+
+        var secondJoinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var secondConnection = await transport.WaitForJoinRequestAsync();
+        transport.EmitDisconnected(firstConnection);
+        transport.EmitJoinAccepted(secondConnection, appId, new PeerId(2), client.Messages.Registry.GetFingerprint());
+
+        var secondJoin = await secondJoinTask.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(secondJoin.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.Client));
+    }
+
+    [Test]
+    public async Task TransportDisconnect_PreemptsBlockedBusinessHandler()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+        var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        client.Messages.RegisterMessage<PlayerReady>();
+        client.On<PlayerReady>(async (_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            await releaseHandler.Task;
+        });
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var connectionId = await transport.WaitForJoinRequestAsync();
+        transport.EmitJoinAccepted(connectionId, appId, new PeerId(2), client.Messages.Registry.GetFingerprint());
+        Assert.That((await joinTask).Status, Is.EqualTo(NetSessionStatus.Ok));
+
+        transport.EmitMessage(client.Messages.Registry.Get<PlayerReady>().MessageId, new PlayerReady(false));
+        await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        transport.EmitDisconnected(connectionId);
+
+        try
+        {
+            await WaitUntilAsync(() => client.Session.Role == NetSessionRole.None);
+            Assert.That(client.Peers.Peers, Is.Empty);
+        }
+        finally
+        {
+            releaseHandler.TrySetResult();
+        }
+    }
+
+    [Test]
+    public async Task Join_AcceptImmediatelyFollowedByDisconnect_DoesNotCommitClosedConnection()
+    {
+        var appId = Guid.NewGuid();
+        var transport = new ControlledJoinTransport();
+        await using var client = new GameNet(transport, Options(appId));
+
+        var joinTask = client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var connectionId = await transport.WaitForJoinRequestAsync();
+        var lifecycleGate = (SemaphoreSlim)typeof(GameNet)
+            .GetField("_lifecycleGate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(client)!;
+        await lifecycleGate.WaitAsync();
+        try
+        {
+            transport.EmitJoinAccepted(connectionId, appId, new PeerId(2), client.Messages.Registry.GetFingerprint());
+            transport.EmitDisconnected(connectionId);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+
+        var join = await joinTask.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(join.Status, Is.Not.EqualTo(NetSessionStatus.Ok));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.None));
     }
 
     [Test]
@@ -799,6 +1200,44 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task Reconnect_AtGraceBoundary_NeverRemovesSuccessfulReconnect()
+    {
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            var appId = Guid.NewGuid();
+            var clock = new ManualTimeProvider();
+            var network = new MemoryNetNetwork();
+            await using var server = new GameNet(network.CreateTransport("server"), Options(appId, timeProvider: clock));
+            await using var firstClient = new GameNet(network.CreateTransport("first"), Options(appId, timeProvider: clock));
+            await using var secondClient = new GameNet(network.CreateTransport("second"), Options(appId, timeProvider: clock));
+            await server.HostAsync(new HostOptions
+            {
+                Port = 7777,
+                ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(5))
+            });
+            var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+            await firstClient.LeaveAsync();
+            await WaitUntilAsync(() => server.Peers.Peers.Any(peer => peer.PeerId == firstJoin.PeerId && !peer.IsConnected));
+
+            var reconnectTask = secondClient.JoinAsync(new JoinOptions
+            {
+                Host = "server",
+                Port = 7777,
+                ReconnectToken = firstJoin.ReconnectToken
+            });
+            clock.Advance(TimeSpan.FromSeconds(5));
+            var reconnect = await reconnectTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+            if (reconnect.Status == NetSessionStatus.Ok)
+            {
+                await Task.Yield();
+                Assert.That(server.Peers.Peers.Any(peer =>
+                    peer.PeerId == firstJoin.PeerId && peer.IsConnected), Is.True, $"Attempt {attempt}");
+            }
+        }
+    }
+
+    [Test]
     public async Task Reconnect_WithClientPolicy_AutomaticallyRestoresOriginalPeerIdAfterTransportDrop()
     {
         var appId = Guid.NewGuid();
@@ -832,6 +1271,43 @@ public class NetSessionTests
         Assert.That(client.Peers.LocalPeerId, Is.EqualTo(firstJoin.PeerId));
         Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.Client));
         await WaitUntilAsync(() => server.Peers.Peers.Single(p => p.PeerId == firstJoin.PeerId).IsConnected);
+    }
+
+    [Test]
+    public async Task StopAsync_DuringReconnectDelay_PreventsSessionRestart()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        var serverTransport = network.CreateTransport("server");
+        var clientTransport = network.CreateTransport("client");
+        await using var server = new GameNet(serverTransport, Options(appId, timeProvider: clock));
+        await using var client = new GameNet(clientTransport, Options(appId, timeProvider: clock));
+
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+        await client.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            Reconnect = ReconnectPolicy.FixedRetry(3, TimeSpan.FromSeconds(5))
+        });
+
+        clientTransport.RemoveRemoteConnection(GetOnlyConnectionId(clientTransport), DisconnectReason.TransportFailed);
+        serverTransport.RemoveRemoteConnection(GetOnlyConnectionId(serverTransport), DisconnectReason.RemoteClosed);
+        await WaitUntilAsync(() => client.Session.Role == NetSessionRole.None);
+        await Task.Delay(20);
+
+        var stop = await client.StopAsync();
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await Task.Delay(100);
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(client.Peers.Peers, Is.Empty);
     }
 
     [Test]
@@ -967,6 +1443,81 @@ public class NetSessionTests
         Assert.That(retryReconnect.PeerId, Is.EqualTo(firstJoin.PeerId));
     }
 
+    [Test]
+    public async Task StopAsync_DuringBlockedReconnectAcceptance_CannotRestoreStoppedSession()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var serverTransport = new BlockingPostStopSendTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var firstClient = new GameNet(network.CreateTransport("first"), Options(appId));
+        await using var secondClient = new GameNet(network.CreateTransport("second"), Options(appId));
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(30))
+        });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => server.Peers.Peers.Any(peer => peer.PeerId == firstJoin.PeerId && !peer.IsConnected));
+
+        serverTransport.BlockSends = true;
+        var reconnect = secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+        await serverTransport.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        serverTransport.BlockSends = false;
+        var stop = await server.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        serverTransport.ReleaseSend.TrySetResult();
+        var reconnectResult = await reconnect.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(stop.Status, Is.EqualTo(NetSessionStatus.Ok));
+        Assert.That(reconnectResult.Status, Is.Not.EqualTo(NetSessionStatus.Ok));
+        Assert.That(server.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(server.Peers.Peers, Is.Empty);
+    }
+
+    [Test]
+    public async Task ReconnectExpiry_WaitsForBlockedFailedAcceptanceThenRemovesPeer()
+    {
+        var appId = Guid.NewGuid();
+        var clock = new ManualTimeProvider();
+        var network = new MemoryNetNetwork();
+        var serverTransport = new BlockingPostStopSendTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId, timeProvider: clock));
+        await using var firstClient = new GameNet(network.CreateTransport("first"), Options(appId, timeProvider: clock));
+        await using var secondClient = new GameNet(network.CreateTransport("second"), Options(appId, timeProvider: clock));
+        await server.HostAsync(new HostOptions
+        {
+            Port = 7777,
+            MaxPeers = 1,
+            ReconnectPolicy = ReconnectPolicy.Enabled(TimeSpan.FromSeconds(5))
+        });
+        var firstJoin = await firstClient.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await firstClient.LeaveAsync();
+        await WaitUntilAsync(() => server.Peers.Peers.Any(peer => peer.PeerId == firstJoin.PeerId && !peer.IsConnected));
+
+        serverTransport.BlockSends = true;
+        serverTransport.FailBlockedSendAfterRelease = true;
+        var reconnect = secondClient.JoinAsync(new JoinOptions
+        {
+            Host = "server",
+            Port = 7777,
+            ReconnectToken = firstJoin.ReconnectToken
+        });
+        await serverTransport.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await Task.Yield();
+        serverTransport.ReleaseSend.TrySetResult();
+        Assert.That((await reconnect.WaitAsync(TimeSpan.FromSeconds(1))).Status, Is.Not.EqualTo(NetSessionStatus.Ok));
+
+        await WaitUntilAsync(() => server.Peers.Peers.All(peer => peer.PeerId != firstJoin.PeerId));
+        Assert.That(server.Peers.RemoteParticipants(), Is.Empty);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
@@ -1076,6 +1627,323 @@ public class NetSessionTests
                 return false;
             }
         }
+    }
+
+    private sealed class BlockingConnectTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public BlockingConnectTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public TaskCompletionSource ConnectStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseConnect { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+
+        public async Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default)
+        {
+            ConnectStarted.TrySetResult();
+            await ReleaseConnect.Task.WaitAsync(token);
+            return await _inner.ConnectAsync(options, token);
+        }
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            _inner.StopServerAsync(token);
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            _inner.DisconnectAsync(connectionId, reason);
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            _inner.SendAsync(connectionId, data, channel, token);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private sealed class BlockingDisposeTransport : INetTransport
+    {
+        public TaskCompletionSource DisposeStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseDispose { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event Action<TransportPeerConnected> PeerConnected { add { } remove { } }
+        public event Action<TransportPeerDisconnected> PeerDisconnected { add { } remove { } }
+        public event Action<TransportPacketReceived> PacketReceived { add { } remove { } }
+        public event Action<TransportError> Error { add { } remove { } }
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None));
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            Task.CompletedTask;
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            ValueTask.FromResult(NetSendResult.Ok());
+
+        public async ValueTask DisposeAsync()
+        {
+            DisposeStarted.TrySetResult();
+            await ReleaseDispose.Task;
+        }
+    }
+
+    private sealed class ControlledJoinTransport : INetTransport
+    {
+        private readonly ConcurrentQueue<TransportConnectionId> _joinRequests = new();
+        private readonly SemaphoreSlim _joinRequestSignal = new(0);
+        private long _nextConnectionId;
+        private TransportConnectionId _currentConnectionId = TransportConnectionId.None;
+
+        public TaskCompletionSource JoinRequestSent { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event Action<TransportPeerConnected> PeerConnected { add { } remove { } }
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error { add { } remove { } }
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default)
+        {
+            _currentConnectionId = new TransportConnectionId((ulong)Interlocked.Increment(ref _nextConnectionId));
+            return Task.FromResult(new TransportConnectResult(NetTransportStatus.Ok, _currentConnectionId));
+        }
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            Task.CompletedTask;
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
+        {
+            _joinRequests.Enqueue(connectionId);
+            _joinRequestSignal.Release();
+            JoinRequestSent.TrySetResult();
+            return ValueTask.FromResult(NetSendResult.Ok());
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public void EmitJoinAccepted(Guid appId, PeerId peerId, string fingerprint)
+        {
+            EmitJoinAccepted(_currentConnectionId, appId, peerId, fingerprint);
+        }
+
+        public void EmitJoinAccepted(TransportConnectionId connectionId, Guid appId, PeerId peerId, string fingerprint)
+        {
+            var packet = new SessionPacket(
+                SessionPacket.JoinAccepted,
+                appId,
+                1,
+                null,
+                null,
+                peerId,
+                new[]
+                {
+                    new PeerInfo(PeerId.Server, true, false, DateTimeOffset.UtcNow),
+                    new PeerInfo(peerId, false, true, DateTimeOffset.UtcNow)
+                },
+                fingerprint,
+                NetSessionStatus.Ok,
+                null);
+            PacketReceived?.Invoke(new TransportPacketReceived(
+                connectionId,
+                JsonSerializer.SerializeToUtf8Bytes(packet),
+                NetChannel.System));
+        }
+
+        public void EmitJoinRejected(TransportConnectionId connectionId, Guid appId, NetSessionStatus status, string message)
+        {
+            var packet = new SessionPacket(
+                SessionPacket.JoinRejected,
+                appId,
+                1,
+                null,
+                null,
+                PeerId.None,
+                null,
+                null,
+                status,
+                message);
+            PacketReceived?.Invoke(new TransportPacketReceived(
+                connectionId,
+                JsonSerializer.SerializeToUtf8Bytes(packet),
+                NetChannel.System));
+        }
+
+        public async Task<TransportConnectionId> WaitForJoinRequestAsync()
+        {
+            await _joinRequestSignal.WaitAsync(TimeSpan.FromSeconds(1));
+            return _joinRequests.TryDequeue(out var connectionId)
+                ? connectionId
+                : throw new InvalidOperationException("Join request signal had no connection.");
+        }
+
+        public void EmitDisconnected(TransportConnectionId connectionId) =>
+            PeerDisconnected?.Invoke(new TransportPeerDisconnected(connectionId, DisconnectReason.RemoteClosed));
+
+        public void EmitMessage<T>(ulong messageId, T message)
+        {
+            var packet = new NetPacket
+            {
+                Kind = NetPacket.Message,
+                MessageId = messageId,
+                Payload = new JsonNetCodec().Encode(message)
+            };
+            PacketReceived?.Invoke(new TransportPacketReceived(
+                _currentConnectionId,
+                JsonSerializer.SerializeToUtf8Bytes(packet),
+                NetChannel.Reliable));
+        }
+    }
+
+    private sealed class BlockingStopTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public BlockingStopTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public TaskCompletionSource StopStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseStop { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            _inner.ConnectAsync(options, token);
+
+        public async Task<TransportStartResult> StopServerAsync(CancellationToken token = default)
+        {
+            StopStarted.TrySetResult();
+            await ReleaseStop.Task;
+            if (token.IsCancellationRequested)
+                return new TransportStartResult(NetTransportStatus.Cancelled);
+
+            return await _inner.StopServerAsync(token);
+        }
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            _inner.DisconnectAsync(connectionId, reason);
+
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            _inner.SendAsync(connectionId, data, channel, token);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private sealed class BlockingPostStopSendTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public BlockingPostStopSendTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public bool BlockSends { get; set; }
+        public bool FailBlockedSendAfterRelease { get; set; }
+        public bool SucceedBlockedSendAfterRelease { get; set; }
+        public TaskCompletionSource SendStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSend { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            _inner.ConnectAsync(options, token);
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            _inner.StopServerAsync(token);
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            _inner.DisconnectAsync(connectionId, reason);
+
+        public async ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
+        {
+            if (BlockSends)
+            {
+                SendStarted.TrySetResult();
+                await ReleaseSend.Task;
+                if (FailBlockedSendAfterRelease)
+                    return new NetSendResult(NetSendStatus.TransportFailed, "blocked send failed");
+                if (SucceedBlockedSendAfterRelease)
+                    return NetSendResult.Ok();
+            }
+
+            return await _inner.SendAsync(connectionId, data, channel, token);
+        }
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private sealed class FailingStopResultTransport : INetTransport
+    {
+        public bool FailStop { get; set; } = true;
+        public event Action<TransportPeerConnected> PeerConnected { add { } remove { } }
+        public event Action<TransportPeerDisconnected> PeerDisconnected { add { } remove { } }
+        public event Action<TransportPacketReceived> PacketReceived { add { } remove { } }
+        public event Action<TransportError> Error { add { } remove { } }
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            Task.FromResult(new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None));
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            Task.FromResult(FailStop
+                ? new TransportStartResult(NetTransportStatus.TransportFailed, "stop failed")
+                : new TransportStartResult(NetTransportStatus.Ok));
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) => Task.CompletedTask;
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            ValueTask.FromResult(NetSendResult.Ok());
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class LocalDisconnectEchoTransport : INetTransport

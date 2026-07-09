@@ -9,14 +9,21 @@ namespace SimpleFramework.Net;
 /// </summary>
 public sealed class TcpNetTransport : INetTransport
 {
+    private static readonly AsyncLocal<TcpConnection?> CurrentReadConnection = new();
     private readonly ConcurrentDictionary<TransportConnectionId, TcpConnection> _connections = new();
     private readonly CancellationTokenSource _disposeCts = new();
+    private readonly CancellationToken _disposeToken;
+    private readonly SemaphoreSlim _serverLifecycleGate = new(1, 1);
+    private readonly object _disposeGate = new();
     private long _nextConnectionId;
     private TcpListener? _listener;
+    private CancellationTokenSource? _acceptCts;
     private Task? _acceptTask;
     private TimeProvider _timeProvider;
+    private int _maxFrameSize;
     private int _disposed;
     private int _running;
+    private Task? _disposeTask;
 
     public TcpNetTransport(int maxFrameSize = 64 * 1024, TimeProvider? timeProvider = null)
     {
@@ -25,12 +32,22 @@ public sealed class TcpNetTransport : INetTransport
 
         MaxFrameSize = maxFrameSize;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _disposeToken = _disposeCts.Token;
     }
 
     /// <summary>
     /// 读取 TCP 帧前允许的最大声明长度，应与上层 MaxPacketSize 保持一致。
     /// </summary>
-    public int MaxFrameSize { get; set; }
+    public int MaxFrameSize
+    {
+        get => Volatile.Read(ref _maxFrameSize);
+        set
+        {
+            if (value <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "Max frame size must be greater than zero.");
+            Volatile.Write(ref _maxFrameSize, value);
+        }
+    }
 
     /// <summary>
     /// 用于连接超时的时间源。
@@ -59,31 +76,52 @@ public sealed class TcpNetTransport : INetTransport
     public event Action<TransportError>? Error;
 
     /// <inheritdoc />
-    public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default)
+    public async Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.ObjectDisposed));
+            return new TransportStartResult(NetTransportStatus.ObjectDisposed);
         if (token.IsCancellationRequested)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.Cancelled));
+            return new TransportStartResult(NetTransportStatus.Cancelled);
         if (options.Port < 0 || options.Port > 65535)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.InvalidEndpoint, "Port must be between 0 and 65535."));
-        if (Interlocked.Exchange(ref _running, 1) == 1)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.AlreadyRunning));
+            return new TransportStartResult(NetTransportStatus.InvalidEndpoint, "Port must be between 0 and 65535.");
+        if (options.MaxConnections <= 0)
+            return new TransportStartResult(NetTransportStatus.InvalidEndpoint, "MaxConnections must be greater than zero.");
 
         try
         {
+            await _serverLifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return new TransportStartResult(NetTransportStatus.Cancelled);
+        }
+
+        try
+        {
+            if (IsDisposed)
+                return new TransportStartResult(NetTransportStatus.ObjectDisposed);
+            if (Volatile.Read(ref _running) == 1)
+                return new TransportStartResult(NetTransportStatus.AlreadyRunning);
+
             var bindAddress = options.BindAddress ?? IPAddress.Any;
-            _listener = new TcpListener(bindAddress, options.Port);
-            _listener.Start(options.MaxConnections);
-            LocalEndPoint = (IPEndPoint)_listener.LocalEndpoint;
-            _acceptTask = AcceptLoopAsync(_disposeCts.Token);
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+            var listener = new TcpListener(bindAddress, options.Port);
+            listener.Start(options.MaxConnections);
+            _listener = listener;
+            LocalEndPoint = (IPEndPoint)listener.LocalEndpoint;
+            _acceptCts = CancellationTokenSource.CreateLinkedTokenSource(_disposeToken);
+            _acceptTask = AcceptLoopAsync(listener, options.MaxConnections, _acceptCts.Token);
+            Volatile.Write(ref _running, 1);
+            return new TransportStartResult(NetTransportStatus.Ok);
         }
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
-            Interlocked.Exchange(ref _running, 0);
+            Volatile.Write(ref _running, 0);
             DispatchError(TransportConnectionId.None, ex.Message, ex);
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.TransportFailed, ex.Message));
+            return new TransportStartResult(NetTransportStatus.TransportFailed, ex.Message);
+        }
+        finally
+        {
+            _serverLifecycleGate.Release();
         }
     }
 
@@ -96,16 +134,25 @@ public sealed class TcpNetTransport : INetTransport
             return new TransportConnectResult(NetTransportStatus.Cancelled, TransportConnectionId.None);
         if (string.IsNullOrWhiteSpace(options.Host) || options.Port <= 0 || options.Port > 65535)
             return new TransportConnectResult(NetTransportStatus.InvalidEndpoint, TransportConnectionId.None, "Host and port must be valid.");
+        if (options.Timeout <= TimeSpan.Zero)
+            return new TransportConnectResult(NetTransportStatus.InvalidEndpoint, TransportConnectionId.None, "Timeout must be greater than zero.");
 
         using var timeoutCts = new CancellationTokenSource(options.Timeout, _timeProvider);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token, _disposeCts.Token);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token, _disposeToken);
         var tcpClient = new TcpClient();
 
         try
         {
             await tcpClient.ConnectAsync(options.Host, options.Port, linkedCts.Token).ConfigureAwait(false);
             var connectionId = NextConnectionId();
-            AddConnection(connectionId, tcpClient);
+            if (!TryAddConnection(connectionId, tcpClient, out var connection))
+                return new TransportConnectResult(NetTransportStatus.ObjectDisposed, TransportConnectionId.None);
+            StartReadLoop(connectionId, connection);
+            if (IsDisposed)
+            {
+                await DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                return new TransportConnectResult(NetTransportStatus.ObjectDisposed, TransportConnectionId.None);
+            }
             return new TransportConnectResult(NetTransportStatus.Ok, connectionId);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !token.IsCancellationRequested)
@@ -139,30 +186,27 @@ public sealed class TcpNetTransport : INetTransport
         if (token.IsCancellationRequested)
             return new TransportStartResult(NetTransportStatus.Cancelled);
 
-        _listener?.Stop();
-        _listener = null;
-        LocalEndPoint = null;
-
-        foreach (var connectionId in _connections.Keys.ToArray())
-            await DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
-
-        if (_acceptTask is not null)
+        try
         {
-            try
-            {
-                await _acceptTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (ObjectDisposedException)
-            {
-            }
+            await _serverLifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return new TransportStartResult(NetTransportStatus.Cancelled);
         }
 
-        _acceptTask = null;
-        Interlocked.Exchange(ref _running, 0);
-        return new TransportStartResult(NetTransportStatus.Ok);
+        try
+        {
+            if (IsDisposed)
+                return new TransportStartResult(NetTransportStatus.ObjectDisposed);
+
+            await StopServerCoreAsync(DisconnectReason.ServerClosed).ConfigureAwait(false);
+            return new TransportStartResult(NetTransportStatus.Ok);
+        }
+        finally
+        {
+            _serverLifecycleGate.Release();
+        }
     }
 
     /// <inheritdoc />
@@ -171,6 +215,9 @@ public sealed class TcpNetTransport : INetTransport
         if (_connections.TryRemove(connectionId, out var connection))
         {
             connection.Dispose();
+            if (!ReferenceEquals(CurrentReadConnection.Value, connection))
+                return DispatchDisconnectedAfterReadLoopAsync(connectionId, connection, reason);
+
             DispatchPeerDisconnected(connectionId, reason);
         }
 
@@ -218,22 +265,54 @@ public sealed class TcpNetTransport : INetTransport
     }
 
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
-            return;
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                Volatile.Write(ref _disposed, 1);
+                _disposeTask = Task.Run(DisposeCoreAsync);
+            }
 
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         _disposeCts.Cancel();
-        _listener?.Stop();
+        try
+        {
+            await _serverLifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await StopServerCoreAsync(DisconnectReason.LocalClosed).ConfigureAwait(false);
+            }
+            finally
+            {
+                _serverLifecycleGate.Release();
+            }
+        }
+        finally
+        {
+            _disposeCts.Dispose();
+        }
+    }
 
-        foreach (var connectionId in _connections.Keys.ToArray())
-            await DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+    private async Task StopServerCoreAsync(DisconnectReason reason)
+    {
+        var acceptCancellation = Interlocked.Exchange(ref _acceptCts, null);
+        var listener = Interlocked.Exchange(ref _listener, null);
+        var acceptTask = Interlocked.Exchange(ref _acceptTask, null);
+        acceptCancellation?.Cancel();
+        listener?.Stop();
 
-        if (_acceptTask is not null)
+        if (acceptTask is not null)
         {
             try
             {
-                await _acceptTask.ConfigureAwait(false);
+                await acceptTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -243,17 +322,22 @@ public sealed class TcpNetTransport : INetTransport
             }
         }
 
-        _disposeCts.Dispose();
+        foreach (var connectionId in _connections.Keys.ToArray())
+            await DisconnectAsync(connectionId, reason).ConfigureAwait(false);
+
+        acceptCancellation?.Dispose();
+        LocalEndPoint = null;
+        Volatile.Write(ref _running, 0);
     }
 
-    private async Task AcceptLoopAsync(CancellationToken token)
+    private async Task AcceptLoopAsync(TcpListener listener, int maxConnections, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
             TcpClient client;
             try
             {
-                client = await _listener!.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                client = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -265,21 +349,81 @@ public sealed class TcpNetTransport : INetTransport
             }
             catch (Exception ex)
             {
+                if (token.IsCancellationRequested)
+                    return;
+
                 DispatchError(TransportConnectionId.None, ex.Message, ex);
                 continue;
             }
 
+            if (token.IsCancellationRequested)
+            {
+                client.Dispose();
+                return;
+            }
+
+            if (_connections.Count >= maxConnections)
+            {
+                client.Dispose();
+                continue;
+            }
+
             var connectionId = NextConnectionId();
-            AddConnection(connectionId, client);
+            if (!TryAddConnection(connectionId, client, out var connection))
+                return;
+            StartReadLoop(connectionId, connection);
             DispatchPeerConnected(connectionId);
         }
     }
 
-    private void AddConnection(TransportConnectionId connectionId, TcpClient client)
+    private bool TryAddConnection(TransportConnectionId connectionId, TcpClient client, out TcpConnection connection)
     {
-        var connection = new TcpConnection(client);
-        _connections[connectionId] = connection;
-        _ = Task.Run(() => ReadLoopAsync(connectionId, connection, _disposeCts.Token));
+        lock (_disposeGate)
+        {
+            if (IsDisposed)
+            {
+                client.Dispose();
+                connection = null!;
+                return false;
+            }
+
+            connection = new TcpConnection(client);
+            _connections[connectionId] = connection;
+            return true;
+        }
+    }
+
+    private void StartReadLoop(TransportConnectionId connectionId, TcpConnection connection)
+    {
+        var readTask = Task.Run(async () =>
+        {
+            CurrentReadConnection.Value = connection;
+            try
+            {
+                await ReadLoopAsync(connectionId, connection, _disposeToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                CurrentReadConnection.Value = null;
+            }
+        });
+        connection.SetReadTask(readTask);
+    }
+
+    private async Task DispatchDisconnectedAfterReadLoopAsync(TransportConnectionId connectionId, TcpConnection connection, DisconnectReason reason)
+    {
+        try
+        {
+            await connection.ReadTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        DispatchPeerDisconnected(connectionId, reason);
     }
 
     private async Task ReadLoopAsync(TransportConnectionId connectionId, TcpConnection connection, CancellationToken token)
@@ -307,10 +451,11 @@ public sealed class TcpNetTransport : INetTransport
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or InvalidDataException)
         {
             if (_connections.TryRemove(connectionId, out var removed))
+            {
                 removed.Dispose();
-
-            DispatchError(connectionId, ex.Message, ex);
-            DispatchPeerDisconnected(connectionId, ex is InvalidDataException ? DisconnectReason.TransportFailed : DisconnectReason.RemoteClosed);
+                DispatchError(connectionId, ex.Message, ex);
+                DispatchPeerDisconnected(connectionId, ex is InvalidDataException ? DisconnectReason.TransportFailed : DisconnectReason.RemoteClosed);
+            }
         }
     }
 
@@ -357,22 +502,84 @@ public sealed class TcpNetTransport : INetTransport
 
     private void DispatchPeerConnected(TransportConnectionId connectionId)
     {
-        Task.Run(() => PeerConnected?.Invoke(new TransportPeerConnected(connectionId)));
+        var callbacks = PeerConnected?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var message = new TransportPeerConnected(connectionId);
+        foreach (Action<TransportPeerConnected> callback in callbacks)
+        {
+            try
+            {
+                callback(message);
+            }
+            catch (Exception ex)
+            {
+                DispatchError(connectionId, "PeerConnected handler failed.", ex);
+            }
+        }
     }
 
     private void DispatchPeerDisconnected(TransportConnectionId connectionId, DisconnectReason reason)
     {
-        Task.Run(() => PeerDisconnected?.Invoke(new TransportPeerDisconnected(connectionId, reason)));
+        var callbacks = PeerDisconnected?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var message = new TransportPeerDisconnected(connectionId, reason);
+        foreach (Action<TransportPeerDisconnected> callback in callbacks)
+        {
+            try
+            {
+                callback(message);
+            }
+            catch (Exception ex)
+            {
+                DispatchError(connectionId, "PeerDisconnected handler failed.", ex);
+            }
+        }
     }
 
     private void DispatchPacketReceived(TransportConnectionId connectionId, byte[] data, NetChannel channel)
     {
-        PacketReceived?.Invoke(new TransportPacketReceived(connectionId, data, channel));
+        var callbacks = PacketReceived?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var message = new TransportPacketReceived(connectionId, data, channel);
+        foreach (Action<TransportPacketReceived> callback in callbacks)
+        {
+            try
+            {
+                callback(message);
+            }
+            catch (Exception ex)
+            {
+                DispatchError(connectionId, "PacketReceived handler failed.", ex);
+            }
+        }
     }
 
     private void DispatchError(TransportConnectionId connectionId, string message, Exception? exception = null)
     {
-        Task.Run(() => Error?.Invoke(new TransportError(connectionId, message, exception)));
+        var callbacks = Error?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var error = new TransportError(connectionId, message, exception);
+        _ = Task.Run(() =>
+        {
+            foreach (Action<TransportError> callback in callbacks)
+            {
+                try
+                {
+                    callback(error);
+                }
+                catch
+                {
+                }
+            }
+        });
     }
 
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
@@ -380,6 +587,7 @@ public sealed class TcpNetTransport : INetTransport
     private sealed class TcpConnection : IDisposable
     {
         private readonly TcpClient _client;
+        private readonly TaskCompletionSource<Task> _readTaskReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TcpConnection(TcpClient client)
         {
@@ -389,6 +597,12 @@ public sealed class TcpNetTransport : INetTransport
 
         public NetworkStream Stream { get; }
         public SemaphoreSlim WriteLock { get; } = new(1, 1);
+        public Task ReadTask => _readTaskReady.Task.Unwrap();
+
+        public void SetReadTask(Task readTask)
+        {
+            _readTaskReady.TrySetResult(readTask);
+        }
 
         public void Dispose()
         {

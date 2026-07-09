@@ -28,6 +28,9 @@ public sealed record LateMessage(int Value);
 [NetMessage("handler.check")]
 public sealed record HandlerCheck(int Value);
 
+[NetMessage("ordered.message")]
+public sealed record OrderedMessage(int Sequence);
+
 [NetMessage("join.room.request")]
 public sealed record JoinRoomRequest(string RoomId);
 
@@ -103,6 +106,44 @@ public sealed class RuntimeAsyncAttributedHandlers
         RuntimeAttributedHandlers.AsyncRequestStarted.TrySetResult(request);
         await Task.Yield();
         return new AttributeResponse(request.Value + 10);
+    }
+}
+
+public sealed class RuntimeInstanceAttributedHandlers
+{
+    [NetHandler(typeof(AttributeMessage))]
+    public void HandleMessage(NetContext context, AttributeMessage message)
+    {
+    }
+}
+
+public sealed class RuntimeMultiMethodInstanceHandlers
+{
+    [NetHandler(typeof(AttributeMessage))]
+    public void HandleAttribute(NetContext context, AttributeMessage message)
+    {
+    }
+
+    [NetHandler(typeof(ScanAlpha))]
+    public void HandleScan(NetContext context, ScanAlpha message)
+    {
+    }
+}
+
+public static class RuntimeInvalidSignatureHandlers
+{
+    [NetHandler(typeof(AttributeMessage))]
+    public static void HandleMessage(AttributeMessage message)
+    {
+    }
+}
+
+public static class RuntimeAsyncVoidHandlers
+{
+    [NetHandler(typeof(AttributeMessage))]
+    public static async void HandleMessage(NetContext context, AttributeMessage message)
+    {
+        await Task.Yield();
     }
 }
 
@@ -188,6 +229,37 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task HandlerRegistration_ConcurrentWithDispatch_RemainsStable()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var handled = 0;
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        server.On<PlayerReady>((_, _) => Interlocked.Increment(ref handled));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        Assert.That((await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 })).Status,
+            Is.EqualTo(NetSessionStatus.Ok));
+
+        var registerTask = Task.Run(() =>
+        {
+            for (var i = 0; i < 100; i++)
+                server.On<PlayerReady>((_, _) => Interlocked.Increment(ref handled));
+        });
+        var sends = Enumerable.Range(0, 100)
+            .Select(_ => client.SendToServerAsync(new PlayerReady(true)).AsTask())
+            .ToArray();
+
+        await registerTask;
+        var results = await Task.WhenAll(sends);
+        Assert.That(results.All(result => result.Status == NetSendStatus.Ok), Is.True);
+        Assert.That(Volatile.Read(ref handled), Is.GreaterThanOrEqualTo(100));
+    }
+
+    [Test]
     public async Task ConfiguredEventDispatcher_ReceivesMessageHandlerCallbacks()
     {
         var appId = Guid.NewGuid();
@@ -220,6 +292,16 @@ public class NetMessagingTests
         var ex = Assert.Throws<InvalidOperationException>(() => registry.Register<DuplicatePlayerReady>());
 
         Assert.That(ex!.Message, Does.Contain("player.ready"));
+    }
+
+    [Test]
+    public void RegisterNullMessageType_ThrowsArgumentNullException()
+    {
+        var registry = new NetMessageRegistry();
+
+        var ex = Assert.Throws<ArgumentNullException>(() => registry.Register(null!));
+
+        Assert.That(ex!.ParamName, Is.EqualTo("messageType"));
     }
 
     [Test]
@@ -311,6 +393,30 @@ public class NetMessagingTests
         var send = await server.SendAsync(new PeerId(999), new PlayerReady(true));
 
         Assert.That(send.Status, Is.EqualTo(NetSendStatus.PeerUnavailable));
+    }
+
+    [Test]
+    public async Task SendLimitState_IsRemovedWhenPeerLeaves()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        Assert.That((await server.SendAsync(join.PeerId, new PlayerReady(true))).Status, Is.EqualTo(NetSendStatus.Ok));
+
+        await client.LeaveAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        while (server.Peers.Peers.Any(peer => peer.PeerId == join.PeerId))
+            await Task.Delay(10, timeout.Token);
+
+        var limits = typeof(NetMessenger)
+            .GetField("_sendLimits", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(server.Messages)!;
+        Assert.That((int)limits.GetType().GetProperty("Count")!.GetValue(limits)!, Is.Zero);
     }
 
     [Test]
@@ -428,6 +534,151 @@ public class NetMessagingTests
         Assert.That(send.Status, Is.EqualTo(NetSendStatus.Ok));
         Assert.That(calls, Is.EqualTo(new[] { 1, 3 }));
         Assert.That(server.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ReliableMessages_AreHandledInReceiveOrder()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var received = new List<int>();
+
+        server.Messages.RegisterMessage<OrderedMessage>();
+        client.Messages.RegisterMessage<OrderedMessage>();
+        server.On<OrderedMessage>(async (_, message) =>
+        {
+            if (message.Sequence == 1)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task;
+            }
+
+            lock (received)
+            {
+                received.Add(message.Sequence);
+                if (received.Count == 2)
+                    completed.TrySetResult();
+            }
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await client.SendToServerAsync(new OrderedMessage(1));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await client.SendToServerAsync(new OrderedMessage(2));
+        await Task.Delay(50);
+
+        lock (received)
+            Assert.That(received, Is.Empty);
+
+        releaseFirst.TrySetResult();
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        lock (received)
+            Assert.That(received, Is.EqualTo(new[] { 1, 2 }));
+    }
+
+    [Test]
+    public async Task AsyncDispatcher_WaitsForEachHandlerBeforePostingTheNext()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, new TaskRunDispatcher()));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterMessage<HandlerCheck>();
+        client.Messages.RegisterMessage<HandlerCheck>();
+        server.On<HandlerCheck>(async (_, _) =>
+        {
+            firstStarted.TrySetResult();
+            await releaseFirst.Task;
+        });
+        server.On<HandlerCheck>((_, _) => secondRan.TrySetResult());
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        await client.SendToServerAsync(new HandlerCheck(1));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await Task.Delay(50);
+
+        Assert.That(secondRan.Task.IsCompleted, Is.False);
+
+        releaseFirst.TrySetResult();
+        await secondRan.Task.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task ConfiguredEventDispatcher_ReceivesRequestHandlerCallbacks()
+    {
+        var appId = Guid.NewGuid();
+        var dispatcher = new InlineCountingDispatcher();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId, dispatcher));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, request) =>
+            new JoinRoomResponse(true, request.RoomId));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        var postsBeforeRequest = dispatcher.PostCount;
+
+        var result = await client.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            PeerId.Server,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(dispatcher.PostCount, Is.EqualTo(postsBeforeRequest + 1));
+    }
+
+    [Test]
+    public async Task AsyncMessageHandler_CanAwaitRequestOnTheSameConnection()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        var handled = new TaskCompletionSource<NetRequestResult<JoinRoomResponse>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.Messages.RegisterMessage<PlayerReady>();
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        client.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, request) =>
+            new JoinRoomResponse(true, request.RoomId));
+        server.On<PlayerReady>(async (context, _) =>
+        {
+            var response = await server.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+                context.SenderId,
+                new JoinRoomRequest("room-1"),
+                TimeSpan.FromMilliseconds(200));
+            handled.TrySetResult(response);
+        });
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        await client.SendToServerAsync(new PlayerReady(true));
+        var result = await handled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Ok));
+        Assert.That(result.Response?.Reason, Is.EqualTo("room-1"));
     }
 
     [Test]
@@ -667,6 +918,33 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task BroadcastAsync_WhenOneTargetFails_StillAttemptsRemainingTargets()
+    {
+        var failedTarget = new PeerId(2);
+        var successfulTarget = new PeerId(3);
+        var attemptedTargets = new List<PeerId>();
+        var diagnostics = new NetDiagnostics();
+        var messenger = CreateMessenger(
+            diagnostics,
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            (peerId, _) =>
+            {
+                attemptedTargets.Add(peerId);
+                return new ValueTask<NetSendResult>(peerId == failedTarget
+                    ? new NetSendResult(NetSendStatus.PeerUnavailable, "Peer unavailable.")
+                    : NetSendResult.Ok());
+            },
+            new[] { failedTarget, successfulTarget });
+        messenger.RegisterMessage<PlayerReady>();
+
+        var broadcast = await messenger.BroadcastAsync(new PlayerReady(true));
+
+        Assert.That(broadcast.Status, Is.EqualTo(NetSendStatus.PeerUnavailable));
+        Assert.That(attemptedTargets, Is.EqualTo(new[] { failedTarget, successfulTarget }));
+        Assert.That(diagnostics.GetSnapshot().PacketsSent, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task RelayAsync_WhenServerQueueIsFull_ReturnsSendQueueFull()
     {
         var diagnostics = new NetDiagnostics();
@@ -810,6 +1088,140 @@ public class NetMessagingTests
         Assert.That((await RuntimeAttributedHandlers.AsyncRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(1))).Value, Is.EqualTo(5));
         Assert.That(response.Status, Is.EqualTo(NetRequestStatus.Ok));
         Assert.That(response.Response!.Value, Is.EqualTo(15));
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_WithMissingInstanceTarget_FailsDuringRegistration()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+
+        Assert.Throws<InvalidOperationException>(() => messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeInstanceAttributedHandlers).Assembly,
+            typeFilter: type => type == typeof(RuntimeInstanceAttributedHandlers)));
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_WithInvalidFactoryTarget_FailsDuringRegistration()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+
+        Assert.Throws<InvalidOperationException>(() => messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeInstanceAttributedHandlers).Assembly,
+            targetFactory: _ => new object(),
+            typeFilter: type => type == typeof(RuntimeInstanceAttributedHandlers)));
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_RepeatedScan_IsIdempotent()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+
+        messenger.RegisterAssemblyHandlers(typeof(RuntimeAttributedHandlers).Assembly, typeFilter: IsRuntimeAttributedFixtureType);
+
+        Assert.DoesNotThrow(() => messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeAttributedHandlers).Assembly,
+            typeFilter: IsRuntimeAttributedFixtureType));
+        Assert.That(messenger.Registry.HandlerDescriptors, Has.Count.EqualTo(1));
+        Assert.That(messenger.Registry.RequestHandlerDescriptors, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_InvalidSignature_FailsDuringRegistration()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+
+        Assert.Throws<InvalidOperationException>(() => messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeInvalidSignatureHandlers).Assembly,
+            typeFilter: type => type == typeof(RuntimeInvalidSignatureHandlers)));
+        Assert.That(messenger.Registry.HandlerDescriptors, Is.Empty);
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_AsyncVoidHandler_FailsDuringRegistration()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+
+        Assert.Throws<InvalidOperationException>(() => messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeAsyncVoidHandlers).Assembly,
+            typeFilter: type => type == typeof(RuntimeAsyncVoidHandlers)));
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_TargetFactoryCreatesOneInstancePerHandlerType()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+        var factoryCalls = 0;
+
+        messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeMultiMethodInstanceHandlers).Assembly,
+            targetFactory: _ =>
+            {
+                factoryCalls++;
+                return new RuntimeMultiMethodInstanceHandlers();
+            },
+            typeFilter: type => type == typeof(RuntimeMultiMethodInstanceHandlers));
+
+        Assert.That(factoryCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void RegisterAssemblyHandlers_WhenPreflightFails_DoesNotPartiallyMutateRegistry()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+        messenger.OnRequest<AttributeRequest, AttributeResponse>((_, request) =>
+            new AttributeResponse(request.Value));
+
+        Assert.Throws<InvalidOperationException>(() => messenger.RegisterAssemblyHandlers(
+            typeof(RuntimeAttributedHandlers).Assembly,
+            typeFilter: IsRuntimeAttributedFixtureType));
+        Assert.That(messenger.Registry.HandlerDescriptors, Is.Empty);
+        Assert.That(messenger.Registry.RequestHandlerDescriptors, Is.Empty);
+    }
+
+    [Test]
+    public void OnRequest_DuplicateHandler_DoesNotMutateProtocolRegistry()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+        messenger.OnRequest<AttributeRequest, AttributeResponse>((_, request) =>
+            new AttributeResponse(request.Value));
+        var fingerprint = messenger.Registry.GetFingerprint();
+
+        Assert.Throws<InvalidOperationException>(() => messenger.OnRequest<AttributeRequest, ScanBeta>(
+            (_, request) => new ScanBeta(request.Value)));
+
+        Assert.That(messenger.Registry.GetFingerprint(), Is.EqualTo(fingerprint));
+        Assert.That(messenger.Registry.Contains(typeof(ScanBeta)), Is.False);
+    }
+
+    [Test]
+    public void OnRequest_WhenResponseRegistrationFails_RollsBackRequestType()
+    {
+        var messenger = CreateMessenger(
+            new NetDiagnostics(),
+            _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
+        var fingerprint = messenger.Registry.GetFingerprint();
+
+        Assert.Throws<InvalidOperationException>(() => messenger.OnRequest<ScanAlpha, MissingMessageAttribute>(
+            (_, request) => new MissingMessageAttribute(request.Value)));
+
+        Assert.That(messenger.Registry.GetFingerprint(), Is.EqualTo(fingerprint));
+        Assert.That(messenger.Registry.Contains(typeof(ScanAlpha)), Is.False);
     }
 
     [Test]
@@ -963,11 +1375,14 @@ public class NetMessagingTests
         await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
 
         await server.HostAsync(new HostOptions { Port = 7777 });
+        var fingerprint = server.Messages.Registry.GetFingerprint();
 
         Assert.Throws<InvalidOperationException>(() => server.Messages.RegisterMessage<PlayerReady>());
+        Assert.Throws<InvalidOperationException>(() => server.Messages.Registry.Register<LateMessage>());
         Assert.Throws<InvalidOperationException>(() => server.On<PlayerReady>((_, _) => { }));
         Assert.Throws<InvalidOperationException>(() =>
             server.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) => new JoinRoomResponse(true, string.Empty)));
+        Assert.That(server.Messages.Registry.GetFingerprint(), Is.EqualTo(fingerprint));
     }
 
     [Test]
@@ -1354,6 +1769,41 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task RequestAsync_CancellationInterruptsBlockedSend()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var serverTransport = new CancellableBlockingSendTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(serverTransport, Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        using var cancellation = new CancellationTokenSource();
+
+        server.Messages.RegisterMessage<JoinRoomRequest>();
+        server.Messages.RegisterMessage<JoinRoomResponse>();
+        client.Messages.RegisterMessage<JoinRoomRequest>();
+        client.Messages.RegisterMessage<JoinRoomResponse>();
+        client.OnRequest<JoinRoomRequest, JoinRoomResponse>((_, _) =>
+            new JoinRoomResponse(true, string.Empty));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        serverTransport.BlockSends = true;
+
+        var request = server.RequestAsync<JoinRoomRequest, JoinRoomResponse>(
+            join.PeerId,
+            new JoinRoomRequest("room-1"),
+            TimeSpan.FromSeconds(30),
+            cancellation.Token);
+        await serverTransport.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        var completed = await Task.WhenAny(request, Task.Delay(200));
+        serverTransport.ReleaseSend.TrySetResult();
+        var result = await request.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(completed, Is.SameAs(request));
+        Assert.That(result.Status, Is.EqualTo(NetRequestStatus.Cancelled));
+    }
+
+    [Test]
     public async Task RequestAsync_ReconnectEnabledPeerDisconnect_CompletesSessionClosed()
     {
         var appId = Guid.NewGuid();
@@ -1454,8 +1904,10 @@ public class NetMessagingTests
         INetCodec codec = null)
     {
         return new NetMessenger(
-            sendToServer,
-            sendToPeer ?? ((_, _) => new ValueTask<NetSendResult>(NetSendResult.Ok())),
+            (data, _) => sendToServer(data),
+            sendToPeer is null
+                ? ((_, _, _) => new ValueTask<NetSendResult>(NetSendResult.Ok()))
+                : ((peerId, data, _) => sendToPeer(peerId, data)),
             () => broadcastTargets ?? Array.Empty<PeerId>(),
             diagnostics,
             maxPacketSize,
@@ -1494,6 +1946,63 @@ public class NetMessagingTests
         }
     }
 
+    private sealed class CancellableBlockingSendTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public CancellableBlockingSendTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public bool BlockSends { get; set; }
+        public TaskCompletionSource SendStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSend { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            _inner.ConnectAsync(options, token);
+
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            _inner.StopServerAsync(token);
+
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            _inner.DisconnectAsync(connectionId, reason);
+
+        public async ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
+        {
+            if (BlockSends)
+            {
+                SendStarted.TrySetResult();
+                try
+                {
+                    await ReleaseSend.Task.WaitAsync(token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return new NetSendResult(NetSendStatus.TransportFailed, "Send was cancelled.");
+                }
+            }
+
+            return await _inner.SendAsync(connectionId, data, channel, token);
+        }
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
     private sealed class InlineCountingDispatcher : INetEventDispatcher
     {
         public int PostCount { get; private set; }
@@ -1502,6 +2011,14 @@ public class NetMessagingTests
         {
             PostCount++;
             action();
+        }
+    }
+
+    private sealed class TaskRunDispatcher : INetEventDispatcher
+    {
+        public void Post(Action action)
+        {
+            _ = Task.Run(action);
         }
     }
 }

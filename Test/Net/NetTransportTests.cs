@@ -40,6 +40,23 @@ public class NetTransportTests
     }
 
     [Test]
+    public async Task MemoryTransport_ThrowingConnectedHandler_DoesNotBreakConnect()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        await using var client = network.CreateTransport("client");
+        var laterHandlerRan = false;
+        server.PeerConnected += _ => throw new InvalidOperationException("handler failed");
+        server.PeerConnected += _ => laterHandlerRan = true;
+
+        await server.StartServerAsync(new NetListenOptions { Port = 7777 });
+        var connect = await client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 });
+
+        Assert.That(connect.Status, Is.EqualTo(NetTransportStatus.Ok));
+        Assert.That(laterHandlerRan, Is.True);
+    }
+
+    [Test]
     public async Task MemoryTransport_SendsMultiplePacketsInOrder()
     {
         var network = new MemoryNetNetwork();
@@ -108,16 +125,38 @@ public class NetTransportTests
         cts.Cancel();
 
         var invalidStart = await transport.StartServerAsync(new NetListenOptions { Port = 0 });
+        var invalidHighPort = await transport.StartServerAsync(new NetListenOptions { Port = 65536 });
+        var invalidMaxConnections = await transport.StartServerAsync(new NetListenOptions { Port = 7777, MaxConnections = 0 });
         var invalidConnect = await transport.ConnectAsync(new NetConnectOptions { Host = "", Port = 7777 });
+        var invalidHighPortConnect = await transport.ConnectAsync(new NetConnectOptions { Host = "server", Port = 65536 });
         var cancelledStart = await transport.StartServerAsync(new NetListenOptions { Port = 7777 }, cts.Token);
         var cancelledConnect = await transport.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 }, cts.Token);
         var cancelledSend = await transport.SendAsync(new TransportConnectionId(99), new byte[] { 1 }, NetChannel.Reliable, cts.Token);
 
         Assert.That(invalidStart.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
+        Assert.That(invalidHighPort.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
+        Assert.That(invalidMaxConnections.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
         Assert.That(invalidConnect.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
+        Assert.That(invalidHighPortConnect.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
         Assert.That(cancelledStart.Status, Is.EqualTo(NetTransportStatus.Cancelled));
         Assert.That(cancelledConnect.Status, Is.EqualTo(NetTransportStatus.Cancelled));
         Assert.That(cancelledSend.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+    }
+
+    [Test]
+    public async Task MemoryTransport_MaxConnections_RefusesAdditionalClient()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        await using var first = network.CreateTransport("first");
+        await using var second = network.CreateTransport("second");
+
+        await server.StartServerAsync(new NetListenOptions { Port = 7777, MaxConnections = 1 });
+        var firstConnect = await first.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 });
+        var secondConnect = await second.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 });
+
+        Assert.That(firstConnect.Status, Is.EqualTo(NetTransportStatus.Ok));
+        Assert.That(secondConnect.Status, Is.EqualTo(NetTransportStatus.ConnectionRefused));
     }
 
     [Test]
@@ -127,8 +166,10 @@ public class NetTransportTests
         await using var server = network.CreateTransport("server");
         await using var client = network.CreateTransport("client");
         var disconnected = new TaskCompletionSource<TransportPeerDisconnected>();
+        var localDisconnected = new TaskCompletionSource<TransportPeerDisconnected>();
 
         server.PeerDisconnected += e => disconnected.TrySetResult(e);
+        client.PeerDisconnected += e => localDisconnected.TrySetResult(e);
 
         await server.StartServerAsync(new NetListenOptions { Port = 7777 });
         var connect = await client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 });
@@ -138,6 +179,36 @@ public class NetTransportTests
         var disconnect = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.That(disconnect.ConnectionId, Is.Not.EqualTo(TransportConnectionId.None));
         Assert.That(disconnect.Reason, Is.EqualTo(DisconnectReason.RemoteClosed));
+        var localDisconnect = await localDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(localDisconnect.ConnectionId, Is.EqualTo(connect.ConnectionId));
+        Assert.That(localDisconnect.Reason, Is.EqualTo(DisconnectReason.LocalClosed));
+    }
+
+    [Test]
+    public async Task MemoryTransport_ImmediateDisconnect_PublishesConnectedBeforeDisconnected()
+    {
+        for (var attempt = 0; attempt < 500; attempt++)
+        {
+            var network = new MemoryNetNetwork();
+            await using var server = network.CreateTransport("server");
+            await using var client = network.CreateTransport("client");
+            var events = new List<string>();
+            var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.PeerConnected += _ => { lock (events) events.Add("connected"); };
+            server.PeerDisconnected += _ =>
+            {
+                lock (events) events.Add("disconnected");
+                disconnected.TrySetResult();
+            };
+
+            await server.StartServerAsync(new NetListenOptions { Port = 7777 });
+            var connect = await client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 });
+            await client.DisconnectAsync(connect.ConnectionId);
+            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            lock (events)
+                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected" }), $"Attempt {attempt}");
+        }
     }
 
     [Test]
@@ -184,6 +255,178 @@ public class NetTransportTests
     }
 
     [Test]
+    public async Task MemoryTransport_ConcurrentConnectAndStop_NeverLeavesUsableStaleConnection()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        await using var client = network.CreateTransport("client");
+        var staleConnectionObserved = false;
+
+        for (var iteration = 0; iteration < 2000 && !staleConnectionObserved; iteration++)
+        {
+            Assert.That((await server.StartServerAsync(new NetListenOptions { Port = 7777 })).Status,
+                Is.EqualTo(NetTransportStatus.Ok));
+            using var start = new Barrier(2);
+            var connectTask = Task.Run(async () =>
+            {
+                start.SignalAndWait();
+                return await client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 });
+            });
+            var stopTask = Task.Run(async () =>
+            {
+                start.SignalAndWait();
+                return await server.StopServerAsync();
+            });
+
+            var connect = await connectTask;
+            Assert.That((await stopTask).Status, Is.EqualTo(NetTransportStatus.Ok));
+            if (connect.Status != NetTransportStatus.Ok)
+                continue;
+
+            var send = await client.SendAsync(connect.ConnectionId, new byte[] { 1 }, NetChannel.Reliable);
+            staleConnectionObserved = send.Succeeded;
+            await client.DisconnectAsync(connect.ConnectionId);
+        }
+
+        Assert.That(staleConnectionObserved, Is.False);
+    }
+
+    [Test]
+    public async Task MemoryTransport_ConnectAndStop_PublishConnectedBeforeDisconnected()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        await using var client = network.CreateTransport("client");
+        var connectedDispatchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConnectedDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        server.PeerConnected += _ =>
+        {
+            connectedDispatchStarted.TrySetResult();
+            releaseConnectedDispatch.Task.GetAwaiter().GetResult();
+        };
+        server.PeerConnected += _ =>
+        {
+            lock (events) events.Add("connected");
+        };
+        server.PeerDisconnected += _ =>
+        {
+            lock (events) events.Add("disconnected");
+        };
+        await server.StartServerAsync(new NetListenOptions { Port = 7777 });
+
+        var connectTask = Task.Run(() => client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 }));
+        await connectedDispatchStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var stopTask = server.StopServerAsync();
+        await Task.Delay(50);
+        releaseConnectedDispatch.TrySetResult();
+        await connectTask;
+        await stopTask;
+
+        lock (events)
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected" }));
+    }
+
+    [Test]
+    public async Task MemoryTransport_ConnectRacingClientDispose_DoesNotReturnStaleSuccess()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        var client = network.CreateTransport("client");
+        var connectedDispatchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConnectedDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.PeerConnected += _ =>
+        {
+            connectedDispatchStarted.TrySetResult();
+            releaseConnectedDispatch.Task.GetAwaiter().GetResult();
+        };
+        await server.StartServerAsync(new NetListenOptions { Port = 7777 });
+
+        var connectTask = Task.Run(() => client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 }));
+        await connectedDispatchStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var disposeTask = client.DisposeAsync().AsTask();
+        releaseConnectedDispatch.TrySetResult();
+
+        var connect = await connectTask;
+        await disposeTask;
+        Assert.That(connect.Status, Is.EqualTo(NetTransportStatus.ObjectDisposed));
+    }
+
+    [Test]
+    public async Task MemoryTransport_PeerConnectedHandlerCanSynchronouslyRejectConnection()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        await using var client = network.CreateTransport("client");
+        server.PeerConnected += connected =>
+            server.DisconnectAsync(connected.ConnectionId).GetAwaiter().GetResult();
+        await server.StartServerAsync(new NetListenOptions { Port = 7777 });
+
+        var connect = await client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 })
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(connect.Status, Is.EqualTo(NetTransportStatus.ConnectionRefused));
+    }
+
+    [Test]
+    public async Task MemoryTransport_ConcurrentDisposeCallersShareCompletion()
+    {
+        var network = new MemoryNetNetwork();
+        await using var server = network.CreateTransport("server");
+        var client = network.CreateTransport("client");
+        var connectedDispatchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConnectedDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.PeerConnected += _ =>
+        {
+            connectedDispatchStarted.TrySetResult();
+            releaseConnectedDispatch.Task.GetAwaiter().GetResult();
+        };
+        await server.StartServerAsync(new NetListenOptions { Port = 7777 });
+        var connectTask = Task.Run(() => client.ConnectAsync(new NetConnectOptions { Host = "server", Port = 7777 }));
+        await connectedDispatchStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var first = client.DisposeAsync().AsTask();
+        var second = client.DisposeAsync().AsTask();
+        try
+        {
+            Assert.That(first.IsCompleted, Is.False);
+            Assert.That(second.IsCompleted, Is.False);
+        }
+        finally
+        {
+            releaseConnectedDispatch.TrySetResult();
+        }
+        await Task.WhenAll(first, second, connectTask);
+    }
+
+    [Test]
+    public async Task MemoryTransport_ConcurrentStartAndDispose_ReleasesEndpointForReplacement()
+    {
+        for (var attempt = 0; attempt < 2000; attempt++)
+        {
+            var network = new MemoryNetNetwork();
+            var transport = network.CreateTransport("server");
+            using var barrier = new Barrier(2);
+            var startTask = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                return transport.StartServerAsync(new NetListenOptions { Port = 7777 });
+            });
+            var disposeTask = Task.Run(async () =>
+            {
+                barrier.SignalAndWait();
+                await transport.DisposeAsync();
+            });
+
+            await Task.WhenAll(startTask, disposeTask);
+
+            await using var replacement = network.CreateTransport("server");
+            var replacementStart = await replacement.StartServerAsync(new NetListenOptions { Port = 7777 });
+            Assert.That(replacementStart.Status, Is.EqualTo(NetTransportStatus.Ok), $"Attempt {attempt}");
+        }
+    }
+
+    [Test]
     public async Task TcpTransport_SendsMultiplePacketsWithoutFrameCorruption()
     {
         await using var server = new TcpNetTransport();
@@ -221,11 +464,164 @@ public class NetTransportTests
     }
 
     [Test]
+    public async Task TcpTransport_StopDuringAcceptRace_CompletesAndCanRestart()
+    {
+        await using var server = new TcpNetTransport();
+
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            var start = await server.StartServerAsync(new NetListenOptions
+            {
+                BindAddress = IPAddress.Loopback,
+                Port = 0
+            });
+            Assert.That(start.Status, Is.EqualTo(NetTransportStatus.Ok));
+
+            using var client = new TcpClient();
+            var connect = client.ConnectAsync(IPAddress.Loopback, server.LocalEndPoint!.Port);
+            var stop = server.StopServerAsync();
+            try
+            {
+                await connect.WaitAsync(TimeSpan.FromSeconds(1));
+            }
+            catch (Exception ex) when (ex is SocketException or TimeoutException)
+            {
+            }
+
+            var stopped = await stop.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.That(stopped.Status, Is.EqualTo(NetTransportStatus.Ok));
+        }
+    }
+
+    [Test]
+    public async Task TcpTransport_ConcurrentStartAndDispose_NeverLeavesListenerRunning()
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            var port = GetUnusedLoopbackPort();
+            var transport = new TcpNetTransport();
+            using var barrier = new Barrier(2);
+            var startTask = Task.Run(async () =>
+            {
+                barrier.SignalAndWait();
+                return await transport.StartServerAsync(new NetListenOptions
+                {
+                    BindAddress = IPAddress.Loopback,
+                    Port = port
+                });
+            });
+            var disposeTask = Task.Run(async () =>
+            {
+                barrier.SignalAndWait();
+                await transport.DisposeAsync();
+            });
+
+            await Task.WhenAll(startTask, disposeTask).WaitAsync(TimeSpan.FromSeconds(2));
+
+            var probe = new TcpListener(IPAddress.Loopback, port);
+            try
+            {
+                probe.Start();
+            }
+            finally
+            {
+                probe.Stop();
+            }
+        }
+    }
+
+    [Test]
+    public async Task TcpTransport_ConnectRacingStop_LeavesNoAcceptedConnections()
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            await using var server = new TcpNetTransport();
+            using var client = new TcpClient();
+            await server.StartServerAsync(new NetListenOptions
+            {
+                BindAddress = IPAddress.Loopback,
+                Port = 0
+            });
+            var port = server.LocalEndPoint!.Port;
+            using var connectCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+            using var barrier = new Barrier(2);
+            var connectTask = Task.Run(async () =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    await client.ConnectAsync(IPAddress.Loopback, port, connectCancellation.Token);
+                }
+                catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+                {
+                }
+            });
+            var stopTask = Task.Run(async () =>
+            {
+                barrier.SignalAndWait();
+                await server.StopServerAsync();
+            });
+
+            await Task.WhenAll(connectTask, stopTask).WaitAsync(TimeSpan.FromSeconds(5));
+
+            var connections = typeof(TcpNetTransport)
+                .GetField("_connections", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(server)!;
+            var count = (int)connections.GetType().GetProperty("Count")!.GetValue(connections)!;
+            Assert.That(count, Is.Zero, $"Attempt {attempt}");
+        }
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void TcpTransport_MaxFrameSize_RejectsNonPositiveValues(int value)
+    {
+        var transport = new TcpNetTransport();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => transport.MaxFrameSize = value);
+    }
+
+    [Test]
+    public async Task TcpTransport_ConnectRacingDispose_LeavesNoConnectionAfterCleanup()
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var transport = new TcpNetTransport();
+            try
+            {
+                var acceptTask = listener.AcceptTcpClientAsync();
+                var connectTask = transport.ConnectAsync(new NetConnectOptions
+                {
+                    Host = "127.0.0.1",
+                    Port = ((IPEndPoint)listener.LocalEndpoint).Port
+                });
+                using var accepted = await acceptTask.WaitAsync(TimeSpan.FromSeconds(1));
+                var disposeTask = transport.DisposeAsync().AsTask();
+
+                await Task.WhenAll(connectTask, disposeTask).WaitAsync(TimeSpan.FromSeconds(1));
+                var connections = typeof(TcpNetTransport)
+                    .GetField("_connections", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                    .GetValue(transport)!;
+                var count = (int)connections.GetType().GetProperty("Count")!.GetValue(connections)!;
+                Assert.That(count, Is.Zero, $"Attempt {attempt}");
+            }
+            finally
+            {
+                listener.Stop();
+                await transport.DisposeAsync();
+            }
+        }
+    }
+
+    [Test]
     public async Task TcpTransport_InvalidEndpointAndRepeatedStart_ReturnClearStatus()
     {
         await using var server = new TcpNetTransport();
 
         var invalid = await server.StartServerAsync(new NetListenOptions { Port = -1 });
+        var invalidConnections = await server.StartServerAsync(new NetListenOptions { Port = 0, MaxConnections = 0 });
         var start = await server.StartServerAsync(new NetListenOptions
         {
             BindAddress = IPAddress.Loopback,
@@ -238,6 +634,7 @@ public class NetTransportTests
         });
 
         Assert.That(invalid.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
+        Assert.That(invalidConnections.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
         Assert.That(start.Status, Is.EqualTo(NetTransportStatus.Ok));
         Assert.That(repeated.Status, Is.EqualTo(NetTransportStatus.AlreadyRunning));
     }
@@ -267,6 +664,37 @@ public class NetTransportTests
 
         Assert.That(start.Status, Is.EqualTo(NetTransportStatus.Cancelled));
         Assert.That(connect.Status, Is.EqualTo(NetTransportStatus.Cancelled));
+    }
+
+    [Test]
+    public async Task TcpTransport_NonPositiveConnectTimeout_ReturnsInvalidEndpoint()
+    {
+        await using var client = new TcpNetTransport();
+
+        var zero = await client.ConnectAsync(new NetConnectOptions { Host = "127.0.0.1", Port = 1, Timeout = TimeSpan.Zero });
+        var negative = await client.ConnectAsync(new NetConnectOptions { Host = "127.0.0.1", Port = 1, Timeout = TimeSpan.FromMilliseconds(-2) });
+
+        Assert.That(zero.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
+        Assert.That(negative.Status, Is.EqualTo(NetTransportStatus.InvalidEndpoint));
+    }
+
+    [Test]
+    public async Task TcpTransport_ThrowingPacketHandler_DoesNotStopLaterHandlersOrConnection()
+    {
+        await using var server = new TcpNetTransport();
+        await using var client = new TcpNetTransport();
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.PacketReceived += _ => throw new InvalidOperationException("handler failed");
+        server.PacketReceived += _ => received.TrySetResult();
+        await server.StartServerAsync(new NetListenOptions { BindAddress = IPAddress.Loopback, Port = 0 });
+        var connect = await client.ConnectAsync(new NetConnectOptions { Host = "127.0.0.1", Port = server.LocalEndPoint!.Port });
+
+        var firstSend = await client.SendAsync(connect.ConnectionId, new byte[] { 1 }, NetChannel.Reliable);
+        await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var secondSend = await client.SendAsync(connect.ConnectionId, new byte[] { 2 }, NetChannel.Reliable);
+
+        Assert.That(firstSend.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(secondSend.Status, Is.EqualTo(NetSendStatus.Ok));
     }
 
     [Test]
@@ -400,6 +828,20 @@ public class NetTransportTests
     }
 
     [Test]
+    public async Task TcpTransport_Dispose_ReleasesOwnedCancellationSource()
+    {
+        var transport = new TcpNetTransport();
+        var field = typeof(TcpNetTransport).GetField(
+            "_disposeCts",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var cancellation = (CancellationTokenSource)field!.GetValue(transport)!;
+
+        await transport.DisposeAsync();
+
+        Assert.Throws<ObjectDisposedException>(() => _ = cancellation.Token);
+    }
+
+    [Test]
     public async Task TcpTransport_ClientDispose_NotifiesServerDisconnect()
     {
         await using var server = new TcpNetTransport();
@@ -419,6 +861,93 @@ public class NetTransportTests
 
         var result = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.That(result.Reason, Is.EqualTo(DisconnectReason.RemoteClosed));
+    }
+
+    [Test]
+    public async Task TcpTransport_DisposeWaitsForInFlightPacketCallback()
+    {
+        await using var server = new TcpNetTransport();
+        await using var client = new TcpNetTransport();
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        server.PacketReceived += _ =>
+        {
+            callbackStarted.TrySetResult();
+            releaseCallback.Task.GetAwaiter().GetResult();
+        };
+
+        await server.StartServerAsync(new NetListenOptions
+        {
+            BindAddress = IPAddress.Loopback,
+            Port = 0
+        });
+        var connect = await client.ConnectAsync(new NetConnectOptions
+        {
+            Host = "127.0.0.1",
+            Port = server.LocalEndPoint!.Port
+        });
+
+        var send = client.SendAsync(connect.ConnectionId, new byte[] { 1 }, NetChannel.Reliable).AsTask();
+        await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var dispose = server.DisposeAsync().AsTask();
+        await Task.Delay(50);
+        try
+        {
+            Assert.That(dispose.IsCompleted, Is.False);
+        }
+        finally
+        {
+            releaseCallback.TrySetResult();
+        }
+
+        await dispose.WaitAsync(TimeSpan.FromSeconds(1));
+        await send;
+    }
+
+    [Test]
+    public async Task TcpTransport_LocalDisconnect_RaisesOneEventWithRequestedReason()
+    {
+        await using var server = new TcpNetTransport();
+        await using var client = new TcpNetTransport();
+        var connected = new TaskCompletionSource<TransportConnectionId>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstDisconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disconnects = new List<TransportPeerDisconnected>();
+        var errors = new List<TransportError>();
+        var eventGate = new object();
+
+        server.PeerConnected += e => connected.TrySetResult(e.ConnectionId);
+        server.PeerDisconnected += e =>
+        {
+            lock (eventGate)
+                disconnects.Add(e);
+            firstDisconnected.TrySetResult();
+        };
+        server.Error += e =>
+        {
+            lock (eventGate)
+                errors.Add(e);
+        };
+
+        await server.StartServerAsync(new NetListenOptions
+        {
+            BindAddress = IPAddress.Loopback,
+            Port = 0
+        });
+        await client.ConnectAsync(new NetConnectOptions { Host = "127.0.0.1", Port = server.LocalEndPoint!.Port });
+        var connectionId = await connected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await server.DisconnectAsync(connectionId, DisconnectReason.Kicked);
+        await firstDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(100);
+
+        lock (eventGate)
+        {
+            Assert.That(disconnects, Has.Count.EqualTo(1));
+            Assert.That(disconnects[0].Reason, Is.EqualTo(DisconnectReason.Kicked));
+            Assert.That(errors, Is.Empty);
+        }
     }
 
     [Test]

@@ -123,6 +123,8 @@ public sealed class NetStats
     {
         if (_isDisposed())
             return new NetStatsResult { Status = NetStatsStatus.ObjectDisposed, PeerStats = GetPeerStats(peerId) };
+        if (timeout <= TimeSpan.Zero)
+            return new NetStatsResult { Status = NetStatsStatus.Timeout, PeerStats = GetPeerStats(peerId) };
 
         var sequence = Interlocked.Increment(ref _nextSequence);
         var sentAt = _timeProvider.GetUtcNow();
@@ -130,7 +132,7 @@ public sealed class NetStats
         _pending[sequence] = pending;
         RecordProbeAttempt(peerId);
 
-        var send = await _messenger.SendAsync(peerId, new NetPing(sequence, sentAt)).ConfigureAwait(false);
+        var send = await _messenger.SendAsync(peerId, new NetPing(sequence, sentAt), token).ConfigureAwait(false);
         if (!send.Succeeded)
         {
             _pending.TryRemove(sequence, out _);
@@ -149,9 +151,9 @@ public sealed class NetStats
             var completed = await Task.WhenAny(pending.Completion.Task, delay).ConfigureAwait(false);
             if (completed == pending.Completion.Task)
             {
-                var pong = await pending.Completion.Task.ConfigureAwait(false);
+                await pending.Completion.Task.ConfigureAwait(false);
                 var now = _timeProvider.GetUtcNow();
-                var rtt = now - pong.SentAt;
+                var rtt = now - pending.SentAt;
                 var stats = RecordProbeSuccess(peerId, rtt, now);
                 return new NetStatsResult { Status = NetStatsStatus.Ok, PeerStats = stats };
             }

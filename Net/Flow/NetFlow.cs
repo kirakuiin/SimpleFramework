@@ -206,6 +206,8 @@ public sealed class NetFlow
 
         if (token.IsCancellationRequested)
             return End<TResponse>(FlowEndReason.Cancelled);
+        if (timeout <= TimeSpan.Zero)
+            return End<TResponse>(FlowEndReason.Timeout);
 
         var flowId = Interlocked.Increment(ref _nextFlowId);
         var flow = new PendingFlow<TProposal, TResponse>(this, flowId, targetList, proposal, policy, timeout, token);
@@ -300,6 +302,7 @@ public sealed class NetFlow
         private readonly FlowPolicy _policy;
         private readonly TimeSpan _timeout;
         private readonly CancellationTokenSource _cancellation;
+        private readonly CancellationToken _cancellationToken;
         private readonly object _gate = new();
         private bool _completed;
 
@@ -320,6 +323,7 @@ public sealed class NetFlow
             _policy = policy;
             _timeout = timeout;
             _cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+            _cancellationToken = _cancellation.Token;
         }
 
         public long FlowId { get; }
@@ -379,6 +383,7 @@ public sealed class NetFlow
 
             _owner.RemovePendingFlow(FlowId);
             Completion.TrySetResult(result);
+            _cancellation.Dispose();
         }
 
         private void LaunchRequest(PeerId peerId)
@@ -388,7 +393,7 @@ public sealed class NetFlow
 
         private async Task AwaitPeerAsync(PeerId peerId)
         {
-            var response = await _owner.RequestPeerAsync<TProposal, TResponse>(peerId, _proposal, _timeout, _cancellation.Token).ConfigureAwait(false);
+            var response = await _owner.RequestPeerAsync<TProposal, TResponse>(peerId, _proposal, _timeout, _cancellationToken).ConfigureAwait(false);
             ApplyResponse(response);
         }
 
@@ -427,7 +432,19 @@ public sealed class NetFlow
                     return;
                 }
 
-                if (EvaluatePolicy(_policy, acceptedCount, TargetCount))
+                bool policyAccepted;
+                try
+                {
+                    policyAccepted = EvaluatePolicy(_policy, acceptedCount, TargetCount);
+                }
+                catch (Exception ex)
+                {
+                    _owner._diagnostics.RecordError(new NetError("FlowPolicyError", ex.Message, ex));
+                    Complete(FlowEndReason.Rejected);
+                    return;
+                }
+
+                if (policyAccepted)
                 {
                     Complete(FlowEndReason.Accepted);
                     return;

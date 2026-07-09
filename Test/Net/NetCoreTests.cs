@@ -262,7 +262,7 @@ public class NetCoreTests
         }, discoveryBackend);
 
         transport.RaiseError("transport failed");
-        await net.Discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+        await net.Discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
 
         Assert.That(net.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(2));
         Assert.That(net.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
@@ -309,11 +309,11 @@ public class NetCoreTests
             new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
             new RoomListMetadata("Room", 1, 4, false));
 
-        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.Zero), Has.Count.EqualTo(1));
+        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1)), Has.Count.EqualTo(1));
 
         await net.DisposeAsync();
 
-        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.Zero), Is.Empty);
+        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1)), Is.Empty);
     }
 
     [Test]

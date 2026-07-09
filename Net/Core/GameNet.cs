@@ -13,20 +13,33 @@ public sealed class GameNet : IAsyncDisposable
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly SemaphoreSlim _serverJoinGate = new(1, 1);
     private readonly CancellationTokenSource _lifecycleCancellation = new();
+    private readonly object _disposeGate = new();
+    private readonly object _receiveQueueGate = new();
+    private readonly Dictionary<TransportConnectionId, Task> _receiveTails = new();
+    private readonly Dictionary<TransportConnectionId, Task> _controlReceiveTails = new();
+    private readonly Dictionary<TransportConnectionId, TaskCompletionSource<bool>> _clientSessionBarriers = new();
+    private readonly HashSet<TransportConnectionId> _closedReceiveConnections = new();
     private readonly Dictionary<TransportConnectionId, PeerId> _connectionPeers = new();
     private readonly Dictionary<PeerId, TransportConnectionId> _peerConnections = new();
     private NetLifecycleState _state;
     private int _disposed;
+    private Task? _disposeTask;
     private ulong _nextPeerId = PeerId.Server.Value;
     private HostOptions? _hostOptions;
     private TaskCompletionSource<JoinResult>? _pendingJoin;
+    private TransportConnectionId _pendingJoinConnectionId = TransportConnectionId.None;
+    private readonly object _pendingJoinGate = new();
+    private bool _pendingJoinDisconnected;
+    private CancellationTokenSource? _joinCancellation;
     private TransportConnectionId _serverConnectionId = TransportConnectionId.None;
     private readonly Dictionary<string, ReconnectEntry> _reconnectTokens = new();
     private readonly Dictionary<PeerId, string> _peerReconnectTokens = new();
     private readonly Dictionary<PeerId, CancellationTokenSource> _reconnectExpiry = new();
+    private readonly Dictionary<PeerId, TaskCompletionSource> _reconnectAttempts = new();
     private JoinOptions? _lastJoinOptions;
     private string? _lastReconnectToken;
-    private int _reconnectLoopRunning;
+    private readonly object _reconnectLoopGate = new();
+    private CancellationTokenSource? _reconnectCancellation;
 
     /// <summary>
     /// 创建不带传输的 GameNet 实例，适用于只使用注册、验证或离线组件的场景。
@@ -188,7 +201,7 @@ public sealed class GameNet : IAsyncDisposable
     }
 
     /// <summary>
-    /// 从服务器向所有远端对等体广播类型化消息。
+    /// 从服务器向所有远端对等体广播类型化消息；单个目标失败不会阻止后续发送，结果返回首个失败。
     /// </summary>
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="message">要广播的消息。</param>
@@ -267,11 +280,14 @@ public sealed class GameNet : IAsyncDisposable
     {
         if (IsDisposed)
             return new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None);
+        if (options.Timeout <= TimeSpan.Zero)
+            return new JoinResult(NetSessionStatus.InvalidState, PeerId.None, "Join timeout must be greater than zero.");
         if (_transport is null)
             return new JoinResult(NetSessionStatus.InvalidState, PeerId.None, "No transport was configured.");
         if (token.IsCancellationRequested)
             return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
 
+        CancellationTokenSource? joinCancellation = null;
         try
         {
             await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
@@ -288,6 +304,8 @@ public sealed class GameNet : IAsyncDisposable
             if (_state != NetLifecycleState.Stopped)
                 return new JoinResult(NetSessionStatus.InvalidState, PeerId.None);
 
+            joinCancellation = new CancellationTokenSource();
+            _joinCancellation = joinCancellation;
             _state = NetLifecycleState.Connecting;
         }
         finally
@@ -295,7 +313,10 @@ public sealed class GameNet : IAsyncDisposable
             _lifecycleGate.Release();
         }
 
-        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, _lifecycleCancellation.Token);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            token,
+            _lifecycleCancellation.Token,
+            joinCancellation.Token);
         var operationToken = linkedCancellation.Token;
         TransportConnectionId connectionId = TransportConnectionId.None;
         try
@@ -314,9 +335,16 @@ public sealed class GameNet : IAsyncDisposable
             }
 
             connectionId = connect.ConnectionId;
-            Messages.FreezeProtocolManifest();
+            using var protocolReservation = Messages.ReserveProtocolManifest();
+            var protocolFingerprint = Messages.Registry.GetFingerprint();
             var pendingJoin = new TaskCompletionSource<JoinResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pendingJoin = pendingJoin;
+            lock (_pendingJoinGate)
+            {
+                _pendingJoin = pendingJoin;
+                _pendingJoinConnectionId = connectionId;
+                _pendingJoinDisconnected = false;
+            }
+            CreateClientSessionBarrier(connectionId);
             var request = new SessionPacket(
                 SessionPacket.JoinRequest,
                 _options.Application.ApplicationId,
@@ -325,12 +353,12 @@ public sealed class GameNet : IAsyncDisposable
                 options.ReconnectToken,
                 PeerId.None,
                 null,
-                Messages.Registry.GetFingerprint(),
+                protocolFingerprint,
                 NetSessionStatus.Ok,
                 null);
             if (!TrySerializeSessionPacket(request, out var requestPayload, out var requestError))
             {
-                _pendingJoin = null;
+                ClearPendingJoin(pendingJoin);
                 await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, requestError);
@@ -339,7 +367,7 @@ public sealed class GameNet : IAsyncDisposable
             var send = await _transport.SendAsync(connectionId, requestPayload, NetChannel.System, operationToken).ConfigureAwait(false);
             if (!send.Succeeded)
             {
-                _pendingJoin = null;
+                ClearPendingJoin(pendingJoin);
                 await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, send.Message);
@@ -352,21 +380,21 @@ public sealed class GameNet : IAsyncDisposable
             }
             catch (TimeoutException)
             {
-                _pendingJoin = null;
+                ClearPendingJoin(pendingJoin);
                 await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Join timed out.");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                _pendingJoin = null;
+                ClearPendingJoin(pendingJoin);
                 await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
             }
             catch (OperationCanceledException) when (IsDisposed)
             {
-                _pendingJoin = null;
+                ClearPendingJoin(pendingJoin);
                 return new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None);
             }
 
@@ -381,16 +409,45 @@ public sealed class GameNet : IAsyncDisposable
                     await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                     return new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None);
                 }
+                if (_state != NetLifecycleState.Connecting || joinCancellation.IsCancellationRequested)
+                {
+                    await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                    return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
+                }
 
                 if (join.Succeeded)
                 {
-                    _serverConnectionId = connectionId;
+                    lock (_pendingJoinGate)
+                    {
+                        if (_pendingJoinConnectionId != connectionId || _pendingJoinDisconnected)
+                        {
+                            join = new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Transport disconnected during join.");
+                        }
+                        else
+                        {
+                            _serverConnectionId = connectionId;
+                        }
+
+                        _pendingJoin = null;
+                        _pendingJoinConnectionId = TransportConnectionId.None;
+                        _pendingJoinDisconnected = false;
+                    }
+                }
+
+                if (join.Succeeded)
+                {
+                    protocolReservation.Commit();
                     lock (_connectionPeers)
                         _connectionPeers[connectionId] = PeerId.Server;
+                    var peers = join.PeerDirectorySnapshot;
+                    Peers.SetLocalPeer(join.PeerId);
+                    Peers.Replace(peers.Select(peer => peer.PeerId == join.PeerId ? peer with { IsLocal = true } : peer));
+                    Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
                     _lastJoinOptions = options;
                     _lastReconnectToken = join.ReconnectToken;
                     _state = NetLifecycleState.Client;
                     SetSessionRole(NetSessionRole.Client);
+                    CompleteClientSessionBarrier(connectionId, true);
                 }
                 else
                 {
@@ -409,10 +466,26 @@ public sealed class GameNet : IAsyncDisposable
         {
             return new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested || joinCancellation.IsCancellationRequested)
+        {
+            return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
+        }
         finally
         {
-            if (!IsDisposed && _state == NetLifecycleState.Connecting)
-                await ResetConnectingStateAsync().ConfigureAwait(false);
+            await _lifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_joinCancellation, joinCancellation))
+                    _joinCancellation = null;
+                if (!IsDisposed && _state == NetLifecycleState.Connecting)
+                    _state = NetLifecycleState.Stopped;
+            }
+            finally
+            {
+                _lifecycleGate.Release();
+                CompleteClientSessionBarrier(connectionId, false);
+                joinCancellation.Dispose();
+            }
         }
     }
 
@@ -474,18 +547,20 @@ public sealed class GameNet : IAsyncDisposable
             return new NetSessionResult(NetSessionStatus.Cancelled);
         }
 
+        await _serverJoinGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             if (IsDisposed)
                 return new NetSessionResult(NetSessionStatus.ObjectDisposed);
 
+            CancelReconnectLoop();
+            _joinCancellation?.Cancel();
             await Discovery.StopAdvertiseAsync().ConfigureAwait(false);
             Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "Session stopped.");
             Messages.CancelPendingRelays(NetSendStatus.SessionClosed, "Session stopped.");
             Stats.CancelPendingProbes(NetStatsStatus.SessionClosed, "Session stopped.");
-            _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Cancelled, PeerId.None, "Session stopped."));
-            _pendingJoin = null;
+            ClearPendingJoin()?.TrySetResult(new JoinResult(NetSessionStatus.Cancelled, PeerId.None, "Session stopped."));
             if (_transport is not null && _state == NetLifecycleState.Client)
             {
                 if (_serverConnectionId != TransportConnectionId.None)
@@ -500,15 +575,12 @@ public sealed class GameNet : IAsyncDisposable
             if (_transport is not null)
             {
                 await SendDisconnectNoticesToAllPeersAsync(DisconnectReason.ServerClosed).ConfigureAwait(false);
-                var stop = await _transport.StopServerAsync(token).ConfigureAwait(false);
-                if (stop.Status is NetTransportStatus.ObjectDisposed)
-                    return new NetSessionResult(NetSessionStatus.ObjectDisposed, stop.Message);
-                if (stop.Status is NetTransportStatus.Cancelled)
-                    return new NetSessionResult(NetSessionStatus.Cancelled, stop.Message);
+                var stop = await _transport.StopServerAsync(CancellationToken.None).ConfigureAwait(false);
+                if (stop.Status != NetTransportStatus.Ok)
+                    return new NetSessionResult(MapTransportStatus(stop.Status), stop.Message);
             }
 
             _state = NetLifecycleState.Stopped;
-            SetSessionRole(NetSessionRole.None);
             Peers.Replace(Array.Empty<PeerInfo>());
             Peers.SetLocalPeer(PeerId.None);
             lock (_connectionPeers)
@@ -517,14 +589,17 @@ public sealed class GameNet : IAsyncDisposable
                 _peerConnections.Clear();
             }
             ClearReconnectState();
+            Messages.ClearPeerState();
             _serverConnectionId = TransportConnectionId.None;
             _lastJoinOptions = null;
             _lastReconnectToken = null;
             Diagnostics.SetConnectedPeerCount(0);
+            SetSessionRole(NetSessionRole.None);
             return NetSessionResult.Ok();
         }
         finally
         {
+            _serverJoinGate.Release();
             _lifecycleGate.Release();
         }
     }
@@ -532,20 +607,30 @@ public sealed class GameNet : IAsyncDisposable
     /// <summary>
     /// 异步释放 GameNet 和其拥有的传输资源。该操作可重复调用。
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
-            return;
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                Volatile.Write(ref _disposed, 1);
+                _disposeTask = Task.Run(DisposeCoreAsync);
+            }
 
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         _lifecycleCancellation.Cancel();
-        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None));
-        _pendingJoin = null;
+        CancelReconnectLoop();
+        ClearPendingJoin()?.TrySetResult(new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None));
 
         await _lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
             _state = NetLifecycleState.Stopped;
-            SetSessionRole(NetSessionRole.None);
             await Discovery.DisposeAsync().ConfigureAwait(false);
             Flow.CancelPendingFlows(FlowEndReason.SessionClosed);
             Messages.CancelPendingRequests(NetRequestStatus.SessionClosed, "GameNet was disposed.");
@@ -562,8 +647,10 @@ public sealed class GameNet : IAsyncDisposable
             _serverConnectionId = TransportConnectionId.None;
             Diagnostics.SetConnectedPeerCount(0);
             ClearReconnectState();
+            Messages.ClearPeerState();
             _lastJoinOptions = null;
             _lastReconnectToken = null;
+            SetSessionRole(NetSessionRole.None);
         }
         finally
         {
@@ -578,6 +665,15 @@ public sealed class GameNet : IAsyncDisposable
             await _transport.DisposeAsync().ConfigureAwait(false);
         }
 
+        lock (_receiveQueueGate)
+        {
+            _receiveTails.Clear();
+            _controlReceiveTails.Clear();
+            foreach (var barrier in _clientSessionBarriers.Values)
+                barrier.TrySetResult(false);
+            _clientSessionBarriers.Clear();
+            _closedReceiveConnections.Clear();
+        }
         _lifecycleCancellation.Dispose();
     }
 
@@ -646,7 +742,9 @@ public sealed class GameNet : IAsyncDisposable
             {
                 BindAddress = options.BindAddress,
                 Port = options.Port,
-                MaxConnections = options.MaxPeers
+                MaxConnections = options.MaxPeers >= int.MaxValue - 16
+                    ? int.MaxValue
+                    : options.MaxPeers + 16
             }, token).ConfigureAwait(false);
 
             if (start.Status != NetTransportStatus.Ok)
@@ -691,40 +789,218 @@ public sealed class GameNet : IAsyncDisposable
         }
     }
 
+    private TaskCompletionSource<JoinResult>? ClearPendingJoin(TaskCompletionSource<JoinResult>? expectedPendingJoin = null)
+    {
+        lock (_pendingJoinGate)
+        {
+            if (expectedPendingJoin is not null && !ReferenceEquals(_pendingJoin, expectedPendingJoin))
+                return null;
+
+            var pendingJoin = _pendingJoin;
+            _pendingJoin = null;
+            _pendingJoinConnectionId = TransportConnectionId.None;
+            _pendingJoinDisconnected = false;
+            return pendingJoin;
+        }
+    }
+
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 
     private void OnTransportPacketReceived(TransportPacketReceived packet)
     {
-        if (IsSessionControlPacket(packet.Data.Span))
+        lock (_receiveQueueGate)
         {
-            _ = HandleTransportPacketAsync(packet);
+            if (_closedReceiveConnections.Contains(packet.ConnectionId))
+                return;
+        }
+
+        var messageKind = GetMessagePacketKind(packet.Data.Span);
+        if (messageKind is null or
+            SessionPacket.JoinRequest or
+            SessionPacket.JoinAccepted or
+            SessionPacket.JoinRejected or
+            SessionPacket.PeerDirectoryUpdated or
+            SessionPacket.DisconnectNotice)
+        {
+            QueueControlConnectionEvent(packet.ConnectionId, () => HandleTransportPacketAsync(packet));
             return;
         }
 
-        _ = Task.Run(() => HandleTransportPacketAsync(packet));
+        var sessionBarrier = GetClientSessionBarrier(packet.ConnectionId);
+        if (sessionBarrier is not null)
+        {
+            QueueConnectionEvent(packet.ConnectionId, async () =>
+            {
+                if (await sessionBarrier.ConfigureAwait(false))
+                    await HandleTransportPacketAsync(packet).ConfigureAwait(false);
+            });
+            return;
+        }
+
+        if (messageKind is NetPacket.Response or NetPacket.RelayResult)
+        {
+            _ = Task.Run(() => HandleDetachedPacketAsync(packet));
+            return;
+        }
+
+        QueueConnectionEvent(packet.ConnectionId, () =>
+        {
+            if (messageKind == NetPacket.Request)
+            {
+                _ = Task.Run(() => HandleDetachedPacketAsync(packet));
+                return Task.CompletedTask;
+            }
+
+            return HandleTransportPacketAsync(packet);
+        });
     }
 
-    private static bool IsSessionControlPacket(ReadOnlySpan<byte> data)
+    private static string? GetMessagePacketKind(ReadOnlySpan<byte> data)
     {
         try
         {
-            var packet = JsonSerializer.Deserialize<SessionPacket>(data);
-            return packet?.Kind is SessionPacket.JoinRequest
-                or SessionPacket.JoinAccepted
-                or SessionPacket.JoinRejected
-                or SessionPacket.PeerDirectoryUpdated
-                or SessionPacket.DisconnectNotice;
+            return JsonSerializer.Deserialize<NetPacket>(data)?.Kind;
         }
-        catch
+        catch (JsonException)
         {
-            return false;
+            return null;
+        }
+    }
+
+    private async Task HandleDetachedPacketAsync(TransportPacketReceived packet)
+    {
+        try
+        {
+            await HandleTransportPacketAsync(packet).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("ConnectionEventError", ex.Message, ex));
+        }
+    }
+
+    private void QueueConnectionEvent(TransportConnectionId connectionId, Func<Task> action, bool removeAfter = false)
+    {
+        Task queued;
+        lock (_receiveQueueGate)
+        {
+            if (_closedReceiveConnections.Contains(connectionId))
+                return;
+
+            var previous = _receiveTails.GetValueOrDefault(connectionId, Task.CompletedTask);
+            queued = Task.Run(() => RunConnectionEventAsync(connectionId, previous, action));
+            _receiveTails[connectionId] = queued;
+        }
+
+        if (removeAfter)
+            _ = RemoveReceiveTailAsync(connectionId, queued);
+    }
+
+    private void QueueControlConnectionEvent(TransportConnectionId connectionId, Func<Task> action, bool removeAfter = false)
+    {
+        Task queued;
+        lock (_receiveQueueGate)
+        {
+            var previous = _controlReceiveTails.GetValueOrDefault(connectionId, Task.CompletedTask);
+            queued = Task.Run(() => RunControlConnectionEventAsync(previous, action));
+            _controlReceiveTails[connectionId] = queued;
+        }
+
+        if (removeAfter)
+            _ = RemoveControlReceiveTailAsync(connectionId, queued);
+    }
+
+    private async Task RunControlConnectionEventAsync(Task previous, Func<Task> action)
+    {
+        try
+        {
+            await previous.ConfigureAwait(false);
+            if (!_lifecycleCancellation.IsCancellationRequested)
+                await action().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("ConnectionEventError", ex.Message, ex));
+        }
+    }
+
+    private async Task RunConnectionEventAsync(TransportConnectionId connectionId, Task previous, Func<Task> action)
+    {
+        try
+        {
+            await previous.ConfigureAwait(false);
+            if (_lifecycleCancellation.IsCancellationRequested)
+                return;
+            lock (_receiveQueueGate)
+            {
+                if (_closedReceiveConnections.Contains(connectionId))
+                    return;
+            }
+
+            await action().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("ConnectionEventError", ex.Message, ex));
+        }
+    }
+
+    private async Task RemoveReceiveTailAsync(TransportConnectionId connectionId, Task queued)
+    {
+        await queued.ConfigureAwait(false);
+        lock (_receiveQueueGate)
+        {
+            if (_receiveTails.TryGetValue(connectionId, out var current) && current == queued)
+                _receiveTails.Remove(connectionId);
+        }
+    }
+
+    private async Task RemoveControlReceiveTailAsync(TransportConnectionId connectionId, Task queued)
+    {
+        await queued.ConfigureAwait(false);
+        lock (_receiveQueueGate)
+        {
+            if (_controlReceiveTails.TryGetValue(connectionId, out var current) && current == queued)
+                _controlReceiveTails.Remove(connectionId);
         }
     }
 
     private void OnTransportPeerDisconnected(TransportPeerDisconnected disconnected)
     {
-        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Transport disconnected."));
-        _pendingJoin = null;
+        lock (_pendingJoinGate)
+        {
+            if (_pendingJoinConnectionId == disconnected.ConnectionId)
+                _pendingJoinDisconnected = true;
+        }
+
+        CompleteClientSessionBarrier(disconnected.ConnectionId, false);
+
+        lock (_receiveQueueGate)
+        {
+            _closedReceiveConnections.Add(disconnected.ConnectionId);
+            _receiveTails.Remove(disconnected.ConnectionId);
+        }
+
+        QueueControlConnectionEvent(disconnected.ConnectionId, () =>
+        {
+            HandleTransportPeerDisconnected(disconnected);
+            return Task.CompletedTask;
+        }, removeAfter: true);
+    }
+
+    private void HandleTransportPeerDisconnected(TransportPeerDisconnected disconnected)
+    {
+        TaskCompletionSource<JoinResult>? pendingJoin = null;
+        lock (_pendingJoinGate)
+        {
+            if (_pendingJoinConnectionId == disconnected.ConnectionId)
+            {
+                pendingJoin = _pendingJoin;
+                _pendingJoin = null;
+                _pendingJoinDisconnected = true;
+            }
+        }
+        pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Transport disconnected."));
 
         if (disconnected.ConnectionId == _serverConnectionId)
         {
@@ -757,6 +1033,36 @@ public sealed class GameNet : IAsyncDisposable
         Diagnostics.RecordError(new NetError("TransportError", error.Message, error.Exception));
     }
 
+    private void CreateClientSessionBarrier(TransportConnectionId connectionId)
+    {
+        lock (_receiveQueueGate)
+        {
+            if (!_clientSessionBarriers.ContainsKey(connectionId))
+            {
+                _clientSessionBarriers[connectionId] = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+    }
+
+    private Task<bool>? GetClientSessionBarrier(TransportConnectionId connectionId)
+    {
+        lock (_receiveQueueGate)
+            return _clientSessionBarriers.GetValueOrDefault(connectionId)?.Task;
+    }
+
+    private void CompleteClientSessionBarrier(TransportConnectionId connectionId, bool sessionReady)
+    {
+        TaskCompletionSource<bool>? barrier;
+        lock (_receiveQueueGate)
+        {
+            if (!_clientSessionBarriers.Remove(connectionId, out barrier))
+                return;
+        }
+
+        barrier.TrySetResult(sessionReady);
+    }
+
     private async Task HandleTransportPacketAsync(TransportPacketReceived packet)
     {
         SessionPacket? sessionPacket;
@@ -779,10 +1085,10 @@ public sealed class GameNet : IAsyncDisposable
                 await HandleJoinRequestAsync(packet.ConnectionId, sessionPacket).ConfigureAwait(false);
                 return;
             case SessionPacket.JoinAccepted:
-                HandleJoinAccepted(sessionPacket);
+                HandleJoinAccepted(packet.ConnectionId, sessionPacket);
                 return;
             case SessionPacket.JoinRejected:
-                HandleJoinRejected(sessionPacket);
+                HandleJoinRejected(packet.ConnectionId, sessionPacket);
                 return;
             case SessionPacket.PeerDirectoryUpdated:
                 HandlePeerDirectoryUpdated(sessionPacket);
@@ -800,8 +1106,12 @@ public sealed class GameNet : IAsyncDisposable
 
     private async Task HandleJoinRequestAsync(TransportConnectionId connectionId, SessionPacket packet)
     {
-        if (_transport is null || _hostOptions is null || _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer))
+        if (_transport is null ||
+            _hostOptions is not { } hostOptions ||
+            _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer))
+        {
             return;
+        }
 
         if (packet.ApplicationId != _options.Application.ApplicationId)
         {
@@ -828,13 +1138,23 @@ public sealed class GameNet : IAsyncDisposable
             return;
         }
 
-        if (_hostOptions.Authenticator is not null)
+        if (hostOptions.Authenticator is not null)
         {
-            var auth = await _hostOptions.Authenticator(new AuthContext
+            AuthResult auth;
+            try
             {
-                ConnectionId = connectionId,
-                AuthPayload = packet.AuthPayload
-            }).ConfigureAwait(false);
+                auth = await hostOptions.Authenticator(new AuthContext
+                {
+                    ConnectionId = connectionId,
+                    AuthPayload = packet.AuthPayload
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.RecordError(new NetError("AuthenticationHandlerError", ex.Message, ex));
+                await SendJoinRejectedAsync(connectionId, NetSessionStatus.AuthenticationFailed, ex.Message).ConfigureAwait(false);
+                return;
+            }
 
             if (!auth.Succeeded)
             {
@@ -849,14 +1169,22 @@ public sealed class GameNet : IAsyncDisposable
         await _serverJoinGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (Peers.Peers.Count(p => !p.IsServer) >= _hostOptions.MaxPeers)
+            if (IsDisposed ||
+                _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer) ||
+                !ReferenceEquals(_hostOptions, hostOptions))
+            {
+                await _transport.DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+                return;
+            }
+
+            if (Peers.Peers.Count(p => !p.IsServer) >= hostOptions.MaxPeers)
             {
                 await SendJoinRejectedAsync(connectionId, NetSessionStatus.CapacityFull, "Server is full.").ConfigureAwait(false);
                 return;
             }
 
             peerId = new PeerId(++_nextPeerId);
-            reconnectToken = _hostOptions.ReconnectPolicy.IsEnabled ? CreateReconnectToken(peerId) : null;
+            reconnectToken = hostOptions.ReconnectPolicy.IsEnabled ? CreateReconnectToken(peerId) : null;
             peer = new PeerInfo(peerId, IsServer: false, IsLocal: false, JoinedAt: _options.TimeProvider.GetUtcNow());
             lock (_connectionPeers)
             {
@@ -884,10 +1212,28 @@ public sealed class GameNet : IAsyncDisposable
             NetSessionStatus.Ok,
             null);
         var acceptedSend = await SendSessionPacketAsync(connectionId, accepted).ConfigureAwait(false);
-        if (!acceptedSend.Succeeded)
+        var joinCommitted = false;
+        var sessionStillActive = false;
+        await _serverJoinGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
         {
-            RemoveRemotePeerFinal(peerId, DisconnectReason.TransportFailed, raiseDisconnected: false);
-            await _transport.DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
+            sessionStillActive = !IsDisposed &&
+                _state is NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer &&
+                ReferenceEquals(_hostOptions, hostOptions);
+            joinCommitted = sessionStillActive && acceptedSend.Succeeded;
+            if (!joinCommitted)
+                RollbackPendingServerJoin(connectionId, peerId);
+        }
+        finally
+        {
+            _serverJoinGate.Release();
+        }
+
+        if (!joinCommitted)
+        {
+            await _transport.DisconnectAsync(
+                connectionId,
+                sessionStillActive ? DisconnectReason.TransportFailed : DisconnectReason.ServerClosed).ConfigureAwait(false);
             return;
         }
 
@@ -895,9 +1241,25 @@ public sealed class GameNet : IAsyncDisposable
         await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);
     }
 
+    private void RollbackPendingServerJoin(TransportConnectionId connectionId, PeerId peerId)
+    {
+        lock (_connectionPeers)
+        {
+            _connectionPeers.Remove(connectionId);
+            if (_peerConnections.TryGetValue(peerId, out var mappedConnection) && mappedConnection == connectionId)
+                _peerConnections.Remove(peerId);
+            if (_peerReconnectTokens.Remove(peerId, out var reconnectToken))
+                _reconnectTokens.Remove(reconnectToken);
+        }
+
+        Peers.Remove(peerId);
+        Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
+    }
+
     private async Task HandleReconnectRequestAsync(TransportConnectionId connectionId, string reconnectToken)
     {
-        if (_transport is null || _hostOptions is null || !_hostOptions.ReconnectPolicy.IsEnabled)
+        var hostOptions = _hostOptions;
+        if (_transport is null || hostOptions is null || !hostOptions.ReconnectPolicy.IsEnabled)
         {
             await SendJoinRejectedAsync(connectionId, NetSessionStatus.AuthenticationFailed, "Reconnect is not enabled.").ConfigureAwait(false);
             return;
@@ -906,9 +1268,18 @@ public sealed class GameNet : IAsyncDisposable
         ReconnectEntry entry;
         PeerInfo peer;
         PeerInfo? existingPeer = null;
+        TaskCompletionSource? reconnectAttempt = null;
         await _serverJoinGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (IsDisposed ||
+                _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer) ||
+                !ReferenceEquals(_hostOptions, hostOptions))
+            {
+                await _transport.DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+                return;
+            }
+
             lock (_connectionPeers)
             {
                 if (!_reconnectTokens.TryGetValue(reconnectToken, out entry))
@@ -932,6 +1303,8 @@ public sealed class GameNet : IAsyncDisposable
 
             lock (_connectionPeers)
             {
+                reconnectAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _reconnectAttempts[entry.PeerId] = reconnectAttempt;
                 _connectionPeers[connectionId] = entry.PeerId;
                 _peerConnections[entry.PeerId] = connectionId;
             }
@@ -959,10 +1332,23 @@ public sealed class GameNet : IAsyncDisposable
             NetSessionStatus.Ok,
             null);
         var acceptedSend = await SendSessionPacketAsync(connectionId, accepted).ConfigureAwait(false);
-        if (!acceptedSend.Succeeded)
+        var reconnectCommitted = false;
+        var sessionStillActive = false;
+        await _serverJoinGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
         {
+            sessionStillActive = !IsDisposed &&
+                _state is NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer &&
+                ReferenceEquals(_hostOptions, hostOptions);
+
             lock (_connectionPeers)
             {
+                if (_reconnectAttempts.TryGetValue(entry.PeerId, out var currentAttempt) &&
+                    ReferenceEquals(currentAttempt, reconnectAttempt))
+                {
+                    _reconnectAttempts.Remove(entry.PeerId);
+                }
+
                 _connectionPeers.Remove(connectionId);
                 if (_peerConnections.TryGetValue(entry.PeerId, out var mappedConnection) &&
                     mappedConnection == connectionId)
@@ -971,18 +1357,44 @@ public sealed class GameNet : IAsyncDisposable
                 }
             }
 
-            if (existingPeer is null)
+            if (!sessionStillActive)
+            {
                 Peers.Remove(entry.PeerId);
+            }
+            else if (!acceptedSend.Succeeded)
+            {
+                if (existingPeer is null)
+                    Peers.Remove(entry.PeerId);
+                else
+                    Peers.Upsert(existingPeer);
+            }
             else
-                Peers.Upsert(existingPeer);
+            {
+                lock (_connectionPeers)
+                {
+                    _connectionPeers[connectionId] = entry.PeerId;
+                    _peerConnections[entry.PeerId] = connectionId;
+                    _reconnectTokens.Remove(reconnectToken);
+                }
+                CancelReconnectExpiry(entry.PeerId);
+                reconnectCommitted = true;
+            }
+
             Diagnostics.SetConnectedPeerCount(CountConnectedPeers());
-            await _transport.DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
-            return;
+        }
+        finally
+        {
+            reconnectAttempt?.TrySetResult();
+            _serverJoinGate.Release();
         }
 
-        CancelReconnectExpiry(entry.PeerId);
-        lock (_connectionPeers)
-            _reconnectTokens.Remove(reconnectToken);
+        if (!reconnectCommitted)
+        {
+            await _transport.DisconnectAsync(
+                connectionId,
+                sessionStillActive ? DisconnectReason.TransportFailed : DisconnectReason.ServerClosed).ConfigureAwait(false);
+            return;
+        }
 
         DispatchFrameworkEvent(() => Session.RaisePeerReconnected(new NetPeerReconnected(entry.PeerId)));
         await BroadcastPeerDirectoryUpdateAsync(connectionId).ConfigureAwait(false);
@@ -1038,28 +1450,59 @@ public sealed class GameNet : IAsyncDisposable
             await SendDisconnectNoticeAsync(target.Value, reason).ConfigureAwait(false);
     }
 
-    private void HandleJoinAccepted(SessionPacket packet)
+    private void HandleJoinAccepted(TransportConnectionId connectionId, SessionPacket packet)
     {
+        TaskCompletionSource<JoinResult>? pendingJoin;
+        lock (_pendingJoinGate)
+        {
+            if (_state != NetLifecycleState.Connecting ||
+                _pendingJoin is null ||
+                _pendingJoinConnectionId != connectionId ||
+                _joinCancellation?.IsCancellationRequested != false)
+            {
+                return;
+            }
+
+            pendingJoin = _pendingJoin;
+        }
+
         var fingerprintCheck = CheckRemoteFingerprint(packet.MessageFingerprint, "server");
         if (fingerprintCheck.Status == NetFingerprintStatus.Rejected)
         {
-            _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.IncompatibleProtocol, PeerId.None, fingerprintCheck.Message));
-            _pendingJoin = null;
+            pendingJoin.TrySetResult(new JoinResult(NetSessionStatus.IncompatibleProtocol, PeerId.None, fingerprintCheck.Message));
+            ClearPendingJoin(pendingJoin);
             return;
         }
 
         var peers = packet.Peers ?? Array.Empty<PeerInfo>();
-        Peers.SetLocalPeer(packet.PeerId);
-        Peers.Replace(peers.Select(p => p.PeerId == packet.PeerId ? p with { IsLocal = true } : p));
-        Diagnostics.SetConnectedPeerCount(Peers.Peers.Count);
-        _pendingJoin?.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message, packet.ReconnectToken, peers));
-        _pendingJoin = null;
+        pendingJoin.TrySetResult(new JoinResult(NetSessionStatus.Ok, packet.PeerId, packet.Message, packet.ReconnectToken, peers));
+        lock (_pendingJoinGate)
+        {
+            if (ReferenceEquals(_pendingJoin, pendingJoin))
+                _pendingJoin = null;
+        }
     }
 
-    private void HandleJoinRejected(SessionPacket packet)
+    private void HandleJoinRejected(TransportConnectionId connectionId, SessionPacket packet)
     {
-        _pendingJoin?.TrySetResult(new JoinResult(packet.Status, PeerId.None, packet.Message));
-        _pendingJoin = null;
+        TaskCompletionSource<JoinResult>? pendingJoin;
+        lock (_pendingJoinGate)
+        {
+            if (_state != NetLifecycleState.Connecting ||
+                _pendingJoin is null ||
+                _pendingJoinConnectionId != connectionId ||
+                _joinCancellation?.IsCancellationRequested != false)
+            {
+                return;
+            }
+
+            pendingJoin = _pendingJoin;
+            _pendingJoin = null;
+            _pendingJoinConnectionId = TransportConnectionId.None;
+            _pendingJoinDisconnected = false;
+        }
+
+        pendingJoin.TrySetResult(new JoinResult(packet.Status, PeerId.None, packet.Message));
     }
 
     private async Task BroadcastPeerDirectoryUpdateAsync(TransportConnectionId exceptConnectionId = default)
@@ -1179,7 +1622,6 @@ public sealed class GameNet : IAsyncDisposable
     {
         Stats.CancelPendingProbes(NetStatsStatus.SessionClosed, "Local session was closed.");
         _state = NetLifecycleState.Stopped;
-        SetSessionRole(NetSessionRole.None);
         Peers.Replace(Array.Empty<PeerInfo>());
         Peers.SetLocalPeer(PeerId.None);
         lock (_connectionPeers)
@@ -1189,7 +1631,9 @@ public sealed class GameNet : IAsyncDisposable
         }
 
         _serverConnectionId = TransportConnectionId.None;
+        Messages.ClearPeerState();
         Diagnostics.SetConnectedPeerCount(0);
+        SetSessionRole(NetSessionRole.None);
         DispatchFrameworkEvent(() => Session.RaisePeerDisconnected(new NetPeerDisconnected(PeerId.Server, reason)));
         if (reason == DisconnectReason.ServerClosed)
             DispatchFrameworkEvent(() => Session.RaiseServerClosed(new NetServerClosed(reason)));
@@ -1205,21 +1649,35 @@ public sealed class GameNet : IAsyncDisposable
 
     private void StartReconnectLoop(JoinOptions options, string reconnectToken, PeerId previousPeerId)
     {
-        if (Interlocked.Exchange(ref _reconnectLoopRunning, 1) == 1)
-            return;
+        CancellationTokenSource cancellation;
+        lock (_reconnectLoopGate)
+        {
+            if (_reconnectCancellation is not null)
+                return;
 
-        _ = ReconnectLoopAsync(options, reconnectToken, previousPeerId);
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifecycleCancellation.Token);
+            _reconnectCancellation = cancellation;
+        }
+
+        _ = ReconnectLoopAsync(options, reconnectToken, previousPeerId, cancellation);
     }
 
-    private async Task ReconnectLoopAsync(JoinOptions options, string reconnectToken, PeerId previousPeerId)
+    private async Task ReconnectLoopAsync(
+        JoinOptions options,
+        string reconnectToken,
+        PeerId previousPeerId,
+        CancellationTokenSource cancellation)
     {
+        var token = cancellation.Token;
         try
         {
-            for (var attempt = 0; attempt < options.Reconnect.Attempts && !IsDisposed; attempt++)
+            for (var attempt = 0;
+                 attempt < options.Reconnect.Attempts && !IsDisposed && !token.IsCancellationRequested;
+                 attempt++)
             {
                 try
                 {
-                    await Task.Delay(options.Reconnect.Interval, _options.TimeProvider, _lifecycleCancellation.Token).ConfigureAwait(false);
+                    await Task.Delay(options.Reconnect.Interval, _options.TimeProvider, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1234,7 +1692,10 @@ public sealed class GameNet : IAsyncDisposable
                     AuthPayload = options.AuthPayload,
                     ReconnectToken = reconnectToken,
                     Reconnect = options.Reconnect
-                }).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
+
+                if (token.IsCancellationRequested)
+                    return;
 
                 if (!join.Succeeded)
                     continue;
@@ -1246,8 +1707,20 @@ public sealed class GameNet : IAsyncDisposable
         }
         finally
         {
-            Interlocked.Exchange(ref _reconnectLoopRunning, 0);
+            lock (_reconnectLoopGate)
+            {
+                if (ReferenceEquals(_reconnectCancellation, cancellation))
+                    _reconnectCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
+    }
+
+    private void CancelReconnectLoop()
+    {
+        lock (_reconnectLoopGate)
+            _reconnectCancellation?.Cancel();
     }
 
     private bool TrySerializeSessionPacket(SessionPacket packet, out byte[] payload, out string? error)
@@ -1278,17 +1751,17 @@ public sealed class GameNet : IAsyncDisposable
         return send;
     }
 
-    private ValueTask<NetSendResult> SendToServerPacketAsync(byte[] packet)
+    private ValueTask<NetSendResult> SendToServerPacketAsync(byte[] packet, CancellationToken token)
     {
         if (IsDisposed)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
         if (_transport is null || _serverConnectionId == TransportConnectionId.None)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
 
-        return _transport.SendAsync(_serverConnectionId, packet, NetChannel.Reliable);
+        return _transport.SendAsync(_serverConnectionId, packet, NetChannel.Reliable, token);
     }
 
-    private ValueTask<NetSendResult> SendToPeerPacketAsync(PeerId peerId, byte[] packet)
+    private ValueTask<NetSendResult> SendToPeerPacketAsync(PeerId peerId, byte[] packet, CancellationToken token)
     {
         if (IsDisposed)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
@@ -1302,7 +1775,7 @@ public sealed class GameNet : IAsyncDisposable
                 return ValueTask.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable));
         }
 
-        return _transport.SendAsync(connectionId, packet, NetChannel.Reliable);
+        return _transport.SendAsync(connectionId, packet, NetChannel.Reliable, token);
     }
 
     private IReadOnlyCollection<PeerId> GetBroadcastTargets()
@@ -1369,6 +1842,8 @@ public sealed class GameNet : IAsyncDisposable
             if (token is not null)
                 _reconnectTokens.Remove(token);
         }
+
+        Messages.RemovePeerState(peerId);
 
         if (!Peers.Remove(peerId))
             return;
@@ -1455,11 +1930,16 @@ public sealed class GameNet : IAsyncDisposable
         lock (_connectionPeers)
             _reconnectExpiry[peerId] = cancellation;
 
-        _ = ExpireReconnectAsync(peerId, graceWindow, reason, cancellation.Token);
+        _ = ExpireReconnectAsync(peerId, graceWindow, reason, cancellation);
     }
 
-    private async Task ExpireReconnectAsync(PeerId peerId, TimeSpan graceWindow, DisconnectReason reason, CancellationToken token)
+    private async Task ExpireReconnectAsync(
+        PeerId peerId,
+        TimeSpan graceWindow,
+        DisconnectReason reason,
+        CancellationTokenSource cancellation)
     {
+        var token = cancellation.Token;
         try
         {
             await Task.Delay(graceWindow, _options.TimeProvider, token).ConfigureAwait(false);
@@ -1469,10 +1949,47 @@ public sealed class GameNet : IAsyncDisposable
             return;
         }
 
-        if (token.IsCancellationRequested)
-            return;
+        while (true)
+        {
+            Task? reconnectAttempt = null;
+            var ownsExpiry = false;
+            await _serverJoinGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                lock (_connectionPeers)
+                {
+                    if (!_reconnectExpiry.TryGetValue(peerId, out var current) ||
+                        !ReferenceEquals(current, cancellation))
+                    {
+                        return;
+                    }
 
-        RemoveRemotePeerFinal(peerId, reason, raiseDisconnected: false);
+                    if (_reconnectAttempts.TryGetValue(peerId, out var attempt))
+                    {
+                        reconnectAttempt = attempt.Task;
+                    }
+                    else
+                    {
+                        _reconnectExpiry.Remove(peerId);
+                        ownsExpiry = true;
+                    }
+                }
+
+                if (reconnectAttempt is null)
+                {
+                    RemoveRemotePeerFinal(peerId, reason, raiseDisconnected: false);
+                    return;
+                }
+            }
+            finally
+            {
+                _serverJoinGate.Release();
+                if (ownsExpiry)
+                    cancellation.Dispose();
+            }
+
+            await reconnectAttempt.ConfigureAwait(false);
+        }
     }
 
     private void CancelReconnectExpiry(PeerId peerId)
@@ -1494,10 +2011,13 @@ public sealed class GameNet : IAsyncDisposable
     private void ClearReconnectState()
     {
         CancellationTokenSource[] expirations;
+        TaskCompletionSource[] attempts;
         lock (_connectionPeers)
         {
             expirations = _reconnectExpiry.Values.ToArray();
+            attempts = _reconnectAttempts.Values.ToArray();
             _reconnectExpiry.Clear();
+            _reconnectAttempts.Clear();
             _reconnectTokens.Clear();
             _peerReconnectTokens.Clear();
         }
@@ -1507,6 +2027,9 @@ public sealed class GameNet : IAsyncDisposable
             expiration.Cancel();
             expiration.Dispose();
         }
+
+        foreach (var attempt in attempts)
+            attempt.TrySetResult();
     }
 
     private int CountConnectedPeers()

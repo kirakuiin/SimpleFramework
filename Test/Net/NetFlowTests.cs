@@ -184,6 +184,26 @@ public class NetFlowTests
     }
 
     [Test]
+    public async Task Flow_ThrowingCustomPolicy_CompletesRejectedAndRecordsDiagnostic()
+    {
+        var fixture = await TwoPeerFixture.StartAsync();
+        await using (fixture)
+        {
+            fixture.Client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
+
+            var flow = fixture.Server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+                fixture.Server.Peers.RemoteParticipantIds(),
+                new LoadSceneProposal("Battle01"),
+                FlowPolicy.Custom((_, _) => throw new InvalidOperationException("policy failed")),
+                TimeSpan.FromSeconds(5));
+            var result = await flow.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Rejected));
+            Assert.That(fixture.Server.Diagnostics.GetSnapshot().ErrorCount, Is.GreaterThanOrEqualTo(1));
+        }
+    }
+
+    [Test]
     public async Task Flow_Timeout_CompletesTimeout()
     {
         var fixture = await TwoPeerFixture.StartAsync();
@@ -205,6 +225,33 @@ public class NetFlowTests
 
             Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Timeout));
         }
+    }
+
+    [Test]
+    public async Task Flow_NonPositiveTimeout_ReturnsTimeoutWithoutStartingFlow()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+
+        server.Messages.RegisterMessage<LoadSceneProposal>();
+        server.Messages.RegisterMessage<LoadSceneAck>();
+        client.Messages.RegisterMessage<LoadSceneProposal>();
+        client.Messages.RegisterMessage<LoadSceneAck>();
+        client.Flow.OnProposal<LoadSceneProposal, LoadSceneAck>((_, _) => new LoadSceneAck(true, string.Empty));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var result = await server.Flow.ProposeAsync<LoadSceneProposal, LoadSceneAck>(
+            new[] { join.PeerId },
+            new LoadSceneProposal("ready"),
+            FlowPolicy.AllAccepted(),
+            TimeSpan.FromSeconds(-1));
+
+        Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Timeout));
+        Assert.That(result.FlowId, Is.EqualTo(0));
+        Assert.That(server.Flow.PendingFlowIds, Is.Empty);
     }
 
     [Test]

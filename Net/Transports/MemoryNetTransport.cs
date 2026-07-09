@@ -44,19 +44,37 @@ public sealed class MemoryNetNetwork
         MemoryNetTransport server;
         TransportConnectionId clientId;
         TransportConnectionId serverId;
+        var connectedPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         lock (_gate)
         {
             if (!_servers.TryGetValue((host, port), out server!))
                 return new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None, "No memory server is listening on this endpoint.");
+            if (!client.CanCreateConnection || !server.CanAcceptConnections)
+                return new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None, "The memory transport endpoint is not running.");
 
             clientId = new TransportConnectionId(++_nextConnectionId);
             serverId = new TransportConnectionId(++_nextConnectionId);
+            client.AddConnection(clientId, server, serverId, connectedPublished.Task);
+            server.AddConnection(serverId, client, clientId, connectedPublished.Task);
         }
 
-        client.AddConnection(clientId, server, serverId);
-        server.AddConnection(serverId, client, clientId);
-        server.DispatchPeerConnected(serverId);
+        try
+        {
+            server.DispatchPeerConnected(serverId);
+        }
+        finally
+        {
+            connectedPublished.TrySetResult();
+        }
+
+        if (!client.HasConnection(clientId))
+        {
+            var status = client.CanCreateConnection
+                ? NetTransportStatus.ConnectionRefused
+                : NetTransportStatus.ObjectDisposed;
+            return new TransportConnectResult(status, TransportConnectionId.None, "Connection closed before connect completed.");
+        }
 
         return new TransportConnectResult(NetTransportStatus.Ok, clientId);
     }
@@ -67,10 +85,18 @@ public sealed class MemoryNetNetwork
 /// </summary>
 public sealed class MemoryNetTransport : INetTransport
 {
+    [ThreadStatic]
+    private static HashSet<Task>? _publishingConnections;
+
     private readonly MemoryNetNetwork _network;
     private readonly ConcurrentDictionary<TransportConnectionId, MemoryConnection> _connections = new();
+    private readonly object _lifecycleGate = new();
+    private readonly object _disposeGate = new();
+    private readonly SemaphoreSlim _shutdownGate = new(1, 1);
     private int _disposed;
     private int _running;
+    private int _maxConnections;
+    private Task? _disposeTask;
 
     internal MemoryNetTransport(MemoryNetNetwork network, string name)
     {
@@ -95,20 +121,28 @@ public sealed class MemoryNetTransport : INetTransport
     /// <inheritdoc />
     public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default)
     {
-        if (IsDisposed)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.ObjectDisposed));
-        if (token.IsCancellationRequested)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.Cancelled));
-        if (options.Port <= 0)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.InvalidEndpoint, "Port must be greater than zero."));
-        if (Interlocked.Exchange(ref _running, 1) == 1)
-            return Task.FromResult(new TransportStartResult(NetTransportStatus.AlreadyRunning));
+        if (options.Port <= 0 || options.Port > 65535)
+            return Task.FromResult(new TransportStartResult(NetTransportStatus.InvalidEndpoint, "Port must be between 1 and 65535."));
+        if (options.MaxConnections <= 0)
+            return Task.FromResult(new TransportStartResult(NetTransportStatus.InvalidEndpoint, "MaxConnections must be greater than zero."));
 
-        var result = _network.RegisterServer(this, options.Port);
-        if (result.Status != NetTransportStatus.Ok)
-            Interlocked.Exchange(ref _running, 0);
+        lock (_lifecycleGate)
+        {
+            if (IsDisposed)
+                return Task.FromResult(new TransportStartResult(NetTransportStatus.ObjectDisposed));
+            if (token.IsCancellationRequested)
+                return Task.FromResult(new TransportStartResult(NetTransportStatus.Cancelled));
+            if (Volatile.Read(ref _running) == 1)
+                return Task.FromResult(new TransportStartResult(NetTransportStatus.AlreadyRunning));
 
-        return Task.FromResult(result);
+            var result = _network.RegisterServer(this, options.Port);
+            if (result.Status == NetTransportStatus.Ok)
+            {
+                Volatile.Write(ref _maxConnections, options.MaxConnections);
+                Volatile.Write(ref _running, 1);
+            }
+            return Task.FromResult(result);
+        }
     }
 
     /// <inheritdoc />
@@ -118,11 +152,13 @@ public sealed class MemoryNetTransport : INetTransport
             return Task.FromResult(new TransportConnectResult(NetTransportStatus.ObjectDisposed, TransportConnectionId.None));
         if (token.IsCancellationRequested)
             return Task.FromResult(new TransportConnectResult(NetTransportStatus.Cancelled, TransportConnectionId.None));
-        if (string.IsNullOrWhiteSpace(options.Host) || options.Port <= 0)
+        if (string.IsNullOrWhiteSpace(options.Host) || options.Port <= 0 || options.Port > 65535)
         {
             DispatchError(TransportConnectionId.None, "Host and port must be valid.");
             return Task.FromResult(new TransportConnectResult(NetTransportStatus.InvalidEndpoint, TransportConnectionId.None, "Host and port must be valid."));
         }
+        if (options.Timeout <= TimeSpan.Zero)
+            return Task.FromResult(new TransportConnectResult(NetTransportStatus.InvalidEndpoint, TransportConnectionId.None, "Timeout must be greater than zero."));
 
         return Task.FromResult(_network.Connect(this, options.Host, options.Port));
     }
@@ -130,27 +166,54 @@ public sealed class MemoryNetTransport : INetTransport
     /// <inheritdoc />
     public async Task<TransportStartResult> StopServerAsync(CancellationToken token = default)
     {
-        if (IsDisposed)
-            return new TransportStartResult(NetTransportStatus.ObjectDisposed);
-        if (token.IsCancellationRequested)
+        try
+        {
+            await _shutdownGate.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
             return new TransportStartResult(NetTransportStatus.Cancelled);
+        }
 
-        _network.UnregisterServer(this);
-        Interlocked.Exchange(ref _running, 0);
+        try
+        {
+            lock (_lifecycleGate)
+            {
+                if (IsDisposed)
+                    return new TransportStartResult(NetTransportStatus.ObjectDisposed);
 
-        foreach (var connectionId in _connections.Keys.ToArray())
-            await DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+                _network.UnregisterServer(this);
+                Volatile.Write(ref _running, 0);
+                Volatile.Write(ref _maxConnections, 0);
+            }
 
-        return new TransportStartResult(NetTransportStatus.Ok);
+            foreach (var connectionId in _connections.Keys.ToArray())
+                await DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+
+            return new TransportStartResult(NetTransportStatus.Ok);
+        }
+        finally
+        {
+            _shutdownGate.Release();
+        }
     }
 
     /// <inheritdoc />
-    public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed)
+    public async Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed)
     {
         if (_connections.TryRemove(connectionId, out var connection))
-            connection.Remote.RemoveRemoteConnection(connection.RemoteConnectionId, ToRemoteReason(reason));
+        {
+            if (_publishingConnections?.Contains(connection.ConnectedPublished) == true)
+            {
+                var remoteRemoved = connection.Remote._connections.TryRemove(connection.RemoteConnectionId, out _);
+                _ = DispatchDeferredDisconnectAsync(connectionId, connection, reason, remoteRemoved);
+                return;
+            }
 
-        return Task.CompletedTask;
+            await connection.ConnectedPublished.ConfigureAwait(false);
+            await connection.Remote.RemoveRemoteConnectionAsync(connection.RemoteConnectionId, ToRemoteReason(reason)).ConfigureAwait(false);
+            DispatchPeerDisconnected(connectionId, reason);
+        }
     }
 
     /// <inheritdoc />
@@ -171,46 +234,164 @@ public sealed class MemoryNetTransport : INetTransport
     }
 
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
-            return;
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                Volatile.Write(ref _disposed, 1);
+                _disposeTask = DisposeCoreAsync();
+            }
 
-        _network.UnregisterServer(this);
-
-        foreach (var connectionId in _connections.Keys.ToArray())
-            await DisconnectAsync(connectionId).ConfigureAwait(false);
+            return new ValueTask(_disposeTask);
+        }
     }
 
-    internal void AddConnection(TransportConnectionId localId, MemoryNetTransport remote, TransportConnectionId remoteId)
+    private async Task DisposeCoreAsync()
     {
-        _connections[localId] = new MemoryConnection(remote, remoteId);
+        await _shutdownGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            lock (_lifecycleGate)
+            {
+                _network.UnregisterServer(this);
+                Volatile.Write(ref _running, 0);
+                Volatile.Write(ref _maxConnections, 0);
+            }
+
+            foreach (var connectionId in _connections.Keys.ToArray())
+                await DisconnectAsync(connectionId).ConfigureAwait(false);
+        }
+        finally
+        {
+            _shutdownGate.Release();
+        }
     }
 
-    internal void RemoveRemoteConnection(TransportConnectionId localId, DisconnectReason reason)
+    internal void AddConnection(
+        TransportConnectionId localId,
+        MemoryNetTransport remote,
+        TransportConnectionId remoteId,
+        Task connectedPublished)
     {
-        if (_connections.TryRemove(localId, out _))
+        _connections[localId] = new MemoryConnection(remote, remoteId, connectedPublished);
+    }
+
+    internal async Task RemoveRemoteConnectionAsync(TransportConnectionId localId, DisconnectReason reason)
+    {
+        if (_connections.TryRemove(localId, out var connection))
+        {
+            await connection.ConnectedPublished.ConfigureAwait(false);
             DispatchPeerDisconnected(localId, reason);
+        }
     }
+
+    internal void RemoveRemoteConnection(TransportConnectionId localId, DisconnectReason reason) =>
+        RemoveRemoteConnectionAsync(localId, reason).GetAwaiter().GetResult();
 
     internal void DispatchPeerConnected(TransportConnectionId connectionId)
     {
-        Task.Run(() => PeerConnected?.Invoke(new TransportPeerConnected(connectionId)));
+        var callbacks = PeerConnected?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var message = new TransportPeerConnected(connectionId);
+        var connection = _connections.GetValueOrDefault(connectionId);
+        var publishing = _publishingConnections ??= new HashSet<Task>();
+        publishing.Add(connection.ConnectedPublished);
+        try
+        {
+            foreach (Action<TransportPeerConnected> callback in callbacks)
+            {
+                try
+                {
+                    callback(message);
+                }
+                catch (Exception ex)
+                {
+                    DispatchError(connectionId, "PeerConnected handler failed.", ex);
+                }
+            }
+        }
+        finally
+        {
+            publishing.Remove(connection.ConnectedPublished);
+        }
+    }
+
+    private async Task DispatchDeferredDisconnectAsync(
+        TransportConnectionId connectionId,
+        MemoryConnection connection,
+        DisconnectReason reason,
+        bool remoteRemoved)
+    {
+        await connection.ConnectedPublished.ConfigureAwait(false);
+        if (remoteRemoved)
+            connection.Remote.DispatchPeerDisconnected(connection.RemoteConnectionId, ToRemoteReason(reason));
+        DispatchPeerDisconnected(connectionId, reason);
     }
 
     private void DispatchPeerDisconnected(TransportConnectionId connectionId, DisconnectReason reason)
     {
-        Task.Run(() => PeerDisconnected?.Invoke(new TransportPeerDisconnected(connectionId, reason)));
+        var callbacks = PeerDisconnected?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var message = new TransportPeerDisconnected(connectionId, reason);
+        foreach (Action<TransportPeerDisconnected> callback in callbacks)
+        {
+            try
+            {
+                callback(message);
+            }
+            catch (Exception ex)
+            {
+                DispatchError(connectionId, "PeerDisconnected handler failed.", ex);
+            }
+        }
     }
 
     private void DispatchPacketReceived(TransportConnectionId connectionId, byte[] data, NetChannel channel)
     {
-        PacketReceived?.Invoke(new TransportPacketReceived(connectionId, data, channel));
+        var callbacks = PacketReceived?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var message = new TransportPacketReceived(connectionId, data, channel);
+        foreach (Action<TransportPacketReceived> callback in callbacks)
+        {
+            try
+            {
+                callback(message);
+            }
+            catch (Exception ex)
+            {
+                DispatchError(connectionId, "PacketReceived handler failed.", ex);
+            }
+        }
     }
 
     private void DispatchError(TransportConnectionId connectionId, string message, Exception? exception = null)
     {
-        Task.Run(() => Error?.Invoke(new TransportError(connectionId, message, exception)));
+        var callbacks = Error?.GetInvocationList();
+        if (callbacks is null)
+            return;
+
+        var error = new TransportError(connectionId, message, exception);
+        _ = Task.Run(() =>
+        {
+            foreach (Action<TransportError> callback in callbacks)
+            {
+                try
+                {
+                    callback(error);
+                }
+                catch
+                {
+                }
+            }
+        });
     }
 
     private static DisconnectReason ToRemoteReason(DisconnectReason reason) => reason switch
@@ -221,5 +402,15 @@ public sealed class MemoryNetTransport : INetTransport
 
     private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 
-    private readonly record struct MemoryConnection(MemoryNetTransport Remote, TransportConnectionId RemoteConnectionId);
+    internal bool CanCreateConnection => !IsDisposed;
+    internal bool HasConnection(TransportConnectionId connectionId) => _connections.ContainsKey(connectionId);
+    internal bool CanAcceptConnections =>
+        !IsDisposed &&
+        Volatile.Read(ref _running) == 1 &&
+        _connections.Count < Volatile.Read(ref _maxConnections);
+
+    private readonly record struct MemoryConnection(
+        MemoryNetTransport Remote,
+        TransportConnectionId RemoteConnectionId,
+        Task ConnectedPublished);
 }

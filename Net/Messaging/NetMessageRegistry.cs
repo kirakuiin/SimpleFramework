@@ -108,27 +108,39 @@ public sealed class NetFlowHandlerAttribute : Attribute
 /// </summary>
 public sealed class NetMessageRegistry
 {
+    private readonly object _gate = new();
     private readonly Dictionary<Type, NetMessageDescriptor> _byType = new();
     private readonly Dictionary<string, NetMessageDescriptor> _byKey = new(StringComparer.Ordinal);
     private readonly Dictionary<ulong, NetMessageDescriptor> _byId = new();
     private readonly List<NetHandlerDescriptor> _handlerDescriptors = new();
     private readonly List<NetRequestHandlerDescriptor> _requestHandlerDescriptors = new();
     private readonly List<NetFlowHandlerDescriptor> _flowHandlerDescriptors = new();
+    private int _frozen;
+    private int _permanentlyFrozen;
 
     /// <summary>
     /// 扫描得到的普通消息处理方法。
     /// </summary>
-    public IReadOnlyList<NetHandlerDescriptor> HandlerDescriptors => _handlerDescriptors;
+    public IReadOnlyList<NetHandlerDescriptor> HandlerDescriptors
+    {
+        get { lock (_gate) return _handlerDescriptors.ToArray(); }
+    }
 
     /// <summary>
     /// 扫描得到的请求响应处理方法。
     /// </summary>
-    public IReadOnlyList<NetRequestHandlerDescriptor> RequestHandlerDescriptors => _requestHandlerDescriptors;
+    public IReadOnlyList<NetRequestHandlerDescriptor> RequestHandlerDescriptors
+    {
+        get { lock (_gate) return _requestHandlerDescriptors.ToArray(); }
+    }
 
     /// <summary>
     /// 扫描得到的流程处理方法。
     /// </summary>
-    public IReadOnlyList<NetFlowHandlerDescriptor> FlowHandlerDescriptors => _flowHandlerDescriptors;
+    public IReadOnlyList<NetFlowHandlerDescriptor> FlowHandlerDescriptors
+    {
+        get { lock (_gate) return _flowHandlerDescriptors.ToArray(); }
+    }
 
     /// <summary>
     /// 注册一个消息类型。
@@ -141,24 +153,30 @@ public sealed class NetMessageRegistry
     /// <param name="messageType">消息类型。</param>
     public NetMessageDescriptor Register(Type messageType)
     {
-        if (_byType.TryGetValue(messageType, out var existing))
-            return existing;
+        ArgumentNullException.ThrowIfNull(messageType);
 
-        var attribute = messageType.GetCustomAttribute<NetMessageAttribute>()
-            ?? throw new InvalidOperationException($"Message type '{messageType.FullName}' must declare NetMessageAttribute.");
-        if (string.IsNullOrWhiteSpace(attribute.Key))
-            throw new InvalidOperationException($"Message type '{messageType.FullName}' has an empty message key.");
-        if (_byKey.TryGetValue(attribute.Key, out var duplicate))
-            throw new InvalidOperationException($"Duplicate message key '{attribute.Key}' for '{messageType.FullName}' and '{duplicate.MessageType.FullName}'.");
+        lock (_gate)
+        {
+            if (_byType.TryGetValue(messageType, out var existing))
+                return existing;
+            EnsureCanMutate();
 
-        var descriptor = new NetMessageDescriptor(messageType, attribute.Key, StableHash(attribute.Key));
-        if (_byId.TryGetValue(descriptor.MessageId, out var collision))
-            throw new InvalidOperationException($"Message id collision for '{attribute.Key}' and '{collision.Key}'.");
+            var attribute = messageType.GetCustomAttribute<NetMessageAttribute>()
+                ?? throw new InvalidOperationException($"Message type '{messageType.FullName}' must declare NetMessageAttribute.");
+            if (string.IsNullOrWhiteSpace(attribute.Key))
+                throw new InvalidOperationException($"Message type '{messageType.FullName}' has an empty message key.");
+            if (_byKey.TryGetValue(attribute.Key, out var duplicate))
+                throw new InvalidOperationException($"Duplicate message key '{attribute.Key}' for '{messageType.FullName}' and '{duplicate.MessageType.FullName}'.");
 
-        _byType[messageType] = descriptor;
-        _byKey[attribute.Key] = descriptor;
-        _byId[descriptor.MessageId] = descriptor;
-        return descriptor;
+            var descriptor = new NetMessageDescriptor(messageType, attribute.Key, StableHash(attribute.Key));
+            if (_byId.TryGetValue(descriptor.MessageId, out var collision))
+                throw new InvalidOperationException($"Message id collision for '{attribute.Key}' and '{collision.Key}'.");
+
+            _byType[messageType] = descriptor;
+            _byKey[attribute.Key] = descriptor;
+            _byId[descriptor.MessageId] = descriptor;
+            return descriptor;
+        }
     }
 
     /// <summary>
@@ -172,18 +190,56 @@ public sealed class NetMessageRegistry
     /// <param name="messageType">消息类型。</param>
     public NetMessageDescriptor Get(Type messageType)
     {
-        if (_byType.TryGetValue(messageType, out var descriptor))
-            return descriptor;
+        ArgumentNullException.ThrowIfNull(messageType);
 
-        return Register(messageType);
+        lock (_gate)
+        {
+            if (_byType.TryGetValue(messageType, out var descriptor))
+                return descriptor;
+
+            return Register(messageType);
+        }
     }
 
     /// <summary>
     /// 按消息 ID 查找消息描述。
     /// </summary>
-    public bool TryGet(ulong messageId, out NetMessageDescriptor descriptor) => _byId.TryGetValue(messageId, out descriptor!);
+    public bool TryGet(ulong messageId, out NetMessageDescriptor descriptor)
+    {
+        lock (_gate)
+            return _byId.TryGetValue(messageId, out descriptor!);
+    }
 
-    internal bool Contains(Type messageType) => _byType.ContainsKey(messageType);
+    internal bool Contains(Type messageType)
+    {
+        lock (_gate)
+            return _byType.ContainsKey(messageType);
+    }
+
+    internal void RegisterBatch(params Type[] messageTypes)
+    {
+        lock (_gate)
+        {
+            if (messageTypes.All(_byType.ContainsKey))
+                return;
+            EnsureCanMutate();
+            var typeSnapshot = _byType.ToArray();
+            var keySnapshot = _byKey.ToArray();
+            var idSnapshot = _byId.ToArray();
+            try
+            {
+                foreach (var messageType in messageTypes)
+                    Register(messageType);
+            }
+            catch
+            {
+                Restore(_byType, typeSnapshot);
+                Restore(_byKey, keySnapshot);
+                Restore(_byId, idSnapshot);
+                throw;
+            }
+        }
+    }
 
     /// <summary>
     /// 扫描程序集中的消息类型和处理器标记。
@@ -193,38 +249,76 @@ public sealed class NetMessageRegistry
     public void RegisterAssembly(Assembly assembly, Func<Type, bool>? typeFilter = null)
     {
         ArgumentNullException.ThrowIfNull(assembly);
-
         var types = assembly.GetTypes()
             .Where(type => typeFilter?.Invoke(type) ?? true)
             .OrderBy(type => type.FullName, StringComparer.Ordinal)
             .ToArray();
-
-        foreach (var type in types.Where(type => type.GetCustomAttribute<NetMessageAttribute>() is not null))
-            Register(type);
-
-        foreach (var method in types.SelectMany(GetOrderedMethods))
+        lock (_gate)
         {
-            var handler = method.GetCustomAttribute<NetHandlerAttribute>();
-            if (handler is not null)
-            {
-                Register(handler.MessageType);
-                _handlerDescriptors.Add(new NetHandlerDescriptor(handler.MessageType, method));
-            }
+            EnsureCanMutate();
+            var typeSnapshot = _byType.ToArray();
+            var keySnapshot = _byKey.ToArray();
+            var idSnapshot = _byId.ToArray();
+            var handlerCount = _handlerDescriptors.Count;
+            var requestCount = _requestHandlerDescriptors.Count;
+            var flowCount = _flowHandlerDescriptors.Count;
 
-            var requestHandler = method.GetCustomAttribute<NetRequestHandlerAttribute>();
-            if (requestHandler is not null)
+            try
             {
-                Register(requestHandler.RequestType);
-                Register(requestHandler.ResponseType);
-                _requestHandlerDescriptors.Add(new NetRequestHandlerDescriptor(requestHandler.RequestType, requestHandler.ResponseType, method));
-            }
+                foreach (var type in types.Where(type => type.GetCustomAttribute<NetMessageAttribute>() is not null))
+                    Register(type);
 
-            var flowHandler = method.GetCustomAttribute<NetFlowHandlerAttribute>();
-            if (flowHandler is not null)
+                foreach (var method in types.SelectMany(GetOrderedMethods))
+                {
+                    var handler = method.GetCustomAttribute<NetHandlerAttribute>();
+                    if (handler is not null)
+                    {
+                        Register(handler.MessageType);
+                        if (!_handlerDescriptors.Any(descriptor =>
+                                descriptor.MessageType == handler.MessageType && descriptor.Method == method))
+                        {
+                            _handlerDescriptors.Add(new NetHandlerDescriptor(handler.MessageType, method));
+                        }
+                    }
+
+                    var requestHandler = method.GetCustomAttribute<NetRequestHandlerAttribute>();
+                    if (requestHandler is not null)
+                    {
+                        Register(requestHandler.RequestType);
+                        Register(requestHandler.ResponseType);
+                        if (!_requestHandlerDescriptors.Any(descriptor =>
+                                descriptor.RequestType == requestHandler.RequestType &&
+                                descriptor.ResponseType == requestHandler.ResponseType &&
+                                descriptor.Method == method))
+                        {
+                            _requestHandlerDescriptors.Add(new NetRequestHandlerDescriptor(requestHandler.RequestType, requestHandler.ResponseType, method));
+                        }
+                    }
+
+                    var flowHandler = method.GetCustomAttribute<NetFlowHandlerAttribute>();
+                    if (flowHandler is not null)
+                    {
+                        Register(flowHandler.ProposalType);
+                        Register(flowHandler.ResponseType);
+                        if (!_flowHandlerDescriptors.Any(descriptor =>
+                                descriptor.ProposalType == flowHandler.ProposalType &&
+                                descriptor.ResponseType == flowHandler.ResponseType &&
+                                descriptor.Method == method))
+                        {
+                            _flowHandlerDescriptors.Add(new NetFlowHandlerDescriptor(flowHandler.ProposalType, flowHandler.ResponseType, method));
+                        }
+                    }
+                }
+            }
+            catch
             {
-                Register(flowHandler.ProposalType);
-                Register(flowHandler.ResponseType);
-                _flowHandlerDescriptors.Add(new NetFlowHandlerDescriptor(flowHandler.ProposalType, flowHandler.ResponseType, method));
+                Restore(_byType, typeSnapshot);
+                Restore(_byKey, keySnapshot);
+                Restore(_byId, idSnapshot);
+                _handlerDescriptors.RemoveRange(handlerCount, _handlerDescriptors.Count - handlerCount);
+                _requestHandlerDescriptors.RemoveRange(requestCount, _requestHandlerDescriptors.Count - requestCount);
+                _flowHandlerDescriptors.RemoveRange(flowCount, _flowHandlerDescriptors.Count - flowCount);
+                throw;
             }
         }
     }
@@ -234,12 +328,60 @@ public sealed class NetMessageRegistry
     /// </summary>
     public string GetFingerprint()
     {
-        var manifest = string.Join(
-            "\n",
-            _byKey.Values
-                .OrderBy(descriptor => descriptor.Key, StringComparer.Ordinal)
-                .Select(descriptor => $"{descriptor.Key}:{descriptor.MessageId}:{GetPayloadShape(descriptor.MessageType)}"));
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest)));
+        lock (_gate)
+        {
+            var manifest = string.Join(
+                "\n",
+                _byKey.Values
+                    .OrderBy(descriptor => descriptor.Key, StringComparer.Ordinal)
+                    .Select(descriptor => $"{descriptor.Key}:{descriptor.MessageId}:{GetPayloadShape(descriptor.MessageType)}"));
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest)));
+        }
+    }
+
+    internal void Freeze()
+    {
+        lock (_gate)
+        {
+            _permanentlyFrozen = 1;
+            _frozen = 1;
+        }
+    }
+
+    internal RegistryReservation Reserve()
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _permanentlyFrozen) == 1)
+                return new RegistryReservation(this, completed: true);
+
+            EnsureCanMutate();
+            _frozen = 1;
+            return new RegistryReservation(this);
+        }
+    }
+
+    private void EnsureCanMutate()
+    {
+        if (Volatile.Read(ref _frozen) == 1)
+            throw new InvalidOperationException("Message protocol manifest is frozen after the session starts.");
+    }
+
+    private void ReleaseReservation()
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _permanentlyFrozen) == 0)
+                _frozen = 0;
+        }
+    }
+
+    private static void Restore<TKey, TValue>(Dictionary<TKey, TValue> dictionary, KeyValuePair<TKey, TValue>[] snapshot)
+        where TKey : notnull
+    {
+        dictionary.Clear();
+        foreach (var pair in snapshot)
+            dictionary.Add(pair.Key, pair.Value);
     }
 
     /// <summary>
@@ -305,6 +447,34 @@ public sealed class NetMessageRegistry
         return type.GetMethods(flags)
             .OrderBy(method => method.Name, StringComparer.Ordinal)
             .ThenBy(method => method.MetadataToken);
+    }
+
+    internal sealed class RegistryReservation : IDisposable
+    {
+        private readonly NetMessageRegistry _owner;
+        private int _completed;
+
+        public RegistryReservation(NetMessageRegistry owner, bool completed = false)
+        {
+            _owner = owner;
+            _completed = completed ? 1 : 0;
+        }
+
+        public void Commit()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 1)
+                return;
+
+            _owner.Freeze();
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 1)
+                return;
+
+            _owner.ReleaseReservation();
+        }
     }
 }
 

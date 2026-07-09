@@ -100,3 +100,17 @@
 - [x] 12.4 Run `dotnet test .\SimpleFramework.sln` and fix full solution test failures.
 - [x] 12.5 Run `openspec validate net-module-redesign --type change --strict --no-interactive` and fix artifact validation issues.
 - [x] 12.6 Review implementation against `proposal.md`, `design.md`, all five specs, and `implementation-plan.md`; close any coverage gaps before archiving.
+- [x] 12.7 Fix review findings for ordered message handling, async dispatch, TCP shutdown, discovery cancellation, and resource cleanup; add focused regressions.
+- [x] 12.8 Fix composed async-handler deadlocks, join/stop races, consistent shutdown cancellation, TCP disconnect duplication, browser refresh serialization, stats timeout validation, and send-phase cancellation; add focused regressions.
+- [x] 12.9 Fix stale control-packet mutation, registry freeze bypass, request/flow dispatcher routing, reconnect validation/cancellation, memory transport connect/stop atomicity, browser disposal, flow timeout validation, and authentication error/lifecycle handling; add focused regressions.
+- [x] 12.10 Fix join/disconnect correlation, control-event preemption, TCP lifecycle and accept-drain races, memory transport lifecycle atomicity, disconnect parity, stale peer publication, and concurrent handler registration; add focused regressions.
+- [x] 12.11 Fix connect/dispose races, shared asynchronous disposal completion, transport event ordering, and memory transport endpoint/capacity parity; add focused regressions.
+- [x] 12.12 Isolate transport callback failures, validate join/connect timeouts, recover automatic browser refresh after transient failures, and share discovery/browser disposal completion; add focused regressions.
+- [x] 12.13 Stabilize peer-directory event-order regression timing and rerun a fresh build before full verification.
+- [x] 12.14 Serialize reconnect expiry with acceptance, propagate stats cancellation through send, and contain custom flow-policy exceptions; add focused regressions.
+- [x] 12.15 Model reconnect acceptance as an in-flight attempt, serialize Stop with server join transitions, and preserve expiry through failed acceptance; add focused regressions.
+- [x] 12.16 Revalidate initial join after JoinAccepted send, propagate transport stop failures, and release departed-peer send-limit state; add focused regressions.
+- [x] 12.17 Continue broadcasts after per-peer failures, honor configured time providers in discovery convenience construction, and release TCP cancellation resources; add focused regressions.
+- [x] 12.18 Buffer post-accept business packets until client commit, await UDP advertisement shutdown, make assembly handler scans fail-fast and idempotent, validate discovery envelopes/endpoints, and validate TCP frame limits; add focused regressions.
+- [x] 12.19 Gate all pre-commit client traffic, serialize UDP advertisement lifecycle, normalize discovery scan duration, make assembly registration transactional and signature-checked, synchronize protocol freeze, and order memory connect/disconnect publication; add focused regressions.
+- [x] 12.20 Reject malformed discovery rooms and async-void handlers, keep registry filters outside locks, make request registration atomic, share asynchronous disposal completion, and reject stale memory-connect success; add focused regressions.

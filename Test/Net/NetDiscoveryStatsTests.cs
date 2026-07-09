@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -72,6 +73,42 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task DiscoveryScan_WithNonPositiveDuration_ReturnsEmptyAcrossBackends()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(Options(appId), network);
+        await using var browser = new NetDiscovery(Options(appId), network);
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.Zero), Is.Empty);
+        Assert.That(await browser.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(-1)), Is.Empty);
+    }
+
+    [Test]
+    public void MemoryDiscoveryNetwork_CancelledOperations_DoNotMutateOrReturnResults()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var packet = CreatePacket(Guid.NewGuid(), "room-1", new RoomListMetadata("Room", 1, 4, false));
+
+        Assert.CatchAsync<OperationCanceledException>(() =>
+            network.StartAdvertiseAsync(packet, new DiscoveryOptions(), cancellation.Token));
+        Assert.CatchAsync<OperationCanceledException>(() =>
+            network.UpdateAdvertiseAsync(new DiscoveryAdvertisementId(Guid.NewGuid()), packet, new DiscoveryOptions(), cancellation.Token));
+        Assert.CatchAsync<OperationCanceledException>(() =>
+            network.StopAdvertiseAsync(new DiscoveryAdvertisementId(Guid.NewGuid()), cancellation.Token));
+        Assert.CatchAsync<OperationCanceledException>(() =>
+            network.ScanAsync(TimeSpan.FromMilliseconds(1), new DiscoveryOptions(), cancellation.Token));
+
+        Assert.That(network.ScanAsync(TimeSpan.Zero, new DiscoveryOptions()).Result, Is.Empty);
+    }
+
+    [Test]
     public async Task DiscoveryScan_FiltersDifferentMetadataSchemaBeforeDecode()
     {
         var network = new MemoryDiscoveryNetwork();
@@ -112,6 +149,113 @@ public class NetDiscoveryStatsTests
         Assert.That(result.Message, Does.Contain("MetadataSchemaId"));
     }
 
+    [TestCase("", 7777)]
+    [TestCase("room-1", 0)]
+    [TestCase("room-1", 65536)]
+    public async Task StartAdvertise_WithInvalidEndpoint_ReturnsInvalidState(string roomId, int gamePort)
+    {
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), new MemoryDiscoveryNetwork());
+
+        var result = await discovery.StartAdvertiseAsync(
+            new LanAdvertiseInfo
+            {
+                RoomId = roomId,
+                GamePort = gamePort,
+                MetadataSchemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1")
+            },
+            new RoomListMetadata("Room", 1, 4, false));
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.InvalidState));
+    }
+
+    [Test]
+    public async Task StartAdvertise_WithNullMetadata_ReturnsTransportFailed()
+    {
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), new MemoryDiscoveryNetwork());
+
+        var result = await discovery.StartAdvertiseAsync<RoomListMetadata>(
+            new LanAdvertiseInfo
+            {
+                RoomId = "room-1",
+                GamePort = 7777,
+                MetadataSchemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1")
+            },
+            null);
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+    }
+
+    [TestCase(0u, DiscoveryPacket.CurrentPacketVersion)]
+    [TestCase(DiscoveryPacket.ExpectedMagic, DiscoveryPacket.CurrentPacketVersion + 1)]
+    public async Task DiscoveryScan_WithInvalidEnvelope_DropsPacketAcrossBackends(uint magic, int packetVersion)
+    {
+        var appId = Guid.NewGuid();
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false));
+        var backend = new StaticDiscoveryBackend(new DiscoveryPacket(
+            magic,
+            (ushort)packetVersion,
+            appId,
+            1,
+            "invalid-envelope",
+            7777,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            payload.Length,
+            payload));
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
+
+        Assert.That(rooms, Is.Empty);
+        Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
+    [TestCase("", 7777)]
+    [TestCase("room-1", 0)]
+    [TestCase("room-1", 65536)]
+    public async Task DiscoveryScan_WithInvalidRoomEndpoint_DropsPacket(string roomId, int gamePort)
+    {
+        var appId = Guid.NewGuid();
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new RoomListMetadata("Room", 1, 4, false));
+        var backend = new StaticDiscoveryBackend(new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            roomId,
+            gamePort,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            payload.Length,
+            payload));
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
+
+        Assert.That(rooms, Is.Empty);
+        Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task DiscoveryScan_WithNullMetadataPayload_DropsPacket()
+    {
+        var appId = Guid.NewGuid();
+        var backend = new StaticDiscoveryBackend(new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            "room-1",
+            7777,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            0,
+            null));
+        await using var discovery = new NetDiscovery(Options(appId), backend);
+
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
+
+        Assert.That(rooms, Is.Empty);
+        Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
+    }
+
     [Test]
     public async Task DiscoveryScan_WithMalformedMetadata_DropsPacketAndRecordsDiagnostic()
     {
@@ -128,7 +272,7 @@ public class NetDiscoveryStatsTests
             new byte[] { 0xff, 0x00 }));
         await using var discovery = new NetDiscovery(Options(appId), backend);
 
-        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
 
         Assert.That(rooms, Is.Empty);
         Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
@@ -152,7 +296,7 @@ public class NetDiscoveryStatsTests
             payload));
         await using var discovery = new NetDiscovery(Options(appId), backend);
 
-        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
 
         Assert.That(rooms, Is.Empty);
         Assert.That(discovery.Diagnostics.GetSnapshot().DroppedPackets, Is.EqualTo(1));
@@ -206,6 +350,114 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task UdpDiscovery_StopAwaitsTrackedAdvertisementLoop()
+    {
+        var appId = Guid.NewGuid();
+        var backend = new UdpDiscoveryNetwork();
+        var options = Options(
+            appId,
+            discoveryPort: GetUnusedUdpPort(),
+            advertiseInterval: TimeSpan.FromMinutes(1)).Discovery;
+        var id = await backend.StartAdvertiseAsync(
+            CreatePacket(appId, "tracked-loop", new RoomListMetadata("Room", 1, 4, false)),
+            options);
+        var field = typeof(UdpDiscoveryNetwork).GetField(
+            "_advertisements",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var advertisements = (System.Collections.IDictionary)field!.GetValue(backend)!;
+        var run = advertisements[id]!;
+        var loopTask = run.GetType().GetProperty("LoopTask")?.GetValue(run) as Task;
+
+        await backend.StopAdvertiseAsync(id);
+
+        Assert.That(loopTask, Is.Not.Null, "Advertisement lifecycle must retain its background task.");
+        Assert.That(loopTask!.IsCompleted, Is.True);
+        await backend.DisposeAsync();
+    }
+
+    [Test]
+    public async Task UdpDiscovery_ConcurrentUpdates_LeaveOnlyOneAdvertisementLoop()
+    {
+        var clock = new ManualTimeProvider();
+        var appId = Guid.NewGuid();
+        await using var backend = new UdpDiscoveryNetwork(clock);
+        var options = Options(
+            appId,
+            discoveryPort: GetUnusedUdpPort(),
+            advertiseInterval: TimeSpan.FromMinutes(1)).Discovery;
+        var packet = CreatePacket(appId, "concurrent-update", new RoomListMetadata("Room", 1, 4, false));
+        var id = await backend.StartAdvertiseAsync(packet, options);
+
+        await Task.WhenAll(Enumerable.Range(0, 20)
+            .Select(_ => backend.UpdateAdvertiseAsync(id, packet, options)));
+        await Task.Delay(50);
+
+        Assert.That(clock.ActiveTimerCount, Is.EqualTo(1));
+        await backend.StopAdvertiseAsync(id);
+        Assert.That(clock.ActiveTimerCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task UdpDiscovery_ConcurrentDisposeCallersShareCompletion()
+    {
+        var backend = new UdpDiscoveryNetwork();
+        var lifecycleGate = (SemaphoreSlim)typeof(UdpDiscoveryNetwork)
+            .GetField("_lifecycleGate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(backend)!;
+        await lifecycleGate.WaitAsync();
+        try
+        {
+            var first = backend.DisposeAsync().AsTask();
+            var second = backend.DisposeAsync().AsTask();
+
+            Assert.That(first.IsCompleted, Is.False);
+            Assert.That(second.IsCompleted, Is.False);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+
+        await backend.DisposeAsync();
+    }
+
+    [Test]
+    public async Task UdpDiscovery_StartCancellationTokenDoesNotOwnAdvertisementLifetime()
+    {
+        var clock = new ManualTimeProvider();
+        await using var backend = new UdpDiscoveryNetwork(clock);
+        var appId = Guid.NewGuid();
+        var options = Options(
+            appId,
+            discoveryPort: GetUnusedUdpPort(),
+            advertiseInterval: TimeSpan.FromMinutes(1)).Discovery;
+        using var cancellation = new CancellationTokenSource();
+        var id = await backend.StartAdvertiseAsync(
+            CreatePacket(appId, "token-lifetime", new RoomListMetadata("Room", 1, 4, false)),
+            options,
+            cancellation.Token);
+
+        cancellation.Cancel();
+        await Task.Delay(50);
+
+        Assert.That(clock.ActiveTimerCount, Is.EqualTo(1));
+        await backend.StopAdvertiseAsync(id);
+    }
+
+    [Test]
+    public async Task UdpDiscovery_DisposeCancelsActiveScan()
+    {
+        var backend = new UdpDiscoveryNetwork();
+        var options = Options(Guid.NewGuid(), discoveryPort: GetUnusedUdpPort()).Discovery;
+        var scan = backend.ScanAsync(TimeSpan.FromMinutes(1), options);
+
+        await backend.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(scan.IsCompleted, Is.True);
+        Assert.That(await scan, Is.Empty);
+    }
+
+    [Test]
     public async Task DiscoveryScan_WhenBackendDoesNotMeasureLatency_ReturnsNullLatency()
     {
         var network = new MemoryDiscoveryNetwork();
@@ -244,7 +496,7 @@ public class NetDiscoveryStatsTests
         });
         await using var discovery = new NetDiscovery(Options(appId), backend);
 
-        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero);
+        var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
 
         Assert.That(rooms.Single().EstimatedLatency, Is.EqualTo(expectedLatency));
     }
@@ -446,6 +698,88 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task BrowserAutomaticRefresh_RecoversAfterTransientScanFailure()
+    {
+        var appId = Guid.NewGuid();
+        var packet = CreatePacket(appId, "room-recovered", new RoomListMetadata("Recovered", 1, 4, false));
+        var backend = new FailOnceDiscoveryBackend(packet);
+        await using var discovery = new NetDiscovery(
+            Options(appId, advertiseInterval: TimeSpan.FromMilliseconds(20)),
+            backend);
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+        var found = new TaskCompletionSource<LanScanResult<RoomListMetadata>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        browser.RoomFound += room => found.TrySetResult(room);
+
+        var room = await found.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(room.RoomId, Is.EqualTo("room-recovered"));
+        Assert.That(backend.ScanCount, Is.GreaterThanOrEqualTo(2));
+    }
+
+    [Test]
+    public async Task ConcurrentBrowserDispose_AllCallersAwaitActiveRefresh()
+    {
+        var backend = new BlockingUncancellableScanBackend();
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), backend);
+        var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+        var refresh = browser.RefreshAsync();
+        await backend.ScanStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var firstDispose = browser.DisposeAsync().AsTask();
+        var secondDispose = browser.DisposeAsync().AsTask();
+        Assert.That(firstDispose.IsCompleted, Is.False);
+        Assert.That(secondDispose.IsCompleted, Is.False);
+
+        backend.ReleaseScan.TrySetResult();
+        await Task.WhenAll(refresh, firstDispose, secondDispose).WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task ConcurrentDiscoveryDispose_AllCallersAwaitBackendCleanup()
+    {
+        var backend = new BlockingDisposeDiscoveryBackend();
+        var discovery = new NetDiscovery(Options(Guid.NewGuid()), backend);
+
+        var firstDispose = discovery.DisposeAsync().AsTask();
+        await backend.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var secondDispose = discovery.DisposeAsync().AsTask();
+        Assert.That(firstDispose.IsCompleted, Is.False);
+        Assert.That(secondDispose.IsCompleted, Is.False);
+
+        backend.ReleaseDispose.TrySetResult();
+        await Task.WhenAll(firstDispose, secondDispose).WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task BrowserRefresh_ConcurrentCallsAreSerialized()
+    {
+        var backend = new ConcurrentScanDiscoveryBackend();
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), backend);
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+
+        var first = browser.RefreshAsync();
+        await backend.FirstScanStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = browser.RefreshAsync();
+        var secondStartedEarly = false;
+        try
+        {
+            await backend.SecondScanStarted.Task.WaitAsync(TimeSpan.FromMilliseconds(100));
+            secondStartedEarly = true;
+        }
+        catch (TimeoutException)
+        {
+        }
+        finally
+        {
+            backend.ReleaseScans.TrySetResult();
+        }
+
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(secondStartedEarly, Is.False);
+        Assert.That(backend.MaxConcurrentScans, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task DiscoveryDispose_CancelsActiveBrowserLoop()
     {
         var clock = new ManualTimeProvider();
@@ -456,6 +790,73 @@ public class NetDiscoveryStatsTests
         clock.Advance(TimeSpan.FromSeconds(1));
 
         Assert.DoesNotThrowAsync(async () => await browser.DisposeAsync());
+    }
+
+    [Test]
+    public async Task DiscoveryConvenienceConstructor_UsesConfiguredTimeProviderForScanTimeout()
+    {
+        var clock = new ManualTimeProvider();
+        var options = Options(Guid.NewGuid(), timeProvider: clock, discoveryPort: GetUnusedUdpPort());
+        await using var discovery = new NetDiscovery(options);
+
+        var scan = discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromSeconds(5));
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        var rooms = await scan.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.That(rooms, Is.Empty);
+    }
+
+    [Test]
+    public void DiscoveryConvenienceConstructor_WithNullOptions_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => new NetDiscovery(null));
+    }
+
+    [Test]
+    public async Task BrowserDispose_IsIdempotent()
+    {
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), new MemoryDiscoveryNetwork());
+        var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+
+        await browser.DisposeAsync();
+
+        Assert.DoesNotThrowAsync(async () => await browser.DisposeAsync());
+    }
+
+    [Test]
+    public async Task BrowserRoomFoundHandler_CanSynchronouslyRefreshAgain()
+    {
+        var network = new MemoryDiscoveryNetwork();
+        var appId = Guid.NewGuid();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+        await using var advertiser = new NetDiscovery(Options(appId), network);
+        await using var discovery = new NetDiscovery(Options(appId), network);
+        await advertiser.StartAdvertiseAsync(
+            new LanAdvertiseInfo { RoomId = "room-1", GamePort = 7777, MetadataSchemaId = schemaId },
+            new RoomListMetadata("Room", 1, 4, false));
+        await using var browser = await discovery.StartBrowserAsync<RoomListMetadata>();
+        var reentrantRefreshCompleted = false;
+        browser.RoomFound += _ =>
+        {
+            reentrantRefreshCompleted = browser.RefreshAsync().Wait(TimeSpan.FromMilliseconds(200));
+        };
+
+        await browser.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(reentrantRefreshCompleted, Is.True);
+    }
+
+    [Test]
+    public async Task DiscoveryDispose_CancelsActiveOneShotScan()
+    {
+        var backend = new BlockingScanDiscoveryBackend();
+        var discovery = new NetDiscovery(Options(Guid.NewGuid()), backend);
+        var scan = discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMinutes(1));
+        await backend.WaitForScanAsync();
+
+        await discovery.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.CatchAsync<OperationCanceledException>(async () => await scan);
     }
 
     [Test]
@@ -621,6 +1022,50 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task Stats_NonPositiveTimeout_ReturnsTimeoutWithoutThrowing()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        server.Stats.DropProbeResponses = true;
+
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        var negative = await client.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.FromSeconds(-2));
+        var zero = await client.Stats.GetLatencyAsync(PeerId.Server, TimeSpan.Zero);
+
+        Assert.That(negative.Status, Is.EqualTo(NetStatsStatus.Timeout));
+        Assert.That(zero.Status, Is.EqualTo(NetStatsStatus.Timeout));
+    }
+
+    [Test]
+    public async Task Stats_CancellationInterruptsBlockedSend()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        var blockingTransport = new CancellableStatsSendTransport(network.CreateTransport("server"));
+        await using var server = new GameNet(blockingTransport, Options(appId));
+        await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        var join = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+        blockingTransport.BlockSends = true;
+        using var cancellation = new CancellationTokenSource();
+
+        var probe = server.Stats.GetLatencyAsync(join.PeerId, TimeSpan.FromSeconds(30), cancellation.Token);
+        await blockingTransport.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        var result = await probe.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetStatsStatus.TransportFailed));
+        var pending = typeof(NetStats)
+            .GetField("_pending", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(server.Stats)!;
+        Assert.That((int)pending.GetType().GetProperty("Count")!.GetValue(pending)!, Is.Zero);
+    }
+
+    [Test]
     public async Task Stats_IgnoresPongFromWrongPeer()
     {
         var clock = new ManualTimeProvider();
@@ -721,6 +1166,21 @@ public class NetDiscoveryStatsTests
         Assert.That(result.PeerStats.TransportLoss, Is.Null);
     }
 
+    private static DiscoveryPacket CreatePacket(Guid appId, string roomId, RoomListMetadata metadata)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(metadata);
+        return new DiscoveryPacket(
+            DiscoveryPacket.ExpectedMagic,
+            DiscoveryPacket.CurrentPacketVersion,
+            appId,
+            1,
+            roomId,
+            7777,
+            DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
+            payload.Length,
+            payload);
+    }
+
     private static GameNetOptions Options(
         Guid appId,
         int protocolVersion = 1,
@@ -798,6 +1258,60 @@ public class NetDiscoveryStatsTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class FailOnceDiscoveryBackend : IDiscoveryBackend
+    {
+        private readonly DiscoveryPacket _packet;
+        private int _scanCount;
+
+        public FailOnceDiscoveryBackend(DiscoveryPacket packet) => _packet = packet;
+        public int ScanCount => Volatile.Read(ref _scanCount);
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) => Task.CompletedTask;
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+        {
+            if (Interlocked.Increment(ref _scanCount) == 1)
+                throw new IOException("transient scan failure");
+            return Task.FromResult<IReadOnlyList<DiscoveryPacket>>(new[] { _packet });
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingUncancellableScanBackend : IDiscoveryBackend
+    {
+        public TaskCompletionSource ScanStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseScan { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) => Task.CompletedTask;
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) => Task.CompletedTask;
+        public async Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+        {
+            ScanStarted.TrySetResult();
+            await ReleaseScan.Task;
+            return Array.Empty<DiscoveryPacket>();
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingDisposeDiscoveryBackend : IDiscoveryBackend
+    {
+        public TaskCompletionSource DisposeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseDispose { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) => Task.CompletedTask;
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult<IReadOnlyList<DiscoveryPacket>>(Array.Empty<DiscoveryPacket>());
+        public async ValueTask DisposeAsync()
+        {
+            DisposeStarted.TrySetResult();
+            await ReleaseDispose.Task;
+        }
+    }
+
     private sealed class DurationCapturingDiscoveryBackend : IDiscoveryBackend
     {
         private readonly DiscoveryPacket _packet;
@@ -851,6 +1365,50 @@ public class NetDiscoveryStatsTests
         }
     }
 
+    private sealed class CancellableStatsSendTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public CancellableStatsSendTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += message => PeerConnected?.Invoke(message);
+            _inner.PeerDisconnected += message => PeerDisconnected?.Invoke(message);
+            _inner.PacketReceived += message => PacketReceived?.Invoke(message);
+            _inner.Error += message => Error?.Invoke(message);
+        }
+
+        public bool BlockSends { get; set; }
+        public TaskCompletionSource SendStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public event Action<TransportPeerConnected> PeerConnected;
+        public event Action<TransportPeerDisconnected> PeerDisconnected;
+        public event Action<TransportPacketReceived> PacketReceived;
+        public event Action<TransportError> Error;
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) => _inner.StartServerAsync(options, token);
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) => _inner.ConnectAsync(options, token);
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) => _inner.StopServerAsync(token);
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) => _inner.DisconnectAsync(connectionId, reason);
+
+        public async ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default)
+        {
+            if (!BlockSends)
+                return await _inner.SendAsync(connectionId, data, channel, token);
+
+            SendStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return NetSendResult.Ok();
+            }
+            catch (OperationCanceledException)
+            {
+                return new NetSendResult(NetSendStatus.TransportFailed, "Send was cancelled.");
+            }
+        }
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
     private sealed class BlockingStartDiscoveryBackend : IDiscoveryBackend
     {
         private readonly TaskCompletionSource _firstStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -884,5 +1442,87 @@ public class NetDiscoveryStatsTests
             Task.FromResult<IReadOnlyList<DiscoveryPacket>>(Array.Empty<DiscoveryPacket>());
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingScanDiscoveryBackend : IDiscoveryBackend
+    {
+        private readonly TaskCompletionSource _scanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public async Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+        {
+            _scanStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return Array.Empty<DiscoveryPacket>();
+        }
+
+        public Task WaitForScanAsync() =>
+            _scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ConcurrentScanDiscoveryBackend : IDiscoveryBackend
+    {
+        private int _activeScans;
+        private int _scanCount;
+        private int _maxConcurrentScans;
+
+        public TaskCompletionSource FirstScanStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondScanStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseScans { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int MaxConcurrentScans => Volatile.Read(ref _maxConcurrentScans);
+
+        public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.FromResult(new DiscoveryAdvertisementId(Guid.NewGuid()));
+
+        public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default) =>
+            Task.CompletedTask;
+
+        public async Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+        {
+            var active = Interlocked.Increment(ref _activeScans);
+            UpdateMaximum(active);
+            if (Interlocked.Increment(ref _scanCount) == 1)
+                FirstScanStarted.TrySetResult();
+            else
+                SecondScanStarted.TrySetResult();
+
+            try
+            {
+                await ReleaseScans.Task.WaitAsync(token);
+                return Array.Empty<DiscoveryPacket>();
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeScans);
+            }
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private void UpdateMaximum(int active)
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _maxConcurrentScans);
+                if (active <= current || Interlocked.CompareExchange(ref _maxConcurrentScans, active, current) == current)
+                    return;
+            }
+        }
     }
 }

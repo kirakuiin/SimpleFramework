@@ -182,8 +182,12 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     private readonly uint _metadataSchemaId;
     private readonly Dictionary<string, BrowserRoom<TMetadata>> _rooms = new();
     private readonly CancellationTokenSource _refreshCancellation = new();
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly CancellationTokenRegistration _ownerCancellationRegistration;
     private readonly Task _refreshTask;
+    private readonly object _disposeGate = new();
+    private int _disposed;
+    private Task? _disposeTask;
 
     internal LanBrowser(
         NetDiscovery discovery,
@@ -231,43 +235,74 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     /// </summary>
     public async Task RefreshAsync()
     {
-        var now = _timeProvider.GetUtcNow();
-        var scanned = await _discovery.ScanAsync<TMetadata>(_scanDuration, _metadataSchemaId).ConfigureAwait(false);
-        foreach (var room in scanned)
+        await RefreshAsync(_refreshCancellation.Token).ConfigureAwait(false);
+    }
+
+    private async Task RefreshAsync(CancellationToken token)
+    {
+        var notifications = new List<(Action<LanScanResult<TMetadata>>? Callbacks, LanScanResult<TMetadata> Room)>();
+        await _refreshGate.WaitAsync(token).ConfigureAwait(false);
+        try
         {
-            if (!_rooms.TryGetValue(room.RoomId, out var existing))
+            var now = _timeProvider.GetUtcNow();
+            var scanned = await _discovery.ScanAsync<TMetadata>(_scanDuration, _metadataSchemaId, token).ConfigureAwait(false);
+            foreach (var room in scanned)
             {
+                if (_rooms.TryGetValue(room.RoomId, out var existing))
+                {
+                    _rooms[room.RoomId] = new BrowserRoom<TMetadata>(room, now);
+                    if (!AreSameRoom(existing.Room, room))
+                        notifications.Add((RoomUpdated, room));
+                    continue;
+                }
+
                 _rooms[room.RoomId] = new BrowserRoom<TMetadata>(room, now);
-                RaiseRoomEvent(RoomFound, room);
-                continue;
+                notifications.Add((RoomFound, room));
             }
 
-            _rooms[room.RoomId] = new BrowserRoom<TMetadata>(room, now);
-            if (!AreSameRoom(existing.Room, room))
-                RaiseRoomEvent(RoomUpdated, room);
+            foreach (var pair in _rooms.ToArray())
+            {
+                if (now - pair.Value.LastSeenAt <= _roomTimeout)
+                    continue;
+
+                _rooms.Remove(pair.Key);
+                notifications.Add((RoomLost, pair.Value.Room));
+            }
+
+            Snapshot = new LanBrowserSnapshot<TMetadata>
+            {
+                Rooms = _rooms.Values.Select(room => room.Room).ToArray()
+            };
+        }
+        finally
+        {
+            _refreshGate.Release();
         }
 
-        foreach (var pair in _rooms.ToArray())
-        {
-            if (now - pair.Value.LastSeenAt <= _roomTimeout)
-                continue;
-
-            _rooms.Remove(pair.Key);
-            RaiseRoomEvent(RoomLost, pair.Value.Room);
-        }
-
-        Snapshot = new LanBrowserSnapshot<TMetadata>
-        {
-            Rooms = _rooms.Values.Select(room => room.Room).ToArray()
-        };
+        foreach (var notification in notifications)
+            RaiseRoomEvent(notification.Callbacks, notification.Room);
     }
 
     /// <summary>
     /// 释放浏览器。
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        _refreshCancellation.Cancel();
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                Volatile.Write(ref _disposed, 1);
+                _refreshCancellation.Cancel();
+                _disposeTask = Task.Run(DisposeCoreAsync);
+            }
+
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         try
         {
             await _refreshTask.ConfigureAwait(false);
@@ -276,8 +311,11 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
         {
         }
 
+        await _refreshGate.WaitAsync().ConfigureAwait(false);
+        _refreshGate.Release();
         await _ownerCancellationRegistration.DisposeAsync().ConfigureAwait(false);
         _refreshCancellation.Dispose();
+        _refreshGate.Dispose();
         _rooms.Clear();
         Snapshot = new LanBrowserSnapshot<TMetadata> { Rooms = Array.Empty<LanScanResult<TMetadata>>() };
     }
@@ -289,11 +327,19 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
             try
             {
                 await Task.Delay(_refreshInterval, _timeProvider, token).ConfigureAwait(false);
-                await RefreshAsync().ConfigureAwait(false);
+                await RefreshAsync(token).ConfigureAwait(false);
             }
             catch (ObjectDisposedException) when (token.IsCancellationRequested)
             {
                 return;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _discovery.Diagnostics.RecordError(new NetError("BrowserRefreshFailed", ex.Message, ex));
             }
         }
     }
@@ -326,6 +372,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
 /// </summary>
 public sealed class DiscoveryMetadataRegistry
 {
+    private readonly object _gate = new();
     private readonly Dictionary<uint, DiscoveryMetadataDescriptor> _bySchemaId = new();
     private readonly Dictionary<Type, DiscoveryMetadataDescriptor> _byType = new();
 
@@ -339,13 +386,16 @@ public sealed class DiscoveryMetadataRegistry
 
         var type = typeof(TMetadata);
         var schemaId = GetSchemaId(schemaKey);
-        if (_bySchemaId.TryGetValue(schemaId, out var existing) && existing.MetadataType != type)
-            throw new InvalidOperationException($"Discovery metadata schema '{schemaKey}' conflicts with '{existing.SchemaKey}'.");
+        lock (_gate)
+        {
+            if (_bySchemaId.TryGetValue(schemaId, out var existing) && existing.MetadataType != type)
+                throw new InvalidOperationException($"Discovery metadata schema '{schemaKey}' conflicts with '{existing.SchemaKey}'.");
 
-        var descriptor = new DiscoveryMetadataDescriptor(type, schemaKey, schemaId);
-        _bySchemaId[schemaId] = descriptor;
-        _byType[type] = descriptor;
-        return descriptor;
+            var descriptor = new DiscoveryMetadataDescriptor(type, schemaKey, schemaId);
+            _bySchemaId[schemaId] = descriptor;
+            _byType[type] = descriptor;
+            return descriptor;
+        }
     }
 
     /// <summary>
@@ -387,6 +437,9 @@ public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend
 
     public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled<DiscoveryAdvertisementId>(token);
+
         lock (_gate)
         {
             var id = Guid.NewGuid();
@@ -397,6 +450,9 @@ public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend
 
     public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled(token);
+
         lock (_gate)
         {
             if (_advertisements.ContainsKey(id.Value))
@@ -408,6 +464,9 @@ public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend
 
     public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled(token);
+
         lock (_gate)
             _advertisements.Remove(id.Value);
 
@@ -416,6 +475,9 @@ public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend
 
     public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return Task.FromCanceled<IReadOnlyList<DiscoveryPacket>>(token);
+
         lock (_gate)
             return Task.FromResult<IReadOnlyList<DiscoveryPacket>>(_advertisements.Values.ToArray());
     }
@@ -429,54 +491,139 @@ public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend
 public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
 {
     private readonly object _gate = new();
-    private readonly Dictionary<DiscoveryAdvertisementId, CancellationTokenSource> _advertisements = new();
+    private readonly object _disposeGate = new();
+    private readonly Dictionary<DiscoveryAdvertisementId, AdvertisementRun> _advertisements = new();
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly TimeProvider _timeProvider;
+    private int _disposed;
+    private int _activeScans;
+    private Task? _disposeTask;
+    private TaskCompletionSource? _scansDrained;
 
     public UdpDiscoveryNetwork(TimeProvider? timeProvider = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
+    public async Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
-        var id = new DiscoveryAdvertisementId(Guid.NewGuid());
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
-        lock (_gate)
-            _advertisements[id] = cancellation;
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            var id = new DiscoveryAdvertisementId(Guid.NewGuid());
+            token.ThrowIfCancellationRequested();
+            var cancellation = new CancellationTokenSource();
+            var loopTask = AdvertiseLoopAsync(packet, options, cancellation.Token);
+            lock (_gate)
+                _advertisements[id] = new AdvertisementRun(cancellation, loopTask);
 
-        _ = AdvertiseLoopAsync(packet, options, cancellation.Token);
-        return Task.FromResult(id);
+            return id;
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     public async Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
     {
-        await StopAdvertiseAsync(id, token).ConfigureAwait(false);
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
-        lock (_gate)
-            _advertisements[id] = cancellation;
-
-        _ = AdvertiseLoopAsync(packet, options, cancellation.Token);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            await StopAdvertiseCoreAsync(id).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            var cancellation = new CancellationTokenSource();
+            var loopTask = AdvertiseLoopAsync(packet, options, cancellation.Token);
+            lock (_gate)
+                _advertisements[id] = new AdvertisementRun(cancellation, loopTask);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
-    public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)
+    public async Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)
     {
-        CancellationTokenSource? cancellation = null;
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            await StopAdvertiseCoreAsync(id).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private async Task StopAdvertiseCoreAsync(DiscoveryAdvertisementId id)
+    {
+        AdvertisementRun? run = null;
         lock (_gate)
         {
             if (_advertisements.Remove(id, out var existing))
-                cancellation = existing;
+                run = existing;
         }
 
-        if (cancellation is not null)
+        if (run is null)
+            return;
+
+        run.Cancellation.Cancel();
+        try
         {
-            cancellation.Cancel();
-            cancellation.Dispose();
+            await run.LoopTask.ConfigureAwait(false);
         }
-
-        return Task.CompletedTask;
+        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            run.Cancellation.Dispose();
+        }
     }
 
-    public async Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+    public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            _activeScans++;
+        }
+
+        return TrackScanAsync(duration, options, token);
+    }
+
+    private async Task<IReadOnlyList<DiscoveryPacket>> TrackScanAsync(
+        TimeSpan duration,
+        DiscoveryOptions options,
+        CancellationToken token)
+    {
+        try
+        {
+            return await ScanCoreAsync(duration, options, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _activeScans--;
+                if (_activeScans == 0)
+                    _scansDrained?.TrySetResult();
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<DiscoveryPacket>> ScanCoreAsync(
+        TimeSpan duration,
+        DiscoveryOptions options,
+        CancellationToken token)
     {
         if (duration <= TimeSpan.Zero)
             return Array.Empty<DiscoveryPacket>();
@@ -488,7 +635,7 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
         socket.Bind(new IPEndPoint(IPAddress.Any, options.Port));
         using var client = new UdpClient { Client = socket };
         using var timeout = new CancellationTokenSource(duration, _timeProvider);
-        using var linkedTimeout = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+        using var linkedTimeout = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token, _lifetimeCts.Token);
 
         while (!linkedTimeout.IsCancellationRequested)
         {
@@ -526,14 +673,48 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
         return results;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        DiscoveryAdvertisementId[] ids;
-        lock (_gate)
-            ids = _advertisements.Keys.ToArray();
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                Volatile.Write(ref _disposed, 1);
+                _disposeTask = DisposeCoreAsync();
+            }
 
-        foreach (var id in ids)
-            await StopAdvertiseAsync(id).ConfigureAwait(false);
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        _lifetimeCts.Cancel();
+        await _lifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            DiscoveryAdvertisementId[] ids;
+            lock (_gate)
+                ids = _advertisements.Keys.ToArray();
+
+            foreach (var id in ids)
+                await StopAdvertiseCoreAsync(id).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+
+        Task scansDrained;
+        lock (_gate)
+        {
+            scansDrained = _activeScans == 0
+                ? Task.CompletedTask
+                : (_scansDrained ??= new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        }
+        await scansDrained.ConfigureAwait(false);
+        _lifetimeCts.Dispose();
     }
 
     private async Task AdvertiseLoopAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token)
@@ -566,6 +747,10 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
             }
         }
     }
+
+    private sealed record AdvertisementRun(CancellationTokenSource Cancellation, Task LoopTask);
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) == 1;
 }
 
 /// <summary>
@@ -581,15 +766,17 @@ public sealed class NetDiscovery : IAsyncDisposable
     private readonly object _schemaGate = new();
     private readonly Dictionary<uint, Type> _metadataTypesBySchemaId = new();
     private readonly Dictionary<Type, uint> _schemaIdsByMetadataType = new();
+    private readonly object _disposeGate = new();
     private DiscoveryAdvertisementId _advertisementId;
     private LanAdvertiseInfo? _advertiseInfo;
     private int _disposed;
+    private Task? _disposeTask;
 
     /// <summary>
     /// 创建基于内存发现网络的发现组件。
     /// </summary>
     public NetDiscovery(GameNetOptions options)
-        : this(options, new UdpDiscoveryNetwork())
+        : this(options, new UdpDiscoveryNetwork(options?.TimeProvider))
     {
     }
 
@@ -628,6 +815,10 @@ public sealed class NetDiscovery : IAsyncDisposable
                 return new NetSessionResult(NetSessionStatus.ObjectDisposed);
             if (_advertisementId != DiscoveryAdvertisementId.None)
                 return new NetSessionResult(NetSessionStatus.InvalidState, "Discovery advertise is already running.");
+            if (string.IsNullOrWhiteSpace(info.RoomId))
+                return new NetSessionResult(NetSessionStatus.InvalidState, "RoomId cannot be empty.");
+            if (info.GamePort <= 0 || info.GamePort > 65535)
+                return new NetSessionResult(NetSessionStatus.InvalidState, "GamePort must be between 1 and 65535.");
             if (!ValidateAndRegisterMetadataSchema<TMetadata>(info.MetadataSchemaId, out var schemaError))
                 return new NetSessionResult(NetSessionStatus.InvalidState, schemaError);
 
@@ -716,17 +907,48 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// </summary>
     public async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration, uint metadataSchemaId)
     {
+        return await ScanAsync<TMetadata>(duration, metadataSchemaId, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
+        TimeSpan duration,
+        uint metadataSchemaId,
+        CancellationToken token)
+    {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
         if (!ValidateAndRegisterMetadataSchema<TMetadata>(metadataSchemaId, out var schemaError))
             throw new InvalidOperationException(schemaError);
 
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, _disposeCancellation.Token);
+        linkedCancellation.Token.ThrowIfCancellationRequested();
+        if (duration <= TimeSpan.Zero)
+            return Array.Empty<LanScanResult<TMetadata>>();
         var results = new List<LanScanResult<TMetadata>>();
-        foreach (var packet in await _backend.ScanAsync(duration, _options.Discovery).ConfigureAwait(false))
+        foreach (var packet in await _backend.ScanAsync(duration, _options.Discovery, linkedCancellation.Token).ConfigureAwait(false))
         {
+            if (packet.Magic != DiscoveryPacket.ExpectedMagic ||
+                packet.PacketVersion != DiscoveryPacket.CurrentPacketVersion)
+            {
+                Diagnostics.AddDroppedPacket();
+                Diagnostics.RecordError(new NetError("DiscoveryEnvelopeInvalid", "Discovery packet magic or version is invalid."));
+                continue;
+            }
             if (packet.ApplicationId != _options.Application.ApplicationId)
                 continue;
             if (packet.MetadataSchemaId != metadataSchemaId)
                 continue;
+            if (string.IsNullOrWhiteSpace(packet.RoomId) || packet.GamePort <= 0 || packet.GamePort > 65535)
+            {
+                Diagnostics.AddDroppedPacket();
+                Diagnostics.RecordError(new NetError("DiscoveryEndpointInvalid", "Discovery room id or game port is invalid."));
+                continue;
+            }
+            if (packet.MetadataPayload is null)
+            {
+                Diagnostics.AddDroppedPacket();
+                Diagnostics.RecordError(new NetError("DiscoveryPayloadMissing", "Discovery metadata payload is missing."));
+                continue;
+            }
             if (packet.MetadataPayload.Length > _options.Discovery.MaxMetadataPayloadSize)
             {
                 Diagnostics.AddDroppedPacket();
@@ -805,12 +1027,23 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// <summary>
     /// 释放发现组件并停止当前广告。
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
-            return;
+        lock (_disposeGate)
+        {
+            if (_disposeTask is null)
+            {
+                Volatile.Write(ref _disposed, 1);
+                _disposeCancellation.Cancel();
+                _disposeTask = Task.Run(DisposeCoreAsync);
+            }
 
-        _disposeCancellation.Cancel();
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         await _advertiseGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -870,6 +1103,13 @@ public sealed class NetDiscovery : IAsyncDisposable
 
     private bool TryCreatePacket<TMetadata>(LanAdvertiseInfo info, TMetadata metadata, out DiscoveryPacket packet, out string? error)
     {
+        if (metadata is null)
+        {
+            packet = null!;
+            error = "Discovery metadata cannot be null.";
+            Diagnostics.RecordError(new NetError("DiscoveryMetadataMissing", error));
+            return false;
+        }
         if (!TryValidatePublicMetadata(typeof(TMetadata), out error))
         {
             Diagnostics.RecordError(new NetError("DiscoveryPrivateMetadata", error ?? "Discovery metadata is private."));
@@ -877,7 +1117,18 @@ public sealed class NetDiscovery : IAsyncDisposable
             return false;
         }
 
-        var payload = JsonSerializer.SerializeToUtf8Bytes(metadata, _jsonOptions);
+        byte[] payload;
+        try
+        {
+            payload = JsonSerializer.SerializeToUtf8Bytes(metadata, _jsonOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            packet = null!;
+            error = ex.Message;
+            Diagnostics.RecordError(new NetError("DiscoveryMetadataEncodeFailed", ex.Message, ex));
+            return false;
+        }
         if (payload.Length > _options.Discovery.MaxMetadataPayloadSize)
         {
             Diagnostics.AddDroppedPacket();
