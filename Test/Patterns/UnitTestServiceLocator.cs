@@ -8,7 +8,7 @@ namespace Test.Patterns;
 [TestFixture]
 public class TestServiceLocator
 {
-    private ServiceLocator _serviceLocator;
+    private ServiceLocator _serviceLocator = null!;
 
     // 测试用的服务接口实现
     private class TestService : IGameService
@@ -110,4 +110,4 @@ public class TestServiceLocator
         // 确保不会抛出异常
         Assert.DoesNotThrow(() => _serviceLocator.UnRegister<TestService>());
     }
-} 
+}

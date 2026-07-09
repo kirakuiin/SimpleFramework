@@ -4,27 +4,25 @@ using System.Diagnostics.CodeAnalysis;
 namespace SimpleFramework.Collections;
 
 /// <summary>
-/// 带有默认值的字典，直接获取键的值不会导致错误，而是返回默认值。
+/// 带有默认值的字典。通过索引器读取缺失键时，会创建并保存默认值。
 /// </summary>
-/// <typeparam name="TK"></typeparam>
-/// <typeparam name="TV"></typeparam>
+/// <typeparam name="TK">键类型。</typeparam>
+/// <typeparam name="TV">值类型。</typeparam>
 public class DefaultDict<TK, TV> :
     IDictionary<TK, TV>,
     IReadOnlyDictionary<TK, TV>
     where TK : notnull
 {
-    private readonly Dictionary<TK, TV> _delegate;
-
+    private readonly Dictionary<TK, TV> _delegate = new();
     private readonly Func<TV> _initCb;
 
     /// <summary>
-    /// 当字典内不包含此键时，使用一个回调函数进行初始化。
+    /// 创建默认字典，并在索引器读取缺失键时使用回调创建默认值。
     /// </summary>
-    /// <param name="initCallback"></param>
+    /// <param name="initCallback">默认值工厂。</param>
     public DefaultDict(Func<TV> initCallback)
     {
         _initCb = initCallback;
-        _delegate = new Dictionary<TK, TV>();
     }
 
     public IEnumerator<KeyValuePair<TK, TV>> GetEnumerator()
@@ -44,36 +42,25 @@ public class DefaultDict<TK, TV> :
 
     bool ICollection<KeyValuePair<TK, TV>>.Contains(KeyValuePair<TK, TV> item)
     {
-        ICollection<KeyValuePair<TK, TV>> collection = _delegate;
-        return collection.Contains(item);
+        return _delegate.Contains(item);
     }
 
     void ICollection<KeyValuePair<TK, TV>>.CopyTo(KeyValuePair<TK, TV>[] array, int arrayIndex)
     {
-        ICollection<KeyValuePair<TK, TV>> collection = _delegate;
-        collection.CopyTo(array, arrayIndex);
+        ((ICollection<KeyValuePair<TK, TV>>)_delegate).CopyTo(array, arrayIndex);
     }
 
     void ICollection<KeyValuePair<TK, TV>>.Add(KeyValuePair<TK, TV> item)
     {
-        ICollection<KeyValuePair<TK, TV>> collection = _delegate;
-        collection.Add(item);
+        _delegate.Add(item.Key, item.Value);
     }
 
     bool ICollection<KeyValuePair<TK, TV>>.Remove(KeyValuePair<TK, TV> item)
     {
-        ICollection<KeyValuePair<TK, TV>> collection = _delegate;
-        return collection.Remove(item);
+        return ((ICollection<KeyValuePair<TK, TV>>)_delegate).Remove(item);
     }
 
-    bool ICollection<KeyValuePair<TK, TV>>.IsReadOnly 
-    {
-        get
-        {
-            ICollection<KeyValuePair<TK, TV>> collection = _delegate;
-            return collection.IsReadOnly;
-        }
-    }
+    bool ICollection<KeyValuePair<TK, TV>>.IsReadOnly => false;
 
     public int Count => _delegate.Count;
 
@@ -93,11 +80,11 @@ public class DefaultDict<TK, TV> :
     }
 
     /// <summary>
-    /// 尝试获取已存在的值。
+    /// 尝试获取已经存在的值。
     /// </summary>
     /// <remarks>
-    /// 此方法保持 <see cref="Dictionary{TKey,TValue}.TryGetValue(TKey,out TValue)"/> 的探测语义：
-    /// 当键不存在时不会调用默认值工厂，也不会向字典插入新键。需要获取或创建默认值时请使用索引器。
+    /// 该方法保持 <see cref="Dictionary{TKey,TValue}.TryGetValue(TKey,out TValue)"/> 的探测语义：
+    /// 键不存在时不会调用默认值工厂，也不会向字典插入新键。需要获取或创建默认值时请使用索引器。
     /// </remarks>
     public bool TryGetValue(TK key, [MaybeNullWhen(false)] out TV value)
     {
@@ -108,11 +95,13 @@ public class DefaultDict<TK, TV> :
     {
         get
         {
-            if (!_delegate.ContainsKey(key))
+            if (!_delegate.TryGetValue(key, out var value))
             {
-                _delegate[key] = _initCb();
+                value = _initCb();
+                _delegate[key] = value;
             }
-            return _delegate[key];
+
+            return value;
         }
         set => _delegate[key] = value;
     }

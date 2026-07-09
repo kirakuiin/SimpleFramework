@@ -19,7 +19,7 @@ public static class Log
         Logger.Info(message);
     }
     
-    public static void Error(string message, Exception? exception = null)
+    public static void Error(string message, Exception exception = null)
     {
         Logger.Error(message, exception);
     }

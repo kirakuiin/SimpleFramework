@@ -113,7 +113,7 @@ public class BindableProperty<T> : IBindableProperty<T>
         OnValueChanged -= onValueChanged;
     }
 
-    public override string ToString() => Value.ToString();
+    public override string ToString() => Value?.ToString() ?? string.Empty;
 }
 
 /// <summary>

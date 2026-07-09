@@ -1,34 +1,39 @@
 namespace SimpleFramework.Maths;
 
 /// <summary>
-/// 表示2x2矩阵，用于坐标变换。
+/// 表示 2x2 矩阵，用于坐标变换。
 /// </summary>
 public readonly struct Matrix2D
 {
+    private const double InvertibleDeterminantEpsilon = 1e-12;
+
     /// <summary>
-    /// 第一行，第一列的元素
+    /// 第一行第一列的元素。
     /// </summary>
     public readonly double M11;
+
     /// <summary>
-    /// 第一行，第二列的元素
+    /// 第一行第二列的元素。
     /// </summary>
     public readonly double M12;
+
     /// <summary>
-    /// 第二行，第一列的元素
+    /// 第二行第一列的元素。
     /// </summary>
     public readonly double M21;
+
     /// <summary>
-    /// 第二行，第二列的元素
+    /// 第二行第二列的元素。
     /// </summary>
     public readonly double M22;
 
     /// <summary>
-    /// 初始化一个2x2矩阵。
+    /// 初始化一个 2x2 矩阵。
     /// </summary>
-    /// <param name="m11">第一行，第一列的元素</param>
-    /// <param name="m12">第一行，第二列的元素</param>
-    /// <param name="m21">第二行，第一列的元素</param>
-    /// <param name="m22">第二行，第二列的元素</param>
+    /// <param name="m11">第一行第一列的元素。</param>
+    /// <param name="m12">第一行第二列的元素。</param>
+    /// <param name="m21">第二行第一列的元素。</param>
+    /// <param name="m22">第二行第二列的元素。</param>
     public Matrix2D(double m11, double m12, double m21, double m22)
     {
         M11 = m11;
@@ -38,10 +43,20 @@ public readonly struct Matrix2D
     }
 
     /// <summary>
-    /// 矩阵与点的乘法。
+    /// 计算矩阵的行列式。
     /// </summary>
-    /// <param name="p">要变换的点</param>
-    /// <returns>变换后的点</returns>
+    public double Determinant => M11 * M22 - M12 * M21;
+
+    /// <summary>
+    /// 单位矩阵。
+    /// </summary>
+    public static Matrix2D Identity => new(1, 0, 0, 1);
+
+    /// <summary>
+    /// 对点执行矩阵变换。
+    /// </summary>
+    /// <param name="p">要变换的点。</param>
+    /// <returns>变换后的点。</returns>
     public Point Transform(Point p)
     {
         return new Point(
@@ -50,26 +65,53 @@ public readonly struct Matrix2D
     }
 
     /// <summary>
-    /// 计算矩阵的行列式。
+    /// 计算当前矩阵的逆矩阵。
     /// </summary>
-    public double Determinant => M11 * M22 - M12 * M21;
-
-    /// <summary>
-    /// 计算矩阵的逆矩阵。
-    /// </summary>
-    /// <returns>当前矩阵的逆矩阵</returns>
-    /// <exception cref="InvalidOperationException">当矩阵不可逆时抛出</exception>
+    /// <returns>当前矩阵的逆矩阵。</returns>
+    /// <exception cref="InvalidOperationException">当矩阵不可逆或过于接近奇异矩阵时抛出。</exception>
     public Matrix2D Inverse()
     {
         var det = Determinant;
-        if (Math.Abs(det) < double.Epsilon)
+        if (Math.Abs(det) < InvertibleDeterminantEpsilon)
         {
-            throw new InvalidOperationException("Matrix is not invertible");
+            throw new InvalidOperationException("Matrix is not invertible.");
         }
 
         return new Matrix2D(
             M22 / det, -M12 / det,
             -M21 / det, M11 / det);
+    }
+
+    /// <summary>
+    /// 计算两个矩阵的点乘（内积）。
+    /// </summary>
+    /// <param name="other">另一个矩阵。</param>
+    /// <returns>两个矩阵对应元素相乘后的和。</returns>
+    public double Dot(Matrix2D other)
+    {
+        return M11 * other.M11 + M12 * other.M12 +
+               M21 * other.M21 + M22 * other.M22;
+    }
+
+    /// <summary>
+    /// 创建缩放矩阵。
+    /// </summary>
+    /// <param name="sx">X 轴缩放比例。</param>
+    /// <param name="sy">Y 轴缩放比例。</param>
+    /// <returns>缩放矩阵。</returns>
+    public static Matrix2D CreateScale(double sx, double sy)
+    {
+        return new Matrix2D(sx, 0, 0, sy);
+    }
+
+    /// <summary>
+    /// 创建统一缩放矩阵。
+    /// </summary>
+    /// <param name="scale">缩放比例。</param>
+    /// <returns>缩放矩阵。</returns>
+    public static Matrix2D CreateScale(double scale)
+    {
+        return CreateScale(scale, scale);
     }
 
     /// <summary>
@@ -85,7 +127,7 @@ public readonly struct Matrix2D
     }
 
     /// <summary>
-    /// 矩阵与标量的乘法。
+    /// 矩阵与标量相乘。
     /// </summary>
     public static Matrix2D operator *(Matrix2D m, double s)
     {
@@ -95,45 +137,7 @@ public readonly struct Matrix2D
     }
 
     /// <summary>
-    /// 矩阵与标量的乘法。
+    /// 标量与矩阵相乘。
     /// </summary>
     public static Matrix2D operator *(double s, Matrix2D m) => m * s;
-
-    /// <summary>
-    /// 单位矩阵。
-    /// </summary>
-    public static Matrix2D Identity => new(1, 0, 0, 1);
-
-    /// <summary>
-    /// 计算两个矩阵的点乘（内积）。
-    /// 点乘结果为两个矩阵对应位置的元素相乘后的和。
-    /// </summary>
-    /// <param name="other">另一个矩阵</param>
-    /// <returns>点乘结果</returns>
-    public double Dot(Matrix2D other)
-    {
-        return M11 * other.M11 + M12 * other.M12 + 
-               M21 * other.M21 + M22 * other.M22;
-    }
-
-    /// <summary>
-    /// 创建缩放矩阵。
-    /// </summary>
-    /// <param name="sx">X轴缩放比例</param>
-    /// <param name="sy">Y轴缩放比例</param>
-    /// <returns>缩放矩阵</returns>
-    public static Matrix2D CreateScale(double sx, double sy)
-    {
-        return new Matrix2D(sx, 0, 0, sy);
-    }
-
-    /// <summary>
-    /// 创建统一缩放矩阵。
-    /// </summary>
-    /// <param name="scale">缩放比例</param>
-    /// <returns>缩放矩阵</returns>
-    public static Matrix2D CreateScale(double scale)
-    {
-        return CreateScale(scale, scale);
-    }
-} 
+}

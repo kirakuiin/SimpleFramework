@@ -1,9 +1,8 @@
 #nullable enable
+#pragma warning disable CS8602 // NUnit 的非空断言在运行时生效，编译器无法据此收窄类型。
 using NUnit.Framework;
 using SimpleFramework.Patterns;
 using System;
-using System.Runtime.Intrinsics.X86;
-using SimpleFramework.Utility;
 
 namespace Test.Patterns;
 

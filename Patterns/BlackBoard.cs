@@ -94,16 +94,19 @@ public class BlackBoard
     /// <param name="value">值</param>
     public void Set<T>(string key, T value)
     {
-        var type = Contains(key) ? BlackBoardEventType.Modify: BlackBoardEventType.Set;
         EventHandler<BlackBoardEventArgs>? handler;
         BlackBoardEventArgs args;
         _lock.EnterWriteLock();
         try
         {
-            var oldValue = GetInternal<T>(key);
+            var hasLocalValue = _data.TryGetValue(key, out var oldValue);
             _data[key] = value!;
             handler = GetDataChangedHandler(key);
-            args = new BlackBoardEventArgs(key, type, oldValue, value);
+            args = new BlackBoardEventArgs(
+                key,
+                hasLocalValue ? BlackBoardEventType.Modify : BlackBoardEventType.Set,
+                oldValue,
+                value);
         }
         finally
         {

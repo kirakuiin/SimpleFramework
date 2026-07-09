@@ -284,7 +284,7 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
     {
         if (IsDisposed)
         {
-            ToolkitLog.Warning("IniConfigTool已释放，无法执行Flush操作");
+            ToolkitLog.Warning("IniConfigTool已释放，无法执行Reload操作");
             return;
         }
 

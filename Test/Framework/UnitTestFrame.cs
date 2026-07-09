@@ -104,6 +104,14 @@ public class TestFramework
     }
 
     [Test]
+    public void TestBindableToStringHandlesNullValue()
+    {
+        var property = new BindableProperty<string>(null);
+
+        Assert.AreEqual(string.Empty, property.ToString());
+    }
+
+    [Test]
     public void TestUnRegister()
     {
         _control.UnRegister.UnRegister();

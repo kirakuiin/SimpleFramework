@@ -10,7 +10,7 @@ namespace Test.Patterns;
 [TestFixture]
 public class TestBlackBoard
 {
-    private BlackBoard _blackBoard;
+    private BlackBoard _blackBoard = null!;
 
     [SetUp]
     public void Setup()
@@ -113,7 +113,7 @@ public class TestBlackBoard
 
         _blackBoard.Set("test", 42);
         Assert.AreEqual("test", changedKey);
-        Assert.Zero((int)oldValue!);
+        Assert.IsNull(oldValue);
         Assert.AreEqual(42, newValue);
 
         _blackBoard.Set("test", 100);
@@ -287,6 +287,25 @@ public class TestBlackBoard
         Assert.AreEqual(100, child.Get<int>("shared"));
         
         // 测试父黑板的数据保持不变
+        Assert.AreEqual(42, parent.Get<int>("shared"));
+    }
+
+    [Test]
+    public void TestChildOverrideParentKeyRaisesLocalSetEvent()
+    {
+        var parent = new BlackBoard("Parent");
+        var child = new BlackBoard("Child", parent);
+        BlackBoardEventArgs? receivedArgs = null;
+
+        parent.Set("shared", 42);
+        child.Register("shared", (_, args) => receivedArgs = args);
+
+        child.Set("shared", 100);
+
+        Assert.IsNotNull(receivedArgs);
+        Assert.AreEqual(BlackBoardEventType.Set, receivedArgs!.EventType);
+        Assert.IsNull(receivedArgs.OldValue);
+        Assert.AreEqual(100, receivedArgs.NewValue);
         Assert.AreEqual(42, parent.Get<int>("shared"));
     }
 
