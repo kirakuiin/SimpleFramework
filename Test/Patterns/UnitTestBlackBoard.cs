@@ -310,6 +310,28 @@ public class TestBlackBoard
     }
 
     [Test]
+    public void TestLocalNullValueOverridesParentValue()
+    {
+        var parent = new BlackBoard("Parent");
+        var child = new BlackBoard("Child", parent);
+
+        parent.Set("shared", "parent");
+        child.Set<string?>("shared", null);
+
+        Assert.IsNull(child.Get<string>("shared"));
+        Assert.AreEqual("parent", parent.Get<string>("shared"));
+    }
+
+    [Test]
+    public void TestTryGetReturnsTrueForLocalNullValue()
+    {
+        _blackBoard.Set<string?>("test", null);
+
+        Assert.IsTrue(_blackBoard.TryGet<string>("test", out var value));
+        Assert.IsNull(value);
+    }
+
+    [Test]
     public void TestMultipleEventHandlers()
     {
         var eventCount = 0;

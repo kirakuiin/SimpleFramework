@@ -25,7 +25,7 @@ public interface IObjectPool<T> : IDisposable
 public interface IPoolCallbackListener
 {
     /// <summary>
-    /// 从池中获取对象时触发
+    /// 创建或从池中取出对象时触发
     /// </summary>
     void OnGet();
     
@@ -56,7 +56,11 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
     public T Get()
     {
         ThrowIfDisposed();
-        if (!Stack.TryPop(out var obj)) return CreateInstance();
+        if (!Stack.TryPop(out var obj))
+        {
+            obj = CreateInstance();
+        }
+
         OnGet(obj);
         if (obj is IPoolCallbackListener receiver) receiver.OnGet();
         return obj;
@@ -144,7 +148,7 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
 /// 一般对象池
 /// </summary>
 /// <param name="createFunc">创建时调用的函数</param>
-/// <param name="onGet">从池子中拿去时调用的函数</param>
+/// <param name="onGet">创建或从池中取出对象时调用的函数</param>
 /// <param name="onReturn">将对象归还到池子触发的函数</param>
 /// <param name="onDestroy">销毁对象触发的函数</param>
 /// <typeparam name="T"></typeparam>

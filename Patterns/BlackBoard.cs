@@ -140,10 +140,12 @@ public class BlackBoard
     /// </summary>
     private T? GetInternal<T>(string key)
     {
-        if (_data.TryGetValue(key, out var value) && value is T typedValue)
+        if (_data.TryGetValue(key, out var value))
         {
-            return typedValue;
+            if (value is null) return default;
+            if (value is T typedValue) return typedValue;
         }
+
         return Parent == null ? default : Parent.Get<T>(key);
     }
 
@@ -159,11 +161,21 @@ public class BlackBoard
         _lock.EnterReadLock();
         try
         {
-            if (_data.TryGetValue(key, out var obj) && obj is T typedValue)
+            if (_data.TryGetValue(key, out var obj))
             {
-                value = typedValue;
-                return true;
+                if (obj is null)
+                {
+                    value = default;
+                    return true;
+                }
+
+                if (obj is T typedValue)
+                {
+                    value = typedValue;
+                    return true;
+                }
             }
+
             return Parent?.TryGet(key, out value) ?? (value = default, false).Item2;
         }
         finally

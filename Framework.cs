@@ -10,9 +10,9 @@ public interface IDomain
 {
     /// <summary>
     /// 设置当前域的父作用域。
-    /// <para>当System, Model, Utility在当前作用域中无法找到时，会尝试去父作用域查找</para>
-    /// <param name="domain">父<see cref="IDomain"/></param>
+    /// <para>当 System、Model、Utility 在当前作用域中无法找到时，会尝试去父作用域查找。</para>
     /// </summary>
+    /// <param name="domain">父<see cref="IDomain"/></param>
     void SetParent(IDomain domain);
     
     /// <summary>
