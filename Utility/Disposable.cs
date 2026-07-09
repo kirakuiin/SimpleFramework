@@ -22,7 +22,7 @@ public abstract class Disposable : IDisposable
 
 
 /// <summary>
-/// 管理多个可处理对象的组，对象终结时会负责内部内容的释放。
+/// 管理多个可释放对象的组。
 /// </summary>
 public class DisposableGroup : Disposable
 {
@@ -37,22 +37,19 @@ public class DisposableGroup : Disposable
         _container.Add(disposable);
     }
     
-    ~DisposableGroup()
-    {
-        Dispose(false);
-        GC.SuppressFinalize(this);
-    }
-    
     protected override void Dispose(bool isDisposing)
     {
         if (IsDisposed) return;
         IsDisposed = true;
 
-        foreach (var element in _container)
+        if (isDisposing)
         {
-            element?.Dispose();
+            foreach (var element in _container)
+            {
+                element?.Dispose();
+            }
+
+            _container.Clear();
         }
-        
-        _container.Clear();
     }
 }

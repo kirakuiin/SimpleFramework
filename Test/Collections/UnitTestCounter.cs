@@ -120,4 +120,40 @@ public class TestCounter
     {
         Assert.AreNotEqual(null, _counter);
     }
+
+    [Test]
+    public void TestEmptyCountersAreEqualButNotStrictlyOrdered()
+    {
+        var left = new Counter<string>();
+        var right = new Counter<string>();
+
+        Assert.IsFalse(left > right);
+        Assert.IsFalse(left < right);
+        Assert.IsTrue(left >= right);
+        Assert.IsTrue(left <= right);
+    }
+
+    [Test]
+    public void TestEqualCountersAreNotStrictlyOrdered()
+    {
+        var left = new Counter<string> { ["a"] = 1 };
+        var right = new Counter<string> { ["a"] = 1 };
+
+        Assert.IsFalse(left > right);
+        Assert.IsFalse(left < right);
+        Assert.IsTrue(left >= right);
+        Assert.IsTrue(left <= right);
+    }
+
+    [Test]
+    public void TestDisjointCountersAreNotComparable()
+    {
+        var left = new Counter<string> { ["a"] = 1 };
+        var right = new Counter<string> { ["b"] = 1 };
+
+        Assert.IsFalse(left > right);
+        Assert.IsFalse(left < right);
+        Assert.IsFalse(left >= right);
+        Assert.IsFalse(left <= right);
+    }
 }

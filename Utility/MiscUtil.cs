@@ -65,7 +65,7 @@ public static class MiscUtil
     /// <returns></returns>
     public static ulong ComputeHash<T>(T data)
     {
-        var bytes = SerializeUtil.Serialize(data);
+        var bytes = SerializeUtil.SerializeBytes(data);
         const ulong offset = 14695981039346656037;
         const ulong prime = 1099511628211;
 

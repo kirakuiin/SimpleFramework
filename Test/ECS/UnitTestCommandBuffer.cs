@@ -99,4 +99,18 @@ public class UnitTestCommandBuffer
 
         Assert.IsFalse(world.IsAlive(entity));
     }
+
+    [Test]
+    public void PlaybackConsumesRecordedCommands()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        _ = buffer.CreateEntity(new TestPosition());
+
+        buffer.Playback();
+        buffer.Playback();
+
+        Assert.AreEqual(1, world.EntityCount);
+    }
 }

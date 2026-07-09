@@ -259,24 +259,28 @@ public class Counter<T>
 
     public static bool operator >(Counter<T> a, Counter<T> b)
     {
-        var allKey = new HashSet<T>(a.Keys.Concat(b.Keys));
-        return allKey.All(key => a.GetValueOrDefault(key, 0) > b.GetValueOrDefault(key, 0));
+        return a >= b && !a.Equals(b);
     }
         
     public static bool operator <(Counter<T> a, Counter<T> b)
     {
-        var allKey = new HashSet<T>(a.Keys.Concat(b.Keys));
-        return allKey.All(key => a.GetValueOrDefault(key, 0) < b.GetValueOrDefault(key, 0));
+        return a <= b && !a.Equals(b);
     }
         
     public static bool operator >=(Counter<T> a, Counter<T> b)
     {
-        return !(a < b);
+        return CompareAllKeys(a, b, static (left, right) => left >= right);
     }
         
     public static bool operator <=(Counter<T> a, Counter<T> b)
     {
-        return !(a > b);
+        return CompareAllKeys(a, b, static (left, right) => left <= right);
+    }
+
+    private static bool CompareAllKeys(Counter<T> a, Counter<T> b, Func<long, long, bool> comparer)
+    {
+        var allKey = new HashSet<T>(a.Keys.Concat(b.Keys));
+        return allKey.All(key => comparer(a.GetValueOrDefault(key, 0), b.GetValueOrDefault(key, 0)));
     }
 
     public bool Equals(Counter<T>? other)

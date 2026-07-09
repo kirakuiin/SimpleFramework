@@ -54,7 +54,7 @@ public sealed class CommandBufferResult
     }
 
     /// <summary>
-    /// 解析占位实体为播放时创建的真实实体。
+    /// 将占位实体解析为播放时创建的真实实体。
     /// </summary>
     /// <param name="entity">占位实体。</param>
     /// <returns>真实实体。</returns>
@@ -69,11 +69,11 @@ public sealed class CommandBufferResult
     }
 
     /// <summary>
-    /// 尝试解析占位实体为真实实体。
+    /// 尝试将占位实体解析为真实实体。
     /// </summary>
     /// <param name="entity">占位实体。</param>
     /// <param name="resolved">找到时返回真实实体。</param>
-    /// <returns>如果占位实体可解析则为 true。</returns>
+    /// <returns>如果占位实体可解析则为 <c>true</c>。</returns>
     public bool TryResolve(BufferedEntity entity, out Entity resolved)
     {
         return _createdEntities.TryGetValue(entity, out resolved);
@@ -216,7 +216,7 @@ public sealed class CommandBuffer
     }
 
     /// <summary>
-    /// 按记录顺序播放全部命令。
+    /// 按记录顺序播放全部命令。播放成功后会清空已记录的命令。
     /// </summary>
     /// <returns>播放结果。</returns>
     public CommandBufferResult Playback()
@@ -227,6 +227,7 @@ public sealed class CommandBuffer
             command.Playback(context);
         }
 
+        _commands.Clear();
         return new CommandBufferResult(context.CreatedEntities);
     }
 

@@ -374,5 +374,29 @@ public class TestMiscUtil
             Assert.That(hash1, Is.EqualTo(hash2));
             Assert.That(hash1, Is.Not.EqualTo(hash3));
         }
+
+        [Test]
+        public void TestComputeHashUsesSerializedUtf8Bytes()
+        {
+            var data = "中文";
+            var expected = ComputeFnv1A64(SerializeUtil.SerializeBytes(data));
+
+            Assert.AreEqual(expected, MiscUtil.ComputeHash(data));
+        }
+
+        private static ulong ComputeFnv1A64(IEnumerable<byte> bytes)
+        {
+            const ulong offset = 14695981039346656037;
+            const ulong prime = 1099511628211;
+
+            var hash = offset;
+            foreach (var b in bytes)
+            {
+                hash ^= b;
+                hash *= prime;
+            }
+
+            return hash;
+        }
     }
 }
