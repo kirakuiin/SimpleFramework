@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using SimpleFramework.Utility;
 
@@ -116,6 +118,28 @@ public class TestLogging
         logger.ClearHandlers();
     }
 
+    [Test]
+    public void TestClearHandlersWaitsForInFlightEmitBeforeDispose()
+    {
+        var logger = Logger.GetLogger($"LifetimeTest-{Guid.NewGuid()}");
+        var enteredEmit = new ManualResetEventSlim(false);
+        var allowEmitToFinish = new ManualResetEventSlim(false);
+        var handler = new BlockingHandler(enteredEmit, allowEmitToFinish);
+        logger.AddHandler(handler);
+
+        var loggingTask = Task.Run(() => logger.Info("hello"));
+        Assert.IsTrue(enteredEmit.Wait(TimeSpan.FromSeconds(2)));
+
+        var clearTask = Task.Run(() => logger.ClearHandlers());
+        Assert.IsFalse(clearTask.Wait(50));
+
+        allowEmitToFinish.Set();
+
+        Assert.DoesNotThrow(() => loggingTask.GetAwaiter().GetResult());
+        Assert.DoesNotThrow(() => clearTask.GetAwaiter().GetResult());
+        Assert.IsTrue(handler.DisposedAfterEmit);
+    }
+
     private sealed class ListHandler(List<LogRecord> records) : IHandler
     {
         public LogLevel Level { get; set; } = LogLevel.NoTest;
@@ -143,6 +167,29 @@ public class TestLogging
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class BlockingHandler(
+        ManualResetEventSlim enteredEmit,
+        ManualResetEventSlim allowEmitToFinish) : IHandler
+    {
+        private volatile bool _emitFinished;
+
+        public bool DisposedAfterEmit { get; private set; }
+        public LogLevel Level { get; set; } = LogLevel.NoTest;
+        public IFormatter Formatter { get; set; } = new StandardFormatter();
+
+        public void Emit(LogRecord record)
+        {
+            enteredEmit.Set();
+            allowEmitToFinish.Wait();
+            _emitFinished = true;
+        }
+
+        public void Dispose()
+        {
+            DisposedAfterEmit = _emitFinished;
         }
     }
 

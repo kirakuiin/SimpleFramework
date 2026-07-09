@@ -312,11 +312,10 @@ public class Logger
         lock (_handlersLock)
         {
             removed = _handlers.Remove(handler);
-        }
-
-        if (removed)
-        {
-            handler.Dispose();
+            if (removed)
+            {
+                handler.Dispose();
+            }
         }
     }
 
@@ -325,16 +324,14 @@ public class Logger
     /// </summary>
     public void ClearHandlers()
     {
-        IHandler[] handlers;
         lock (_handlersLock)
         {
-            handlers = _handlers.ToArray();
-            _handlers.Clear();
-        }
+            foreach (var handler in _handlers)
+            {
+                handler.Dispose();
+            }
 
-        foreach (var handler in handlers)
-        {
-            handler.Dispose();
+            _handlers.Clear();
         }
     }
 
@@ -382,25 +379,19 @@ public class Logger
     {
         if (level < Level) return;
 
-        var handlers = GetHandlerSnapshot();
-        if (handlers.Length == 0 && Name != "root")
-        {
-            Root.Log(level, message, exception);
-            return;
-        }
-
-        var record = new LogRecord(DateTime.Now, level, message, Name, exception);
-        foreach (var handler in handlers)
-        {
-            handler.Emit(record);
-        }
-    }
-
-    private IHandler[] GetHandlerSnapshot()
-    {
         lock (_handlersLock)
         {
-            return _handlers.ToArray();
+            if (_handlers.Count == 0 && Name != "root")
+            {
+                Root.Log(level, message, exception);
+                return;
+            }
+
+            var record = new LogRecord(DateTime.Now, level, message, Name, exception);
+            foreach (var handler in _handlers.ToArray())
+            {
+                handler.Emit(record);
+            }
         }
     }
 }
