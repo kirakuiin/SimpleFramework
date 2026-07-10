@@ -226,8 +226,10 @@ public class Counter<T>
     /// 将另一个计数器的内容合并到自身。
     /// </summary>
     /// <param name="other">要合并的计数字典。</param>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public void Update(Counter<T> other)
     {
+        EnsureCompatibleComparers(this, other, nameof(other));
         foreach (var pair in other)
         {
             _delegate[pair.Key] += pair.Value;
@@ -239,8 +241,10 @@ public class Counter<T>
     /// </summary>
     /// <remarks>如果本身不存在某个键则会出现负数。</remarks>
     /// <param name="other">要减去的计数字典。</param>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public void Subtract(Counter<T> other)
     {
+        EnsureCompatibleComparers(this, other, nameof(other));
         foreach (var pair in other)
         {
             _delegate[pair.Key] -= pair.Value;

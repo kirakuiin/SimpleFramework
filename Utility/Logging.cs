@@ -319,17 +319,18 @@ public class Logger
     /// 移除日志处理器并释放它。
     /// </summary>
     /// <param name="handler">日志处理器。</param>
-    /// <exception cref="Exception">已移除处理器的释放回调失败。</exception>
+    /// <exception cref="Exception">处理器已移除后，其释放回调失败。</exception>
     public void RemoveHandler(IHandler handler)
     {
-        var removed = false;
+        bool removed;
         lock (_handlersLock)
         {
             removed = _handlers.Remove(handler);
-            if (removed)
-            {
-                handler.Dispose();
-            }
+        }
+
+        if (removed)
+        {
+            handler.Dispose();
         }
     }
 

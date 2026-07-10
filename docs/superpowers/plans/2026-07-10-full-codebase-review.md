@@ -350,6 +350,20 @@ Request review for the exact Git range, resolve Critical and Important feedback,
 - [ ] Add `TestHexRoundRejectsUnrepresentableFiniteCoordinates`, passing extreme finite fractional coordinates that satisfy the cube sum and expecting a documented deterministic exception before integer conversion. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestHexRoundRejectsUnrepresentableFiniteCoordinates"`; expect conversion to produce implementation-defined integer results or a later unrelated failure.
 - [ ] Validate finite rounded coordinates are within `int` range and the corrected cube coordinate remains representable before casting; throw `OverflowException` for an unrepresentable result and document it. Rerun the focused command plus all HexRound/line/layout tests; expect deterministic rejection and unchanged normal rounding.
 
+#### Task 2 Repair T: Reject incompatible comparers before mutating Counter instances
+
+**Files:** `Collections/Counter.cs`, `Test/Collections/UnitTestCounter.cs`
+
+- [ ] Add `TestUpdateRejectsIncompatibleComparerBeforeMutation` and `TestSubtractRejectsIncompatibleComparerBeforeMutation`, using ordinal and ordinal-ignore-case counters whose first potential write would change existing state. Assert `ArgumentException` names `other` and the receiver remains exactly unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestUpdateRejectsIncompatibleComparerBeforeMutation|FullyQualifiedName~TestSubtractRejectsIncompatibleComparerBeforeMutation"`; expect both tests to fail because the mutating methods currently merge incompatible comparer domains.
+- [ ] Call the existing comparer compatibility guard before either method begins iteration and document the Chinese XML exception contract. Rerun the focused command plus all Counter tests; expect incompatible calls to fail before mutation while compatible same-comparer updates and subtraction remain green.
+
+#### Task 2 Repair U: Dispose removed logger handlers outside the shared lock
+
+**Files:** `Utility/Logging.cs`, `Test/Utility/UnitTestLogging.cs`
+
+- [ ] Add `TestRemoveHandlerDisposesOutsideLoggerLock`, whose disposal callback starts a coordinated task that must acquire the same logger lock and records whether it completes during the bounded callback window. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestRemoveHandlerDisposesOutsideLoggerLock"`; expect failure because `RemoveHandler` currently retains `_handlersLock` throughout the external callback.
+- [ ] Detach the handler under `_handlersLock`, release the lock, and dispose only when removal succeeded. Preserve direct disposal-exception propagation and missing-handler no-op behavior, retain accurate Chinese XML documentation, then rerun the focused command plus all logging tests; expect the coordinated lock acquisition to complete without deadlock or timeout.
+
 ### Task 3: Patterns
 
 **Files:**

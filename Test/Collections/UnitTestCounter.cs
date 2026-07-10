@@ -212,6 +212,64 @@ public class TestCounter
     }
 
     [Test]
+    public void TestUpdateRejectsIncompatibleComparerBeforeMutation()
+    {
+        var insensitive = new Counter<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Alpha"] = 4,
+            ["Zed"] = 9
+        };
+        var ordinal = new Counter<string>(StringComparer.Ordinal) { ["ALPHA"] = 2 };
+
+        var exception = Assert.Throws<ArgumentException>(() => insensitive.Update(ordinal));
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual("other", exception?.ParamName);
+            Assert.AreEqual(2, insensitive.Count);
+            Assert.AreEqual(4, insensitive["alpha"]);
+            Assert.AreEqual(9, insensitive["zed"]);
+        });
+    }
+
+    [Test]
+    public void TestSubtractRejectsIncompatibleComparerBeforeMutation()
+    {
+        var insensitive = new Counter<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Alpha"] = 4,
+            ["Zed"] = 9
+        };
+        var ordinal = new Counter<string>(StringComparer.Ordinal) { ["ALPHA"] = 2 };
+
+        var exception = Assert.Throws<ArgumentException>(() => insensitive.Subtract(ordinal));
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual("other", exception?.ParamName);
+            Assert.AreEqual(2, insensitive.Count);
+            Assert.AreEqual(4, insensitive["alpha"]);
+            Assert.AreEqual(9, insensitive["zed"]);
+        });
+    }
+
+    [Test]
+    public void TestUpdateAndSubtractAcceptCompatibleComparer()
+    {
+        var counter = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["Alpha"] = 4 };
+        var other = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["ALPHA"] = 2 };
+
+        counter.Update(other);
+        counter.Subtract(other);
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual(1, counter.Count);
+            Assert.AreEqual(4, counter["alpha"]);
+        });
+    }
+
+    [Test]
     public void TestCrossComparerRelationsThrow()
     {
         var insensitive = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["A"] = 2 };

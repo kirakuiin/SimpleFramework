@@ -166,6 +166,50 @@ public class TestLogging
         Assert.DoesNotThrow(() => logger.ClearHandlers());
     }
 
+    [Test]
+    public void TestRemoveHandlerDisposesOutsideLoggerLock()
+    {
+        var logger = Logger.GetLogger($"RemoveLifetimeTest-{Guid.NewGuid()}");
+        using var competingTaskStarted = new ManualResetEventSlim(false);
+        var probe = new DisposeActionHandler(() => { });
+        Task? competingTask = null;
+        var acquiredDuringDispose = false;
+        var removed = new DisposeActionHandler(() =>
+        {
+            competingTask = Task.Run(() =>
+            {
+                competingTaskStarted.Set();
+                logger.AddHandler(probe);
+            });
+            Assert.IsTrue(competingTaskStarted.Wait(TimeSpan.FromSeconds(2)));
+            acquiredDuringDispose = competingTask.Wait(TimeSpan.FromSeconds(2));
+        });
+        logger.AddHandler(removed);
+
+        logger.RemoveHandler(removed);
+
+        Assert.IsNotNull(competingTask);
+        var completedAfterDispose = competingTask?.Wait(TimeSpan.FromSeconds(2)) ?? false;
+        Assert.Multiple(() =>
+        {
+            Assert.IsTrue(completedAfterDispose);
+            Assert.IsTrue(acquiredDuringDispose);
+        });
+        logger.RemoveHandler(probe);
+    }
+
+    [Test]
+    public void TestRemoveHandlerPropagatesDisposalFailureAndIgnoresMissingHandler()
+    {
+        var logger = Logger.GetLogger($"RemoveFailureTest-{Guid.NewGuid()}");
+        var expected = new InvalidOperationException("dispose failure");
+        var handler = new DisposeActionHandler(() => throw expected);
+        logger.AddHandler(handler);
+
+        Assert.AreSame(expected, Assert.Throws<InvalidOperationException>(() => logger.RemoveHandler(handler)));
+        Assert.DoesNotThrow(() => logger.RemoveHandler(handler));
+    }
+
     private sealed class ListHandler(List<LogRecord> records) : IHandler
     {
         public LogLevel Level { get; set; } = LogLevel.NoTest;
