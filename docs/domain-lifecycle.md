@@ -4,7 +4,7 @@
 
 `AddChild` 表示生命周期所有权。父域释放时会释放子域，并保持对子域的强引用。
 
-`SetParent` 只表示查找继承。当当前域找不到 `System`、`Model`、`Utility` 时，会继续从父域查找。
+`SetParent` 只表示查找继承。当前域找不到 `System`、`Model`、`Utility` 时，会继续从父域查找。
 
 ## 组件生命周期
 

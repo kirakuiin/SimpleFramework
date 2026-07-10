@@ -6,20 +6,23 @@ public class TestSourceTextQuality
 {
     private static readonly string[] CorruptedTextMarkers =
     [
-        "閼?", "鐎?", "濮?", "鏉?", "閸?", "娑?", "瑜?", "妫?", "缂?", "鐟?",
-        "缁?", "閻?", "鐏?", "閸?", "娴?", "鐞?", "閻?", "姒?", "鐎?", "閺?",
-        "閸?", "閸?", "濞?", "浼?", "鐠?", "缍?", "閵?", "閿?", "鈧?", "锟?"
+        "鑾峰", "瀵硅", "鍒涘", "澶ч", "鍔熻", "涓€", "涓嶅", "鍦ㄥ", "鐖跺", "瀛愬",
+        "鐢熷", "懡鍛", "鍛ㄦ", "湡濂", "戠害", "琛ㄧ", "鎵€", "夋潈", "銆", "锛",
+        "鐨勫", "鏌ヨ", "娉ㄥ", "瀹炰", "鍙", "€?", "�"
     ];
 
     [Test]
-    public void TestProductionSourceDoesNotContainCorruptedChineseText()
+    public void TestRepositoryTextDoesNotContainCorruptedChineseText()
     {
         var root = GetRepositoryRoot();
-        var files = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+        var sourceFiles = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsUnder(path, root, ".git"))
+            .Where(path => !IsUnder(path, root, ".superpowers"))
             .Where(path => !IsUnder(path, root, "bin"))
             .Where(path => !IsUnder(path, root, "obj"))
-            .Where(path => !IsUnder(path, root, "Test"))
-            .ToArray();
+            .Where(path => !IsUnder(path, root, "Test"));
+        var publicDocs = new[] { Path.Combine(root, "docs", "domain-lifecycle.md") };
+        var files = sourceFiles.Concat(publicDocs).ToArray();
 
         var failures = files
             .SelectMany(path => FindMarkers(path).Select(marker => $"{Path.GetRelativePath(root, path)} contains {marker}"))
