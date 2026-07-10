@@ -1,21 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net8.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
         <DefineConstants>GODOT</DefineConstants>
         <RootNamespace>SimpleFramework.GDExt</RootNamespace>
-    </PropertyGroup>
-
-    <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
-      <OutputPath>..\bin\Debug\</OutputPath>
-      <DefineConstants>GODOT</DefineConstants>
-    </PropertyGroup>
-
-    <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-      <OutputPath>..\bin\Release\</OutputPath>
-      <DefineConstants>GODOT</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>
