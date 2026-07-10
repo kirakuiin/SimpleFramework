@@ -160,6 +160,13 @@ Use `superpowers:requesting-code-review` with the pre-round and post-round SHAs.
 - [ ] Add `TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent` plus a model whose replacement cleanup attempts one nested registration. Assert `InvalidOperationException`, the old registration remains visible, and neither requested replacement initializes. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent"`; expect failure because nested registration currently publishes and initializes a component during outer cleanup.
 - [ ] Guard last-reference replacement cleanup with a dedicated lifecycle-cleanup state and reject component registration while it is active, resetting the guard in `finally`; retain the outer old registration when the callback propagates the guard exception. Rerun the focused command and all core lifecycle tests; expect the nested and outer replacements to remain uninitialized and all tests to pass.
 
+#### Task 1 Repair I: Consume custom unregister callbacks before invocation
+
+**Files:** `FrameworkImpl/Event.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestCustomUnregisterThrowingCallbackRunsOnce`, using a callback that increments a counter and throws `InvalidOperationException`; assert the first `UnRegister` propagates the original exception and a subsequent `Dispose` does not invoke the callback again. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestCustomUnregisterThrowingCallbackRunsOnce"`; expect failure because the counter becomes 2 when the callback throws before the field is cleared.
+- [ ] Capture the callback, clear the stored field before invocation, and invoke the captured callback without catching it so the original exception is preserved. Document in Chinese XML that the callback is consumed at most once even when it throws and that its exception propagates. Rerun the focused command; expect the first call to throw, the second call to complete, the counter to remain 1, and the test to pass.
+
 ### Task 2: Collections, Utility, Toolkit, and Maths
 
 **Files:**

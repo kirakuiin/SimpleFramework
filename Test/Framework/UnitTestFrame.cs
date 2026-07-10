@@ -147,6 +147,23 @@ public class TestFramework
     }
 
     [Test]
+    public void TestCustomUnregisterThrowingCallbackRunsOnce()
+    {
+        var callCount = 0;
+        var unregister = new CustomUnRegister(() =>
+        {
+            callCount++;
+            throw new InvalidOperationException("Unregister failed.");
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(unregister.UnRegister);
+
+        Assert.That(exception!.Message, Is.EqualTo("Unregister failed."));
+        Assert.DoesNotThrow(((IDisposable)unregister).Dispose);
+        Assert.AreEqual(1, callCount);
+    }
+
+    [Test]
     public void TestRegister()
     {
         var system = _aDomain.GetSystem<System>()!;

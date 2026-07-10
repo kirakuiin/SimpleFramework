@@ -42,11 +42,15 @@ public class CustomUnRegister : IUnRegister
         _onUnRegister = onUnRegister;
     }
     
-    /// <inheritdoc />
+    /// <summary>
+    /// 执行取消注册回调；无论回调是否抛出异常，该回调都最多执行一次。
+    /// </summary>
+    /// <exception cref="Exception">取消注册回调抛出的原始异常会直接传播。</exception>
     public void UnRegister()
     {
-        _onUnRegister?.Invoke();
+        var onUnRegister = _onUnRegister;
         _onUnRegister = null;
+        onUnRegister?.Invoke();
     }
 }
 
@@ -121,7 +125,7 @@ public class EventContainer
     /// 查询事件。
     /// </summary>
     /// <typeparam name="T">事件类型</typeparam>
-    /// <returns>已注册的事件；不存在时返回 <see langword="null"/>。</returns>
+    /// <returns>已注册的事件；不存在时返回 <c>default(T)</c>，仅当 <typeparamref name="T"/> 为引用类型时该值为 <see langword="null"/>。</returns>
     [return: System.Diagnostics.CodeAnalysis.MaybeNull]
     public T GetEvent<T>() where T : IEvent =>
         _events.TryGetValue(typeof(T), out var @event) && @event is T result ? result : default;

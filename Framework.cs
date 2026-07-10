@@ -213,6 +213,7 @@ public interface IDomain
     /// <summary>
     /// 释放域中资源；释放期间的重入调用不会重复执行生命周期回调。
     /// </summary>
+    /// <exception cref="AggregateException">一个或多个子域、生命周期组件或域释放回调失败；清理其余资源后聚合抛出。</exception>
     void UnInitialize();
 }
 
