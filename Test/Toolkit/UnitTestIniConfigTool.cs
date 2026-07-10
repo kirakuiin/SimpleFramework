@@ -332,4 +332,35 @@ public class TestIniConfigTool
             CultureInfo.CurrentCulture = originalCulture;
         }
     }
+
+    [Test]
+    public void TestDateTimeOffsetRoundTripsAcrossCultures()
+    {
+        var testFile = Path.Combine(_testDirPath, "offset.ini");
+        var value = new DateTimeOffset(2026, 7, 10, 13, 14, 15, 123, TimeSpan.FromHours(5.5)).AddTicks(4567);
+        var originalCulture = CultureInfo.CurrentCulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            _configTool.LoadConfig(testFile);
+            _configTool.Set("Values", "Offset", value);
+            _configTool.SaveConfig();
+
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            using var reloaded = new IniConfigTool();
+            reloaded.LoadConfig(testFile);
+            var actual = reloaded.Get<DateTimeOffset>("Values", "Offset");
+
+            Assert.Multiple(() =>
+            {
+                Assert.AreEqual(value.Ticks, actual.Ticks);
+                Assert.AreEqual(value.Offset, actual.Offset);
+            });
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
 }

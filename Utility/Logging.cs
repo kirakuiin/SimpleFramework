@@ -232,6 +232,8 @@ public class StandardFormatter : IFormatter
     /// <summary>
     /// 将日志记录格式化为默认文本。
     /// </summary>
+    /// <param name="record">日志记录。</param>
+    /// <returns>包含时间、级别、来源、消息和可选异常的文本。</returns>
     public string Format(LogRecord record)
     {
         var sb = new StringBuilder();
@@ -285,6 +287,8 @@ public class Logger
     /// 获取指定名称的日志记录器。
     /// </summary>
     /// <param name="name">日志记录器名称。</param>
+    /// <returns>同名共享日志记录器。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> 为空。</exception>
     public static Logger GetLogger(string name)
     {
         lock (LoggersLock)
@@ -315,6 +319,7 @@ public class Logger
     /// 移除日志处理器并释放它。
     /// </summary>
     /// <param name="handler">日志处理器。</param>
+    /// <exception cref="Exception">已移除处理器的释放回调失败。</exception>
     public void RemoveHandler(IHandler handler)
     {
         var removed = false;
@@ -331,22 +336,40 @@ public class Logger
     /// <summary>
     /// 移除并释放所有日志处理器。
     /// </summary>
+    /// <exception cref="AggregateException">一个或多个处理器释放失败；所有处理器仍会被尝试释放。</exception>
     public void ClearHandlers()
     {
+        IHandler[] handlers;
         lock (_handlersLock)
         {
-            foreach (var handler in _handlers)
+            handlers = _handlers.ToArray();
+            _handlers.Clear();
+        }
+
+        List<Exception>? exceptions = null;
+        foreach (var handler in handlers)
+        {
+            try
             {
                 handler.Dispose();
             }
+            catch (Exception exception)
+            {
+                (exceptions ??= []).Add(exception);
+            }
+        }
 
-            _handlers.Clear();
+        if (exceptions is not null)
+        {
+            throw new AggregateException("释放日志处理器时发生一个或多个错误。", exceptions);
         }
     }
 
     /// <summary>
     /// 记录调试日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public void Debug(string message, Exception? exception = null)
     {
         Log(LogLevel.Debug, message, exception);
@@ -355,6 +378,8 @@ public class Logger
     /// <summary>
     /// 记录信息日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public void Info(string message, Exception? exception = null)
     {
         Log(LogLevel.Info, message, exception);
@@ -363,6 +388,8 @@ public class Logger
     /// <summary>
     /// 记录警告日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public void Warning(string message, Exception? exception = null)
     {
         Log(LogLevel.Warning, message, exception);
@@ -371,6 +398,8 @@ public class Logger
     /// <summary>
     /// 记录错误日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public void Error(string message, Exception? exception = null)
     {
         Log(LogLevel.Error, message, exception);
@@ -379,6 +408,8 @@ public class Logger
     /// <summary>
     /// 记录严重错误日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public void Critical(string message, Exception? exception = null)
     {
         Log(LogLevel.Critical, message, exception);
@@ -418,6 +449,8 @@ public static class Logging
     /// <summary>
     /// 获取指定名称的日志记录器。
     /// </summary>
+    /// <param name="name">日志记录器名称。</param>
+    /// <returns>同名共享日志记录器。</returns>
     public static Logger GetLogger(string name) => Logger.GetLogger(name);
 
     /// <summary>
@@ -425,6 +458,7 @@ public static class Logging
     /// </summary>
     /// <param name="level">最低日志级别。</param>
     /// <param name="filename">日志文件名；为空时只输出到控制台。</param>
+    /// <exception cref="AggregateException">原根处理器中有一个或多个释放失败。</exception>
     public static void BasicConfig(LogLevel level = LogLevel.Info, string filename = "")
     {
         Logger.Root.Level = level;
@@ -440,6 +474,8 @@ public static class Logging
     /// <summary>
     /// 记录调试日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public static void Debug(string message, Exception? exception = null)
     {
         Logger.Root.Debug(message, exception);
@@ -448,6 +484,8 @@ public static class Logging
     /// <summary>
     /// 记录信息日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public static void Info(string message, Exception? exception = null)
     {
         Logger.Root.Info(message, exception);
@@ -456,6 +494,8 @@ public static class Logging
     /// <summary>
     /// 记录警告日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public static void Warning(string message, Exception? exception = null)
     {
         Logger.Root.Warning(message, exception);
@@ -464,6 +504,8 @@ public static class Logging
     /// <summary>
     /// 记录错误日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public static void Error(string message, Exception? exception = null)
     {
         Logger.Root.Error(message, exception);
@@ -472,6 +514,8 @@ public static class Logging
     /// <summary>
     /// 记录严重错误日志。
     /// </summary>
+    /// <param name="message">日志消息。</param>
+    /// <param name="exception">关联异常。</param>
     public static void Critical(string message, Exception? exception = null)
     {
         Logger.Root.Critical(message, exception);

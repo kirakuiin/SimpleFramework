@@ -169,6 +169,22 @@ public class TestFileUtil
         Assert.AreEqual(newData.Score, loadedData.Score);
         Assert.AreNotEqual(originalData.Id, loadedData.Id);
     }
+
+    [Test]
+    public void TestSaveAsJsonContainsSerializationFailures()
+    {
+        var testFile = Path.Combine(_testDirPath, "cycle.json");
+        var cycle = new CyclicData();
+        cycle.Next = cycle;
+
+        Assert.DoesNotThrow(() => FileUtil.SaveAsJson(cycle, testFile));
+        Assert.IsFalse(File.Exists(testFile));
+    }
+
+    private sealed class CyclicData
+    {
+        public CyclicData? Next { get; set; }
+    }
 }
 
 /// <summary>

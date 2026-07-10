@@ -140,6 +140,32 @@ public class TestLogging
         Assert.IsTrue(handler.DisposedAfterEmit);
     }
 
+    [Test]
+    public void TestClearHandlersDisposesEveryHandlerAndAggregatesFailures()
+    {
+        var logger = Logger.GetLogger($"FailureTest-{Guid.NewGuid()}");
+        var disposalOrder = new List<string>();
+        logger.AddHandler(new DisposeActionHandler(() =>
+        {
+            disposalOrder.Add("first");
+            throw new InvalidOperationException("first failure");
+        }));
+        logger.AddHandler(new DisposeActionHandler(() => disposalOrder.Add("middle")));
+        logger.AddHandler(new DisposeActionHandler(() =>
+        {
+            disposalOrder.Add("last");
+            throw new ApplicationException("last failure");
+        }));
+
+        var exception = Assert.Throws<AggregateException>(() => logger.ClearHandlers());
+
+        CollectionAssert.AreEqual(new[] { "first", "middle", "last" }, disposalOrder);
+        CollectionAssert.AreEqual(
+            new[] { "first failure", "last failure" },
+            exception?.InnerExceptions.Select(item => item.Message));
+        Assert.DoesNotThrow(() => logger.ClearHandlers());
+    }
+
     private sealed class ListHandler(List<LogRecord> records) : IHandler
     {
         public LogLevel Level { get; set; } = LogLevel.NoTest;
@@ -191,6 +217,18 @@ public class TestLogging
         {
             DisposedAfterEmit = _emitFinished;
         }
+    }
+
+    private sealed class DisposeActionHandler(Action dispose) : IHandler
+    {
+        public LogLevel Level { get; set; }
+        public IFormatter Formatter { get; set; } = new StandardFormatter();
+
+        public void Emit(LogRecord record)
+        {
+        }
+
+        public void Dispose() => dispose();
     }
 
     private sealed class CustomFormatter : IFormatter

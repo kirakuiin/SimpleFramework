@@ -13,8 +13,8 @@ public static class MiscUtil
     /// <summary>
     /// 获得类型的唯一名称
     /// </summary>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
+    /// <typeparam name="T">目标类型。</typeparam>
+    /// <returns>包含程序集名与完整类型名的稳定名称。</returns>
     public static string GetUniqueTypeName<T>()
     {
         return GetUniqueTypeName(typeof(T));
@@ -24,7 +24,7 @@ public static class MiscUtil
     /// 获得类型的唯一名称
     /// </summary>
     /// <param name="type">类型</param>
-    /// <returns></returns>
+    /// <returns>包含程序集名与完整类型名的稳定名称。</returns>
     public static string GetUniqueTypeName(Type type)
     {
         return $"{type.Assembly.GetName().Name}.{type.FullName}";
@@ -33,7 +33,7 @@ public static class MiscUtil
     /// <summary>
     /// 生成一个GUID
     /// </summary>
-    /// <returns></returns>
+    /// <returns>新生成的非空 GUID。</returns>
     public static Guid GenerateGuid()
     {
         return Guid.NewGuid();
@@ -42,8 +42,8 @@ public static class MiscUtil
     /// <summary>
     /// 获得类型的hash值
     /// </summary>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
+    /// <typeparam name="T">目标类型。</typeparam>
+    /// <returns>类型唯一名称的缓存 64 位哈希。</returns>
     public static ulong TypeHash<T>()
     {
         return TypeHash(typeof(T));
@@ -53,7 +53,7 @@ public static class MiscUtil
     /// 获得指定类型的hash值
     /// </summary>
     /// <param name="type">类型</param>
-    /// <returns></returns>
+    /// <returns>类型唯一名称的缓存 64 位哈希。</returns>
     public static ulong TypeHash(Type type)
     {
         return _typeHashCaches.GetOrAdd(type, static t => ComputeHash(GetUniqueTypeName(t)));

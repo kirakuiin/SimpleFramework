@@ -19,7 +19,7 @@ public static class TimeUtil
     /// <summary>
     /// 获得从unix起始时间到utc now经过的毫秒数
     /// </summary>
-    /// <returns></returns>
+    /// <returns>当前 UTC Unix 时间戳（毫秒）。</returns>
     public static long GetUtcMilliseconds()
     {
         return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -28,8 +28,9 @@ public static class TimeUtil
     /// <summary>
     /// 获得当前时间减去指定时间的差值
     /// </summary>
-    /// <param name="milliseconds"></param>
-    /// <returns></returns>
+    /// <param name="milliseconds">要与当前 UTC 时间比较的 Unix 毫秒时间戳。</param>
+    /// <returns>当前 UTC 时间减去指定时间的差值；未来时间产生负值。</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="milliseconds"/> 超出 Unix 时间戳支持范围。</exception>
     public static TimeSpan GetUtcTimeSpanByNow(long milliseconds)
     {
         return DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);

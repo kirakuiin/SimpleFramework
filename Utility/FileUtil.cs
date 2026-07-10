@@ -17,9 +17,9 @@ public static class FileUtil
     /// <typeparam name="T">对象类型。</typeparam>
     public static void SaveAsJson<T>(T obj, string filePath)
     {
-        var result = SerializeUtil.Serialize(obj, DefaultOptions);
         try
         {
+            var result = SerializeUtil.Serialize(obj, DefaultOptions);
             using var fs = new FileStream(filePath, FileMode.Create);
             using var sw = new StreamWriter(fs);
             sw.Write(result);

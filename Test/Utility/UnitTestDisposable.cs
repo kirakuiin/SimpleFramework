@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using NUnit.Framework;
 using SimpleFramework.Utility;
 
@@ -102,6 +103,15 @@ public class TestDisposable
         group.Add(disposable);
 
         Assert.AreEqual(1, disposable.DisposeCallCount);
+    }
+
+    [Test]
+    public void TestDisposableGroupAddDeclaresNullableParameter()
+    {
+        var parameter = typeof(DisposableGroup).GetMethod(nameof(DisposableGroup.Add))!.GetParameters().Single();
+        var nullability = new NullabilityInfoContext().Create(parameter);
+
+        Assert.AreEqual(NullabilityState.Nullable, nullability.ReadState);
     }
 
     private sealed class ThrowingDisposable : IDisposable

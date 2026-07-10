@@ -26,8 +26,14 @@ public readonly struct HexOrientation
     /// <param name="f3">前向矩阵第二行第二列。</param>
     /// <param name="startAngle">第一个顶点相对 X 轴的角度。</param>
     /// <exception cref="InvalidOperationException">前向矩阵不可逆。</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="startAngle"/> 不是有限数值。</exception>
     public HexOrientation(double f0, double f1, double f2, double f3, double startAngle)
     {
+        if (!double.IsFinite(startAngle))
+        {
+            throw new ArgumentOutOfRangeException(nameof(startAngle), "起始角度必须是有限数值。");
+        }
+
         Forward = new Matrix2D(f0, f1, f2, f3);
         Inverse = Forward.Inverse();
         StartAngle = startAngle;
@@ -243,6 +249,7 @@ public readonly struct HexLayout
     /// </param>
     /// <param name="origin">布局的原点（屏幕坐标）</param>
     /// <exception cref="ArgumentOutOfRangeException">大小含零或非有限轴，或原点含非有限坐标。</exception>
+    /// <exception cref="ArgumentException"><paramref name="hexOrientation"/> 不含有限且可逆的有效朝向。</exception>
     public HexLayout(HexOrientation hexOrientation, Point size, Point origin)
     {
         if (!double.IsFinite(size.X) || !double.IsFinite(size.Y) || size.X == 0 || size.Y == 0)
@@ -255,14 +262,35 @@ public readonly struct HexLayout
             throw new ArgumentOutOfRangeException(nameof(origin), "布局原点必须使用有限数值。");
         }
 
+        if (!IsFinite(hexOrientation.Forward) || !IsFinite(hexOrientation.Inverse) ||
+            !double.IsFinite(hexOrientation.StartAngle) || hexOrientation.Forward.Determinant == 0)
+        {
+            throw new ArgumentException("六边形朝向必须包含有限且可逆的变换矩阵与有限起始角度。", nameof(hexOrientation));
+        }
+
+        var inverseScaleX = 1 / size.X;
+        var inverseScaleY = 1 / size.Y;
+        if (!double.IsFinite(inverseScaleX) || !double.IsFinite(inverseScaleY))
+        {
+            throw new ArgumentOutOfRangeException(nameof(size), "六边形大小的倒数必须可表示为有限数值。");
+        }
+
         HexOrientation = hexOrientation;
         Origin = origin;
         Size = size;
         
         // 构建完整的变换矩阵：缩放 * 基础变换
         _transformMatrix = Matrix2D.CreateScale(size.X, size.Y) * hexOrientation.Forward;
-        _inverseMatrix = hexOrientation.Inverse * Matrix2D.CreateScale(1/size.X, 1/size.Y);
+        _inverseMatrix = hexOrientation.Inverse * Matrix2D.CreateScale(inverseScaleX, inverseScaleY);
+        if (!IsFinite(_transformMatrix) || !IsFinite(_inverseMatrix))
+        {
+            throw new ArgumentOutOfRangeException(nameof(size), "布局派生变换必须是有限数值。");
+        }
     }
+
+    private static bool IsFinite(Matrix2D matrix) =>
+        double.IsFinite(matrix.M11) && double.IsFinite(matrix.M12) &&
+        double.IsFinite(matrix.M21) && double.IsFinite(matrix.M22);
 
     /// <summary>
     /// 将六边形坐标转换为屏幕坐标。
@@ -414,27 +442,43 @@ public static class HexExtensions
     /// <summary>
     /// 将浮点坐标四舍五入为最近的整数坐标。
     /// </summary>
+    /// <exception cref="OverflowException">舍入坐标或立方坐标修正结果超出 <see cref="int"/> 范围。</exception>
     public static Hex HexRound(this FractionalHex h)
     {
-        var q = (int)(Math.Round(h.Q));
-        var r = (int)(Math.Round(h.R));
-        var s = (int)(Math.Round(h.S));
+        var roundedQ = Math.Round(h.Q);
+        var roundedR = Math.Round(h.R);
+        var roundedS = Math.Round(h.S);
+        EnsureRepresentable(roundedQ);
+        EnsureRepresentable(roundedR);
+        EnsureRepresentable(roundedS);
+
+        var q = (int)roundedQ;
+        var r = (int)roundedR;
+        var s = (int)roundedS;
         var qDiff = Math.Abs(q - h.Q);
         var rDiff = Math.Abs(r - h.R);
         var sDiff = Math.Abs(s - h.S);
         if (qDiff > rDiff && qDiff > sDiff)
         {
-            q = -r - s;
+            q = checked(-r - s);
         }
         else if (rDiff > sDiff)
         {
-            r = -q - s;
+            r = checked(-q - s);
         }
         else
         {
-            s = -q - r;
+            s = checked(-q - r);
         }
         return new Hex(q, r, s);
+    }
+
+    private static void EnsureRepresentable(double coordinate)
+    {
+        if (!double.IsFinite(coordinate) || coordinate < int.MinValue || coordinate > int.MaxValue)
+        {
+            throw new OverflowException("舍入后的六边形坐标超出 Int32 范围。");
+        }
     }
     
     /// <summary>

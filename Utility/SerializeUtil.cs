@@ -40,7 +40,8 @@ public static class SerializeUtil
     /// <param name="bytes">JSON 字符串。</param>
     /// <param name="options">反序列化选项；为空时包含公共字段。</param>
     /// <typeparam name="T">目标类型。</typeparam>
-    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回默认值。</returns>
+    /// <returns>反序列化结果；引用类型或可空值类型目标遇到 JSON <see langword="null"/> 时返回空。</returns>
+    /// <exception cref="JsonException">JSON 无效，或 JSON <see langword="null"/> 无法转换为非空值类型。</exception>
     public static T? Deserialize<T>(string bytes, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
@@ -53,7 +54,8 @@ public static class SerializeUtil
     /// <param name="bytes">JSON 字符串。</param>
     /// <param name="type">目标运行时类型。</param>
     /// <param name="options">反序列化选项；为空时包含公共字段。</param>
-    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回空。</returns>
+    /// <returns>反序列化结果；可空目标遇到 JSON <see langword="null"/> 时返回空。</returns>
+    /// <exception cref="JsonException">JSON 无效，或内容无法转换为目标类型。</exception>
     public static object? Deserialize(string bytes, Type type, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
@@ -66,7 +68,8 @@ public static class SerializeUtil
     /// <param name="bytes">UTF-8 JSON 字节。</param>
     /// <param name="options">反序列化选项；为空时包含公共字段。</param>
     /// <typeparam name="T">目标类型。</typeparam>
-    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回默认值。</returns>
+    /// <returns>反序列化结果；引用类型或可空值类型目标遇到 JSON <see langword="null"/> 时返回空。</returns>
+    /// <exception cref="JsonException">JSON 无效，或 JSON <see langword="null"/> 无法转换为非空值类型。</exception>
     public static T? Deserialize<T>(byte[] bytes, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
@@ -79,7 +82,8 @@ public static class SerializeUtil
     /// <param name="bytes">UTF-8 JSON 字节。</param>
     /// <param name="type">目标运行时类型。</param>
     /// <param name="options">反序列化选项；为空时包含公共字段。</param>
-    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回空。</returns>
+    /// <returns>反序列化结果；可空目标遇到 JSON <see langword="null"/> 时返回空。</returns>
+    /// <exception cref="JsonException">JSON 无效，或内容无法转换为目标类型。</exception>
     public static object? Deserialize(byte[] bytes, Type type, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;

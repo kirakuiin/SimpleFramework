@@ -267,8 +267,10 @@ public class Counter<T>
     /// <param name="a">左操作数，其键比较器由结果保留。</param>
     /// <param name="b">右操作数。</param>
     /// <returns>包含双方全部键的计数差。</returns>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public static Counter<T> operator -(Counter<T> a, Counter<T> b)
     {
+        EnsureCompatibleComparers(a, b, nameof(b));
         var result = new Counter<T>(a.Comparer);
         foreach (var key in GetAllKeys(a, b))
         {
@@ -284,8 +286,10 @@ public class Counter<T>
     /// <param name="a">左操作数，其键比较器由结果保留。</param>
     /// <param name="b">右操作数。</param>
     /// <returns>包含双方全部键的计数和。</returns>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public static Counter<T> operator +(Counter<T> a, Counter<T> b)
     {
+        EnsureCompatibleComparers(a, b, nameof(b));
         var result = new Counter<T>(a.Comparer);
         foreach (var key in GetAllKeys(a, b))
         {
@@ -296,24 +300,28 @@ public class Counter<T>
     }
 
     /// <summary>判断左侧所有计数是否逐项大于或等于右侧，且两者不相等。</summary>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public static bool operator >(Counter<T> a, Counter<T> b)
     {
         return a >= b && !a.Equals(b);
     }
         
     /// <summary>判断左侧所有计数是否逐项小于或等于右侧，且两者不相等。</summary>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public static bool operator <(Counter<T> a, Counter<T> b)
     {
         return a <= b && !a.Equals(b);
     }
         
     /// <summary>判断左侧所有计数是否逐项大于或等于右侧。</summary>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public static bool operator >=(Counter<T> a, Counter<T> b)
     {
         return CompareAllKeys(a, b, static (left, right) => left >= right);
     }
         
     /// <summary>判断左侧所有计数是否逐项小于或等于右侧。</summary>
+    /// <exception cref="ArgumentException">双方使用不兼容的键比较器。</exception>
     public static bool operator <=(Counter<T> a, Counter<T> b)
     {
         return CompareAllKeys(a, b, static (left, right) => left <= right);
@@ -321,7 +329,16 @@ public class Counter<T>
 
     private static bool CompareAllKeys(Counter<T> a, Counter<T> b, Func<long, long, bool> comparer)
     {
+        EnsureCompatibleComparers(a, b, nameof(b));
         return GetAllKeys(a, b).All(key => comparer(a.GetValueOrDefault(key, 0), b.GetValueOrDefault(key, 0)));
+    }
+
+    private static void EnsureCompatibleComparers(Counter<T> a, Counter<T> b, string parameterName)
+    {
+        if (!a.Comparer.Equals(b.Comparer))
+        {
+            throw new ArgumentException("计数字典使用的键比较器不兼容。", parameterName);
+        }
     }
 
     private static HashSet<T> GetAllKeys(Counter<T> a, Counter<T> b)

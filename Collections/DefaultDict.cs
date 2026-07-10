@@ -53,7 +53,7 @@ public class DefaultDict<TK, TV> :
 
     bool ICollection<KeyValuePair<TK, TV>>.Contains(KeyValuePair<TK, TV> item)
     {
-        return _delegate.Contains(item);
+        return ((ICollection<KeyValuePair<TK, TV>>)_delegate).Contains(item);
     }
 
     void ICollection<KeyValuePair<TK, TV>>.CopyTo(KeyValuePair<TK, TV>[] array, int arrayIndex)

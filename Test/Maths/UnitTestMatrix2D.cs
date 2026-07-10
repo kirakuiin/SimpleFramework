@@ -67,4 +67,13 @@ public class TestMatrix2D
                 () => new Matrix2D(double.PositiveInfinity, 0, 0, 1).Inverse());
         });
     }
+
+    [Test]
+    public void TestInverseRejectsNonFiniteCandidate()
+    {
+        var m22 = double.MaxValue;
+        var matrix = new Matrix2D(2e-12 / m22, 0, 0, m22);
+
+        Assert.Throws<InvalidOperationException>(() => matrix.Inverse());
+    }
 }

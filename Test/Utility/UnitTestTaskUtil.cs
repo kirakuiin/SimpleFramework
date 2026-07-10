@@ -89,4 +89,65 @@ public class TestTaskUtil
         Assert.ThrowsAsync<OperationCanceledException>(
             () => TaskUtil.WaitUntil(() => false, 1000, 10, source.Token));
     }
+
+    [Test]
+    public void TestWaitUntilRejectsInvalidArguments()
+    {
+        var attempts = 0;
+        Exception? nullPredicate = null;
+        Exception? negativeTimeout = null;
+        Exception? zeroInterval = null;
+        Exception? infiniteInterval = null;
+
+        Assert.Multiple(() =>
+        {
+            nullPredicate = Assert.CatchAsync<Exception>(() => TaskUtil.WaitUntil(null!));
+            negativeTimeout = Assert.CatchAsync<Exception>(
+                () => TaskUtil.WaitUntil(() => ++attempts > 0, -1, 1));
+            zeroInterval = Assert.CatchAsync<Exception>(
+                () => TaskUtil.WaitUntil(() => ++attempts > 0, 1, 0));
+            infiniteInterval = Assert.CatchAsync<Exception>(
+                () => TaskUtil.WaitUntil(() => ++attempts > 0, 1, -1));
+
+            Assert.That(nullPredicate, Is.TypeOf<ArgumentNullException>());
+            Assert.AreEqual("predict", (nullPredicate as ArgumentNullException)?.ParamName);
+            Assert.That(negativeTimeout, Is.TypeOf<ArgumentOutOfRangeException>());
+            Assert.AreEqual("timeout", (negativeTimeout as ArgumentOutOfRangeException)?.ParamName);
+            Assert.That(zeroInterval, Is.TypeOf<ArgumentOutOfRangeException>());
+            Assert.AreEqual("interval", (zeroInterval as ArgumentOutOfRangeException)?.ParamName);
+            Assert.That(infiniteInterval, Is.TypeOf<ArgumentOutOfRangeException>());
+            Assert.AreEqual("interval", (infiniteInterval as ArgumentOutOfRangeException)?.ParamName);
+        });
+        Assert.AreEqual(0, attempts);
+    }
+
+    [Test]
+    [Timeout(2000)]
+    public async Task TestWaitUntilCapsDelayToRemainingTimeout()
+    {
+        using var safety = new CancellationTokenSource(500);
+        var stopwatch = Stopwatch.StartNew();
+
+        await TaskUtil.WaitUntil(() => false, 30, int.MaxValue, safety.Token);
+
+        Assert.That(stopwatch.ElapsedMilliseconds, Is.InRange(20, 400));
+    }
+
+    [Test]
+    [Timeout(2000)]
+    public async Task TestWaitUntilCancellationInterruptsActiveDelay()
+    {
+        using var source = new CancellationTokenSource();
+        var enteredPolling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiting = TaskUtil.WaitUntil(() =>
+        {
+            enteredPolling.TrySetResult();
+            return false;
+        }, 5000, 5000, source.Token);
+
+        await enteredPolling.Task;
+        source.Cancel();
+
+        Assert.CatchAsync<OperationCanceledException>(async () => await waiting);
+    }
 }

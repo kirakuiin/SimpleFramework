@@ -195,4 +195,56 @@ public class TestCounter
             Assert.AreEqual(-5, difference["beta"]);
         });
     }
+
+    [Test]
+    public void TestCrossComparerArithmeticThrows()
+    {
+        var insensitive = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["A"] = 2 };
+        var ordinal = new Counter<string>(StringComparer.Ordinal) { ["A"] = 1 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual("b", Assert.Throws<ArgumentException>(() => _ = insensitive + ordinal)?.ParamName);
+            Assert.AreEqual("b", Assert.Throws<ArgumentException>(() => _ = ordinal + insensitive)?.ParamName);
+            Assert.AreEqual("b", Assert.Throws<ArgumentException>(() => _ = insensitive - ordinal)?.ParamName);
+            Assert.AreEqual("b", Assert.Throws<ArgumentException>(() => _ = ordinal - insensitive)?.ParamName);
+        });
+    }
+
+    [Test]
+    public void TestCrossComparerRelationsThrow()
+    {
+        var insensitive = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["A"] = 2 };
+        var ordinal = new Counter<string>(StringComparer.Ordinal) { ["A"] = 1 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<ArgumentException>(() => _ = insensitive > ordinal);
+            Assert.Throws<ArgumentException>(() => _ = insensitive < ordinal);
+            Assert.Throws<ArgumentException>(() => _ = insensitive >= ordinal);
+            Assert.Throws<ArgumentException>(() => _ = insensitive <= ordinal);
+            Assert.Throws<ArgumentException>(() => _ = ordinal > insensitive);
+            Assert.Throws<ArgumentException>(() => _ = ordinal < insensitive);
+            Assert.Throws<ArgumentException>(() => _ = ordinal >= insensitive);
+            Assert.Throws<ArgumentException>(() => _ = ordinal <= insensitive);
+        });
+    }
+
+    [Test]
+    public void TestComparerCompatibilityControlsEqualityAndHashing()
+    {
+        var left = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["Alpha"] = 3 };
+        var compatible = new Counter<string>(StringComparer.OrdinalIgnoreCase) { ["ALPHA"] = 3 };
+        var incompatible = new Counter<string>(StringComparer.Ordinal) { ["Alpha"] = 3 };
+        var sum = left + compatible;
+
+        Assert.Multiple(() =>
+        {
+            Assert.IsTrue(left.Equals(compatible));
+            Assert.AreEqual(left.GetHashCode(), compatible.GetHashCode());
+            Assert.IsFalse(left.Equals(incompatible));
+            Assert.AreEqual(1, sum.Count);
+            Assert.AreEqual(6, sum["alpha"]);
+        });
+    }
 }

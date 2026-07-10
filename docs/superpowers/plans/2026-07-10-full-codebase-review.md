@@ -301,6 +301,55 @@ Request review for the exact Git range, resolve Critical and Important feedback,
 - [ ] Add `TestLayoutRejectsNonFiniteOrigin`, constructing a layout with a NaN or infinite origin coordinate and expecting `ArgumentOutOfRangeException` naming `origin`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsNonFiniteOrigin"`; expect failure because non-finite origin values are currently stored and later poison every coordinate conversion.
 - [ ] Validate both origin coordinates as finite while retaining every finite origin value. Rerun the same command and the existing layout round-trip tests; expect all selected tests to pass.
 
+#### Task 2 Repair M: Make comparer semantics consistent across dictionary pairs and Counter operations
+
+**Files:** `Collections/DefaultDict.cs`, `Collections/Counter.cs`, `Test/Collections/UnitTestDefaultDict.cs`, `Test/Collections/UnitTestCounter.cs`
+
+- [ ] Add `TestPairContainsUsesConfiguredComparer`, `TestCrossComparerArithmeticThrows`, `TestCrossComparerRelationsThrow`, and `TestComparerCompatibilityControlsEqualityAndHashing`; retain same-comparer aggregation assertions. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestPairContainsUsesConfiguredComparer|FullyQualifiedName~TestCrossComparerArithmeticThrows|FullyQualifiedName~TestCrossComparerRelationsThrow|FullyQualifiedName~TestComparerCompatibilityControlsEqualityAndHashing"`; expect pair containment to ignore the configured comparer and cross-comparer operations to return inconsistent values instead of a documented failure.
+- [ ] Delegate pair containment through `ICollection<KeyValuePair<TKey,TValue>>`, define comparer compatibility through comparer equality, reject binary arithmetic and every relational direction with `ArgumentException` naming the incompatible operand, keep incompatible equality false, and document the rule. Rerun the same command plus all Counter/DefaultDict tests; expect comparer-aware containment, symmetric failures, same-comparer aggregation, and equality/hash invariants to pass.
+
+#### Task 2 Repair N: Complete logger cleanup and publish nullable DisposableGroup additions
+
+**Files:** `Utility/Disposable.cs`, `Utility/Logging.cs`, `Test/Utility/UnitTestDisposable.cs`, `Test/Utility/UnitTestLogging.cs`
+
+- [ ] Add `TestDisposableGroupAddDeclaresNullableParameter` and `TestClearHandlersDisposesEveryHandlerAndAggregatesFailures`, using two throwing handlers with a later tracker and asserting failure order. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestDisposableGroupAddDeclaresNullableParameter|FullyQualifiedName~TestClearHandlersDisposesEveryHandlerAndAggregatesFailures"`; expect nullable metadata to be non-null and logger cleanup to stop on the first failure.
+- [ ] Change `DisposableGroup.Add` to `IDisposable?`; in `Logger.ClearHandlers`, snapshot and clear under the handler lock, dispose the snapshot without holding the shared collection lock, attempt every handler in order, and throw one `AggregateException` afterward. Update Chinese XML failure contracts and rerun the focused command plus all disposal/logging tests; expect complete cleanup and deterministic failures.
+
+#### Task 2 Repair O: Validate WaitUntil boundaries and cap polling delay
+
+**Files:** `Utility/TaskUtil.cs`, `Test/Utility/UnitTestTaskUtil.cs`
+
+- [ ] Add `TestWaitUntilRejectsInvalidArguments`, `TestWaitUntilCapsDelayToRemainingTimeout`, and `TestWaitUntilCancellationInterruptsActiveDelay`; cover null predicate, negative timeout, interval zero/-1, an `int.MaxValue` interval with a short timeout, and cancellation after the predicate signals entry. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestWaitUntilRejectsInvalidArguments|FullyQualifiedName~TestWaitUntilCapsDelayToRemainingTimeout|FullyQualifiedName~TestWaitUntilCancellationInterruptsActiveDelay"`; expect missing parameter validation, oversleep, and an uninterruptible active delay without the token path.
+- [ ] Validate arguments before polling, compute each delay as the smaller of interval and positive remaining timeout, and retain token propagation through the active delay. Document parameter and cancellation exceptions; rerun the focused command and all TaskUtil tests, expecting bounded normal timeout and prompt cancellation.
+
+#### Task 2 Repair P: Round-trip DateTimeOffset values invariantly
+
+**Files:** `Toolkit/ConfigTool.cs`, `Test/Toolkit/UnitTestIniConfigTool.cs`
+
+- [ ] Add `TestDateTimeOffsetRoundTripsAcrossCultures`, writing under `fr-FR` and reading under `en-US` while asserting ticks and offset. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestDateTimeOffsetRoundTripsAcrossCultures"`; expect the read to return its default because `Convert.ChangeType` cannot create `DateTimeOffset`.
+- [ ] Parse `DateTimeOffset` with invariant culture and round-trip styles, and document the actually supported typed conversions without claiming arbitrary conversion. Rerun the focused command and all Toolkit tests; expect exact ticks/offset and existing raw-string behavior to pass.
+
+#### Task 2 Repair Q: Reject non-finite derived matrix and layout transforms
+
+**Files:** `Maths/Matrix.cs`, `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestMatrix2D.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
+
+- [ ] Add `TestInverseRejectsNonFiniteCandidate`, `TestOrientationRejectsNonFiniteAngle`, `TestLayoutRejectsDefaultOrNonFiniteOrientation`, `TestLayoutRejectsNonRepresentableReciprocal`, and `TestNegativeScaleMirrorsAndRoundTrips`; cover extreme finite matrices, `double.Epsilon` size, default orientation, non-finite angle, and finite negative reflection. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestInverseRejectsNonFiniteCandidate|FullyQualifiedName~TestOrientationRejectsNonFiniteAngle|FullyQualifiedName~TestLayoutRejectsDefaultOrNonFiniteOrientation|FullyQualifiedName~TestLayoutRejectsNonRepresentableReciprocal|FullyQualifiedName~TestNegativeScaleMirrorsAndRoundTrips"`; expect non-finite derived values to be accepted while the explicit negative-scale coverage already passes.
+- [ ] Validate inverse candidate components, finite orientation matrices/inverse/start angle at the appropriate constructor/layout boundaries, and finite reciprocals/derived transforms, while retaining negative mirroring. Document exact exceptions and rerun the focused command plus all matrix/hex tests; expect all selected tests to pass.
+
+#### Task 2 Repair R: Align XML contracts and FileUtil serialization failure behavior
+
+**Files:** `Utility/FileUtil.cs`, `Utility/SerializeUtil.cs`, `Utility/Logging.cs`, `Utility/MiscUtil.cs`, `Utility/TimeUtil.cs`, `Utility/Extensions/RandomExtension.cs`, `Test/Utility/UnitTestFileUtil.cs`, `Test/Documentation/UnitTestSourceTextQuality.cs`
+
+- [ ] Add `TestSaveAsJsonContainsSerializationFailures` using a cyclic object and asserting no exception/file, plus source-contract assertions for reviewed XML defects. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSaveAsJsonContainsSerializationFailures|FullyQualifiedName~TestSourceTextQuality"`; expect cyclic serialization to escape because it occurs before the try block and source checks to expose inaccurate/empty tags.
+- [ ] Move JSON serialization inside the SaveAsJson try block; correct Shuffle/Sample type-parameter and exception docs, MiscUtil/TimeUtil empty tags, JSON-null value-type behavior, and Logging parameter/failure contracts. Rerun the focused command, FileUtil/SerializeUtil tests, and source quality; expect behavior and docs to match with no compiler warnings.
+
+#### Task 2 Repair S: Validate HexRound representability explicitly
+
+**Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
+
+- [ ] Add `TestHexRoundRejectsUnrepresentableFiniteCoordinates`, passing extreme finite fractional coordinates that satisfy the cube sum and expecting a documented deterministic exception before integer conversion. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestHexRoundRejectsUnrepresentableFiniteCoordinates"`; expect conversion to produce implementation-defined integer results or a later unrelated failure.
+- [ ] Validate finite rounded coordinates are within `int` range and the corrected cube coordinate remains representable before casting; throw `OverflowException` for an unrepresentable result and document it. Rerun the focused command plus all HexRound/line/layout tests; expect deterministic rejection and unchanged normal rounding.
+
 ### Task 3: Patterns
 
 **Files:**

@@ -15,6 +15,8 @@ public static class TaskUtil
     /// <param name="timeout">超时时间（毫秒）。</param>
     /// <param name="interval">检查间隔（毫秒）。</param>
     /// <param name="cancellationToken">用于取消等待的令牌。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="predict"/> 为空。</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="timeout"/> 小于零，或 <paramref name="interval"/> 不为正数。</exception>
     /// <exception cref="OperationCanceledException">等待已被取消。</exception>
     public static async Task WaitUntil(
         Func<bool> predict,
@@ -22,11 +24,18 @@ public static class TaskUtil
         int interval = 100,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(predict);
+        ArgumentOutOfRangeException.ThrowIfNegative(timeout);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, 0);
         cancellationToken.ThrowIfCancellationRequested();
         var stopwatch = Stopwatch.StartNew();
-        while (!predict() && stopwatch.Elapsed.TotalMilliseconds < timeout)
+        while (!predict())
         {
-            await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+            var remaining = timeout - stopwatch.ElapsedMilliseconds;
+            if (remaining <= 0) return;
+
+            var delay = (int)Math.Min(interval, remaining);
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
     }
 }

@@ -37,7 +37,7 @@ public class DisposableGroup : Disposable
     /// </summary>
     /// <remarks>组已释放时，传入的非空对象会被立即释放；空值会被忽略。</remarks>
     /// <param name="disposable">要纳入组生命周期的对象。</param>
-    public void Add(IDisposable disposable)
+    public void Add(IDisposable? disposable)
     {
         if (disposable is null) return;
         if (IsDisposed)

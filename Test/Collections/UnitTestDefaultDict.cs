@@ -100,4 +100,17 @@ public class TestDefaultDict
 
         Assert.AreEqual("initCallback", exception!.ParamName);
     }
+
+    [Test]
+    public void TestPairContainsUsesConfiguredComparer()
+    {
+        var dict = new DefaultDict<string, int>(() => 0, StringComparer.OrdinalIgnoreCase)
+        {
+            ["Key"] = 7
+        };
+        ICollection<KeyValuePair<string, int>> pairs = dict;
+
+        Assert.IsTrue(pairs.Contains(new KeyValuePair<string, int>("KEY", 7)));
+        Assert.IsFalse(pairs.Contains(new KeyValuePair<string, int>("KEY", 8)));
+    }
 }

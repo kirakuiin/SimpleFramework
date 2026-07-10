@@ -250,4 +250,58 @@ public class TestHexagonGrid
                 Assert.Throws<ArgumentOutOfRangeException>(() => layout.HexCornerOffset(invalid))?.ParamName);
         });
     }
+
+    [Test]
+    public void TestOrientationRejectsNonFiniteAngle()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => new HexOrientation(1, 0, 0, 1, double.NaN));
+
+        Assert.AreEqual("startAngle", exception?.ParamName);
+    }
+
+    [Test]
+    public void TestLayoutRejectsDefaultOrNonFiniteOrientation()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => new HexLayout(default, new Point(1, 1), new Point(0, 0)));
+
+        Assert.AreEqual("hexOrientation", exception?.ParamName);
+    }
+
+    [Test]
+    public void TestLayoutRejectsNonRepresentableReciprocal()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => new HexLayout(
+            HexOrientation.Pointy,
+            new Point(double.Epsilon, 1),
+            new Point(0, 0)));
+
+        Assert.AreEqual("size", exception?.ParamName);
+    }
+
+    [Test]
+    public void TestNegativeScaleMirrorsAndRoundTrips()
+    {
+        var hex = new Hex(3, 4, -7);
+        var positive = new HexLayout(HexOrientation.Pointy, new Point(10, 15), new Point(0, 0));
+        var mirrored = new HexLayout(HexOrientation.Pointy, new Point(-10, 15), new Point(0, 0));
+        var positivePixel = positive.HexToPixel(hex);
+        var mirroredPixel = mirrored.HexToPixel(hex);
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual(-positivePixel.X, mirroredPixel.X, 1e-10);
+            Assert.AreEqual(positivePixel.Y, mirroredPixel.Y, 1e-10);
+            Assert.AreEqual(hex, mirrored.PixelToHex(mirroredPixel));
+        });
+    }
+
+    [Test]
+    public void TestHexRoundRejectsUnrepresentableFiniteCoordinates()
+    {
+        var fractional = new FractionalHex(double.MaxValue, -double.MaxValue, 0);
+
+        Assert.Throws<OverflowException>(() => fractional.HexRound());
+    }
 } 

@@ -158,6 +158,11 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
     /// <summary>
     /// 读取配置值，如果不存在则返回默认值
     /// </summary>
+    /// <remarks>
+    /// 字符串保持原文；<see cref="DateTime"/> 与 <see cref="DateTimeOffset"/> 使用往返格式；
+    /// 其余由 <see cref="Convert.ChangeType(object,Type,IFormatProvider)"/> 支持的基础类型使用不变区域性转换。
+    /// 枚举、GUID 与自定义对象等不受该转换支持的目标类型返回默认值并记录错误。
+    /// </remarks>
     /// <param name="section">配置节</param>
     /// <param name="key">配置键</param>
     /// <param name="defaultValue">默认值</param>
@@ -198,6 +203,15 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
                     System.Globalization.DateTimeStyles.RoundtripKind);
             }
 
+            if (typeof(T) == typeof(DateTimeOffset))
+            {
+                return (T)(object)DateTimeOffset.ParseExact(
+                    rawValue,
+                    "O",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None);
+            }
+
             return (T)Convert.ChangeType(
                 rawValue,
                 typeof(T),
@@ -213,6 +227,10 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
     /// <summary>
     /// 设置配置值
     /// </summary>
+    /// <remarks>
+    /// 字符串保持原文；<see cref="DateTime"/> 与 <see cref="DateTimeOffset"/> 使用往返格式；
+    /// 其他 <see cref="IFormattable"/> 值使用不变区域性格式。
+    /// </remarks>
     /// <param name="section">配置节</param>
     /// <param name="key">配置键</param>
     /// <param name="value">配置值</param>

@@ -77,9 +77,16 @@ public readonly struct Matrix2D
             throw new InvalidOperationException("Matrix is not invertible.");
         }
 
-        return new Matrix2D(
+        var inverse = new Matrix2D(
             M22 / det, -M12 / det,
             -M21 / det, M11 / det);
+        if (!double.IsFinite(inverse.M11) || !double.IsFinite(inverse.M12) ||
+            !double.IsFinite(inverse.M21) || !double.IsFinite(inverse.M22))
+        {
+            throw new InvalidOperationException("Matrix inverse is not finite.");
+        }
+
+        return inverse;
     }
 
     /// <summary>

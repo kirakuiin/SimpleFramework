@@ -10,6 +10,7 @@ public static class RandomExtensions
     /// </summary>
     /// <param name="random">随机数生成器。</param>
     /// <param name="list">非空候选列表。</param>
+    /// <typeparam name="T">元素类型。</typeparam>
     /// <returns>被选中的元素</returns>
     /// <exception cref="ArgumentException"><paramref name="list"/> 为空。</exception>
     public static T Choice<T>(this Random random, IList<T> list)
@@ -26,8 +27,9 @@ public static class RandomExtensions
     /// <summary>
     /// 打乱列表中元素顺序。
     /// </summary>
-    /// <typeparam name="T"></typeparam>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="k"/> 小于零。</exception>
+    /// <param name="random">随机数生成器。</param>
+    /// <param name="list">要原地打乱的列表。</param>
+    /// <typeparam name="T">元素类型。</typeparam>
     public static void Shuffle<T>(this Random random, IList<T> list)
     {
         for (var i = list.Count - 1; i >= 0; --i)
@@ -41,10 +43,11 @@ public static class RandomExtensions
     /// 在序列中随机采样若干个样本。
     /// </summary>
     /// <remarks>使用水塘抽样算法实现。</remarks>
-    /// <param name="random"></param>
-    /// <param name="sequence">序列</param>
+    /// <param name="random">随机数生成器。</param>
+    /// <param name="sequence">输入序列。</param>
     /// <param name="k">最多提取的样本数；序列较短时返回全部元素。</param>
     /// <typeparam name="T">元素类型。</typeparam>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="k"/> 小于零。</exception>
     public static IList<T> Sample<T>(this Random random, IEnumerable<T> sequence, int k)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(k);
