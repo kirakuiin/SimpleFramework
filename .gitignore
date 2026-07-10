@@ -3,6 +3,7 @@ bin/
 obj/
 /packages/
 .worktrees/
+.superpowers/
 
 # IDE specific files
 riderModule.iml
