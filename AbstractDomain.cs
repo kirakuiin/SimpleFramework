@@ -3,7 +3,7 @@ using SimpleFramework.FrameworkImpl;
 namespace SimpleFramework;
 
 /// <summary>
-/// 实现了域大部分功能的抽象类。
+/// 域的抽象实现，提供父子域、组件注册和事件分发能力。
 /// </summary>
 public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, new()
 {
@@ -22,18 +22,17 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     private bool _isUninitializing;
     
     /// <summary>
-    /// 获取对象，如果对象不存在则创建
+    /// 获取单例域实例；不存在时会创建并初始化。
     /// </summary>
     public static T Instance => _domain ??= Create();
     
     /// <summary>
-    /// 获取对象，如果对象不存在则返回null
+    /// 获取当前单例域实例；不存在时返回 <see langword="null"/>。
     /// </summary>
-    /// <returns></returns>
     public static T? GetInstance() => _domain;
     
     /// <summary>
-    /// 创建一个新的独立域实例，并立即初始化。
+    /// 创建一个独立的域实例，并立即完成初始化。
     /// </summary>
     /// <returns>新的域实例。</returns>
     public static T Create()
@@ -137,10 +136,10 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     }
 
     /// <summary>
-    /// 检查参数是否有效
+    /// 检查设置父域后是否会形成循环引用。
     /// </summary>
-    /// <param name="domain"></param>
-    /// <returns></returns>
+    /// <param name="domain">候选父域。</param>
+    /// <returns>会形成循环引用时返回 <see langword="true"/>。</returns>
     private bool _CheckCycle(IDomain? domain)
     {
         if (domain is null) return false;
@@ -324,8 +323,8 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 尝试在域中获取系统。
     /// </summary>
-    /// <param name="system">找到的系统；未找到时为 null。</param>
-    /// <typeparam name="TSystem"></typeparam>
+    /// <param name="system">找到的系统；未找到时为 <see langword="null"/>。</param>
+    /// <typeparam name="TSystem">系统类型。</typeparam>
     /// <returns>找到系统时返回 true。</returns>
     public bool TryGetSystem<TSystem>(out TSystem? system) where TSystem : class, ISystem
     {
@@ -336,7 +335,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 在域中获取系统，未找到时抛出异常。
     /// </summary>
-    /// <typeparam name="TSystem"></typeparam>
+    /// <typeparam name="TSystem">系统类型。</typeparam>
     /// <returns><see cref="ISystem"/></returns>
     /// <exception cref="NullReferenceException"></exception>
     public TSystem RequireSystem<TSystem>() where TSystem : class, ISystem
@@ -357,8 +356,8 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 尝试在域中获取模型。
     /// </summary>
-    /// <param name="model">找到的模型；未找到时为 null。</param>
-    /// <typeparam name="TModel"></typeparam>
+    /// <param name="model">找到的模型；未找到时为 <see langword="null"/>。</param>
+    /// <typeparam name="TModel">模型类型。</typeparam>
     /// <returns>找到模型时返回 true。</returns>
     public bool TryGetModel<TModel>(out TModel? model) where TModel : class, IModel
     {
@@ -369,7 +368,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 在域中获取模型，未找到时抛出异常。
     /// </summary>
-    /// <typeparam name="TModel"></typeparam>
+    /// <typeparam name="TModel">模型类型。</typeparam>
     /// <returns><see cref="IModel"/></returns>
     /// <exception cref="NullReferenceException"></exception>
     public TModel RequireModel<TModel>() where TModel : class, IModel
@@ -390,8 +389,8 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 尝试在域中获取功能组件。
     /// </summary>
-    /// <param name="utility">找到的功能组件；未找到时为 null。</param>
-    /// <typeparam name="TUtility"></typeparam>
+    /// <param name="utility">找到的功能组件；未找到时为 <see langword="null"/>。</param>
+    /// <typeparam name="TUtility">功能组件类型。</typeparam>
     /// <returns>找到功能组件时返回 true。</returns>
     public bool TryGetUtility<TUtility>(out TUtility? utility) where TUtility : class, IUtility
     {
@@ -402,7 +401,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 在域中获取功能组件，未找到时抛出异常。
     /// </summary>
-    /// <typeparam name="TUtility"></typeparam>
+    /// <typeparam name="TUtility">功能组件类型。</typeparam>
     /// <returns><see cref="IUtility"/></returns>
     /// <exception cref="NullReferenceException"></exception>
     public TUtility RequireUtility<TUtility>() where TUtility : class, IUtility
