@@ -1,0 +1,370 @@
+# SimpleFramework Full Codebase Review Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Complete seven evidence-backed review and repair rounds so the whole solution is readable, robust, stable, performant where practical, consistently documented in Chinese, and ready for release.
+
+**Architecture:** Treat each module group as an independently reviewable unit. Every round produces a concrete review record, uses test-first repair for behavior or API changes, verifies the full solution, commits once, and receives an independent Git-range review before the next round starts.
+
+**Tech Stack:** C# / .NET 8, SDK 9.0 with `latestMinor` roll-forward, NUnit 3, MSBuild, Git, PowerShell.
+
+## Global Constraints
+
+- Work only on `codex/full-codebase-review`.
+- Preserve the solution's project boundaries and lightweight architecture; do not perform a wholesale rewrite.
+- Public APIs may change because the library has no external users, but every change must improve correctness or usability.
+- Maintain accurate Chinese XML documentation for every public type and member touched.
+- Use modern C# syntax whenever it makes the `net8.0` code shorter and clearer; reject syntax that makes intent harder to understand.
+- Treat readability, usability, robustness, stability, and practical performance as release requirements.
+- For Net, review correctness, lifecycle, concurrency, allocation, computation, and lock behavior; network security is out of scope.
+- Do not add unrelated runtime dependencies.
+- Behavior fixes, refactors, and API changes require a failing regression test before production code.
+- Equivalent syntax-only and documentation-only edits require compiler, source-quality, and existing test protection.
+- A round is complete only after its relevant tests, full Debug tests, Release build, Git checks, and independent review pass.
+- Fix Critical and Important reviewer findings before entering the next round; accept Minor findings only when they improve clarity or reduce code without obscuring behavior.
+- If an audit discovers a production defect, append a concrete TDD repair subtask to this plan before editing production code. The amendment must name exact files, test method, expected failure, exact implementation contract, verification command, and expected result; this rule prevents speculative fixes and placeholder steps.
+
+## Review Record Format
+
+Each round creates one Markdown file under `docs/superpowers/reviews/`. Its H1 is the exact task title (`Round 1: Core Framework and Project Contracts` through `Round 7: Independent Final Audit and Release Verification`), followed by these exact sections and only concrete content gathered during that round:
+
+```markdown
+## Files Reviewed
+
+## Contracts Checked
+
+## Findings and Decisions
+
+## Changes
+
+## Verification
+
+## Independent Review
+```
+
+Record every inspected production file, every discovered issue with severity, the repair or reason for retaining current behavior, fresh command results, the reviewed Git range, and disposition of reviewer feedback. Do not use empty placeholders; write `No production change required` when an exhaustive check finds no actionable issue.
+
+---
+
+### Task 1: Core Framework and Project Contracts
+
+**Files:**
+- Review: `Directory.Build.props`, `global.json`, `SimpleFramework.csproj`
+- Review: `Framework.cs`, `FrameworkExtension.cs`, `AbstractCommand.cs`, `AbstractQuery.cs`, `AbstractModel.cs`, `AbstractSystem.cs`, `AbstractDomain.cs`, `BindableProperty.cs`
+- Review: `FrameworkImpl/Container.cs`, `FrameworkImpl/Event.cs`, `FrameworkImpl/FrameworkDefine.cs`, `FrameworkImpl/Traits.cs`
+- Review tests: `Test/Framework/UnitTestFrame.cs`, `Test/Extensions/UnitTestExtension.cs`, `Test/Documentation/UnitTestSourceTextQuality.cs`
+- Create: `docs/superpowers/reviews/2026-07-10-round-1-core.md`
+
+**Interfaces:**
+- Consumes: lifecycle and lookup contracts in `AGENTS.md`, `docs/domain-lifecycle.md`, and the approved design spec.
+- Produces: verified Domain/component/event/command/query/bindable contracts, a round record, and one reviewable commit.
+
+- [ ] **Step 1: Read every listed file and map public contracts**
+
+Check initialization and release ordering, ownership versus lookup inheritance, component registration aliases, replacement lifecycle, local versus global events, command/query dispatch, nullable returns, comparer scope, exception behavior, and XML documentation accuracy. Record concrete observations directly in the round record.
+
+- [ ] **Step 2: Run the focused baseline**
+
+Run:
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Framework|FullyQualifiedName~SimpleFramework.Test.Extensions|FullyQualifiedName~SimpleFramework.Test.Documentation"
+```
+
+Expected: all selected tests pass with zero failures before repairs.
+
+- [ ] **Step 3: Audit every contract against tests and implementation**
+
+Trace at least one normal, duplicate, replacement, missing-value, parent lookup, and release path for each applicable abstraction. Search for null suppression, unchecked casts, duplicate lifecycle calls, mutable global state, stale registrations, public members without Chinese XML docs, and old syntax that can be simplified without changing behavior.
+
+- [ ] **Step 4: Repair each concrete finding through a plan amendment and TDD**
+
+For every behavior or API issue, first append its exact repair subtask beneath this task, then follow RED → GREEN → REFACTOR. Documentation or equivalent syntax findings may be edited directly after the audit record states why the change is behavior-neutral.
+
+- [ ] **Step 5: Verify the complete round**
+
+Run:
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+git diff --check
+```
+
+Expected: 627 baseline tests plus new tests pass, Release build has zero warnings/errors, and Git reports no whitespace errors.
+
+- [ ] **Step 6: Commit round 1**
+
+```powershell
+git add -- Directory.Build.props global.json SimpleFramework.csproj *.cs FrameworkImpl Test/Framework Test/Extensions Test/Documentation docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-1-core.md
+git commit -m "review: harden core framework contracts"
+```
+
+- [ ] **Step 7: Request independent review**
+
+Use `superpowers:requesting-code-review` with the pre-round and post-round SHAs. Resolve all Critical and Important findings, rerun Step 5, commit any review corrections as `review: address core review feedback`, and record the disposition in the round record.
+
+### Task 2: Collections, Utility, Toolkit, and Maths
+
+**Files:**
+- Review: `Collections/Counter.cs`, `Collections/DefaultDict.cs`
+- Review: `Utility/Disposable.cs`, `Utility/FileUtil.cs`, `Utility/Logging.cs`, `Utility/MiscUtil.cs`, `Utility/SerializeUtil.cs`, `Utility/TaskUtil.cs`, `Utility/TimeUtil.cs`
+- Review: `Utility/Extensions/EnumeratorExtension.cs`, `Utility/Extensions/ListExtension.cs`, `Utility/Extensions/RandomExtension.cs`, `Utility/Extensions/StringExtension.cs`
+- Review: `Toolkit/ConfigTool.cs`, `Toolkit/ToolkitDefine.cs`
+- Review: `Maths/Common.cs`, `Maths/Matrix.cs`, `Maths/HexagonGrid.cs`
+- Review tests: `Test/Collections`, `Test/Utility`, `Test/Toolkit`, `Test/Maths`
+- Create: `docs/superpowers/reviews/2026-07-10-round-2-foundations.md`
+
+**Interfaces:**
+- Consumes: project-wide public API, documentation, TDD, and style constraints.
+- Produces: verified collection, utility, configuration, and math contracts plus one reviewable commit.
+
+- [ ] **Step 1: Run the focused baseline**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Collections|FullyQualifiedName~SimpleFramework.Test.Utility|FullyQualifiedName~SimpleFramework.Test.Toolkit|FullyQualifiedName~SimpleFramework.Test.Maths"
+```
+
+Expected: all selected tests pass before repairs.
+
+- [ ] **Step 2: Review all listed source and test files**
+
+Check empty collections, missing keys, comparer preservation, enumeration invalidation, disposal idempotence, file-not-found and malformed data behavior, serializer options, cancellation, time boundaries, INI round trips, matrix dimensions, coordinate conversion, invalid hex ranges, allocation in repeated operations, public naming, XML docs, and opportunities for clearer collection expressions, pattern matching, ranges, target-typed construction, and expression bodies.
+
+- [ ] **Step 3: Repair concrete findings with appended TDD subtasks**
+
+Append exact subtasks before behavior changes. Prefer direct APIs and deterministic tests; do not add abstraction layers solely to facilitate testing.
+
+- [ ] **Step 4: Create the round record and verify**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+git diff --check
+```
+
+Expected: all tests pass, Release has zero warnings/errors, and no whitespace errors exist.
+
+- [ ] **Step 5: Commit and independently review round 2**
+
+```powershell
+git add -- Collections Utility Toolkit Maths Test/Collections Test/Utility Test/Toolkit Test/Maths docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-2-foundations.md
+git commit -m "review: harden foundation modules"
+```
+
+Request review for the exact Git range, resolve Critical and Important feedback, rerun Step 4, and record the disposition.
+
+### Task 3: Patterns
+
+**Files:**
+- Review: `Patterns/Singleton.cs`, `Patterns/ServiceLocator.cs`, `Patterns/ObjectPool.cs`, `Patterns/MessageChannel.cs`, `Patterns/BlackBoard.cs`, `Patterns/StateMachine.cs`, `Patterns/PatternDefine.cs`
+- Review tests: `Test/Patterns`
+- Create: `docs/superpowers/reviews/2026-07-10-round-3-patterns.md`
+
+**Interfaces:**
+- Consumes: Collections and Utility behavior plus hierarchy/lifecycle conventions.
+- Produces: verified pattern implementations, deterministic state transitions, and one reviewable commit.
+
+- [ ] **Step 1: Run the Patterns baseline**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Patterns"
+```
+
+Expected: all Patterns tests pass before repairs.
+
+- [ ] **Step 2: Review implementation and tests exhaustively**
+
+Trace singleton construction, service replacement and removal, pool duplicate returns and reset behavior, message subscription mutation during dispatch, Blackboard parent lookup and lock usage, state entry/exit ordering, hierarchical transitions, reentrancy, invalid transitions, exception paths, hot-loop allocations, XML docs, and modern syntax opportunities.
+
+- [ ] **Step 3: Repair findings using appended TDD subtasks**
+
+Use deterministic tests for reentrancy and concurrency; never use timing sleeps as proof of ordering. Keep lock scope and transition order explicit in both code and Chinese documentation.
+
+- [ ] **Step 4: Record, verify, commit, and review round 3**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+git diff --check
+git add -- Patterns Test/Patterns docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-3-patterns.md
+git commit -m "review: harden reusable patterns"
+```
+
+Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
+
+### Task 4: ECS
+
+**Files:**
+- Review: `ECS/Archetype.cs`, `ECS/CommandBuffer.cs`, `ECS/Component.cs`, `ECS/ComponentColumn.cs`, `ECS/ECSExtension.cs`, `ECS/Entity.cs`, `ECS/EntityPrefab.cs`, `ECS/Query.cs`, `ECS/System.cs`, `ECS/SystemDependencyAttributes.cs`, `ECS/SystemGroup.cs`, `ECS/TypeSignature.cs`, `ECS/World.cs`
+- Review tests: `Test/ECS`
+- Review docs: `ECS/README.md`, `ECS/USAGE.md`
+- Create: `docs/superpowers/reviews/2026-07-10-round-4-ecs.md`
+
+**Interfaces:**
+- Consumes: static monotonically increasing entity IDs, archetype/query update contracts, and Utility/Collections behavior.
+- Produces: verified structural changes, query membership, command replay, prefab application, system scheduling, and one reviewable commit.
+
+- [ ] **Step 1: Run the ECS baseline**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.ECS"
+```
+
+Expected: all ECS tests pass before repairs.
+
+- [ ] **Step 2: Review every ECS source, test, and user-facing example**
+
+Trace create/destroy, add/set/remove component, archetype migration, component-column swaps, stale Entity values, world ownership, query creation/update/disposal, command-buffer ordering and invalid targets, prefab inheritance/application, TypeSignature equality, dependency cycles, deterministic system ordering, disabled systems, mutation during update, hot-path allocations, public API usability, Chinese XML docs, and example accuracy.
+
+- [ ] **Step 3: Repair findings using appended TDD subtasks**
+
+Every structural bug test must assert world, archetype, query, and entity observations after the operation. Scheduling tests must assert deterministic order and failure details. Avoid optimization that reduces ECS readability unless measurement or obvious repeated allocation justifies it.
+
+- [ ] **Step 4: Record, verify, commit, and review round 4**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+git diff --check
+git add -- ECS Test/ECS docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-4-ecs.md
+git commit -m "review: harden ecs lifecycle and scheduling"
+```
+
+Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
+
+### Task 5: Net
+
+**Files:**
+- Review: every tracked `.cs` and `.csproj` file under `Net/`
+- Review tests: every tracked `.cs` file under `Test/Net/`
+- Review docs: `Net/README.md`
+- Create: `docs/superpowers/reviews/2026-07-10-round-5-net.md`
+
+**Interfaces:**
+- Consumes: transport, codec, registry, messaging, session, discovery, flow, stats, dispatcher, and `GameNet` public contracts.
+- Produces: verified asynchronous lifecycle, concurrency, packet/state behavior, practical hot-path performance, and one reviewable commit; network security remains out of scope.
+
+- [ ] **Step 1: Enumerate the exact Net review set and run its baseline**
+
+```powershell
+rg --files Net Test/Net -g '*.cs' -g '*.csproj' | Sort-Object
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Net"
+```
+
+Expected: the command lists every Net source/test file and all selected tests pass before repairs.
+
+- [ ] **Step 2: Review by data flow from transport to GameNet**
+
+Trace start/stop/dispose idempotence, cancellation ownership, connect/disconnect races, partial TCP reads/writes, transport callback ordering, packet validation, codec/registry mismatch, request correlation, duplicate/late responses, session handshake and reconnect, discovery expiry, flow limits, statistics snapshots, dispatcher exceptions, background task observation, thread-safe collections, lock ordering, buffer allocation/copying, repeated serialization, polling, public API usability, and Chinese XML docs. Exclude authentication, encryption, hostile-peer defense, and denial-of-service design.
+
+- [ ] **Step 3: Repair findings using appended TDD subtasks**
+
+Use `Test/Net/TestDoubles/ManualTimeProvider.cs`, in-memory transports, explicit task gates, and cancellation tokens for deterministic tests. Any performance edit must identify the repeated allocation, copy, computation, or lock it removes and retain behavior tests; add a focused measurement only when code inspection is insufficient to establish the improvement.
+
+- [ ] **Step 4: Record, verify, commit, and review round 5**
+
+```powershell
+dotnet test .\Test\Test.csproj --no-restore
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+git diff --check
+git add -- Net Test/Net docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-5-net.md
+git commit -m "review: harden net lifecycle and performance"
+```
+
+Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
+
+### Task 6: Cross-Module API, Documentation, Syntax, and Test Simplification
+
+**Files:**
+- Review: all tracked production `.cs` files outside `Test/`, `bin/`, and `obj/`
+- Review: all tracked `.csproj`, `README.md`, `docs/domain-lifecycle.md`, and module README/USAGE files
+- Review tests: all tracked files under `Test/`
+- Create: `docs/superpowers/reviews/2026-07-10-round-6-cross-cutting.md`
+
+**Interfaces:**
+- Consumes: all repaired module APIs and round records.
+- Produces: coherent naming and documentation, concise modern syntax, a smaller high-value test suite where safely possible, and one reviewable commit.
+
+- [ ] **Step 1: Enumerate public declarations and documentation risks**
+
+```powershell
+rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj/**'
+rg -n "!;|!\)|!\]|default!|#pragma warning disable|TODO|FIXME|NotImplementedException" -g '*.cs' -g '!**/bin/**' -g '!**/obj/**'
+```
+
+Expected: concrete inventories for manual comparison; every match receives a decision in the round record.
+
+- [ ] **Step 2: Review cross-module consistency**
+
+Check public naming, Try/Get/Require semantics, nullable annotations, exception consistency, cancellation parameter placement, disposal shape, event subscription shape, collection exposure, Chinese XML summaries/parameters/returns/exceptions, README examples, and use of collection expressions, primary constructors only where clear, pattern matching, switch expressions, property patterns, target-typed construction, ranges, expression bodies, and `using` declarations.
+
+- [ ] **Step 3: Simplify tests only with preserved contract coverage**
+
+Identify duplicate tests by matching setup, operation, and asserted external behavior. Delete a test only when another named test covers the same contract and boundary; record both test names and the retained protection. Consolidate repeated setup into an existing fixture helper only when the helper makes intent clearer. Do not delete regression, error-path, ordering, concurrency, or boundary tests merely to reduce count.
+
+- [ ] **Step 4: Repair findings using appended TDD subtasks where behavior changes**
+
+API changes and refactors follow RED → GREEN → REFACTOR. Documentation, syntax-equivalent rewrites, and proven duplicate-test deletions use the existing suite plus source-quality checks.
+
+- [ ] **Step 5: Record, verify, commit, and review round 6**
+
+```powershell
+dotnet test .\SimpleFramework.sln --no-restore --configuration Debug
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSourceTextQuality"
+git diff --check
+git add -- '*.cs' '*.csproj' '*.md'
+git commit -m "review: align public apis and simplify code"
+```
+
+Expected: the complete suite and source-quality test pass, Release has zero warnings/errors, and no whitespace errors exist. Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
+
+### Task 7: Independent Final Audit and Release Verification
+
+**Files:**
+- Review: Git diff from `61a02f5` to branch HEAD, every round record, approved design, and this plan
+- Create: `docs/superpowers/reviews/2026-07-10-round-7-release.md`
+
+**Interfaces:**
+- Consumes: all six module/cross-cutting rounds and independent reviewer dispositions.
+- Produces: requirement-by-requirement release evidence and the final review commit.
+
+- [ ] **Step 1: Request a full-range independent review**
+
+Use `superpowers:requesting-code-review` with base `61a02f5`, current HEAD, the approved design, AGENTS.md constraints, and explicit instructions to inspect the entire repository rather than only changed files. Require file:line evidence for every issue and a merge-readiness verdict.
+
+- [ ] **Step 2: Reconcile every requirement and finding**
+
+Read all round records and reviewer output. Confirm every design requirement has direct evidence, every Critical/Important item is repaired, every accepted Minor item improves clarity or size, every rejected item has technical reasoning, and all public API changes have Chinese XML docs and tests.
+
+- [ ] **Step 3: Inspect final performance and scope boundaries**
+
+Confirm major hot paths were inspected for avoidable allocation, copying, computation, and lock contention; confirm any small justified fixes are present; confirm no network-security expansion, architecture rewrite, unrelated dependency, or unnecessary file move entered the branch.
+
+- [ ] **Step 4: Run fresh release gates**
+
+```powershell
+dotnet restore .\SimpleFramework.sln
+dotnet test .\SimpleFramework.sln --no-restore --configuration Debug
+dotnet build .\SimpleFramework.sln --no-restore --configuration Release
+dotnet test .\Test\Test.csproj --no-build --configuration Debug --filter "FullyQualifiedName~TestSourceTextQuality"
+git diff --check 61a02f5..HEAD
+git status --short
+```
+
+Expected: restore succeeds; all tests pass with zero failures; Release builds with zero warnings/errors; source-quality passes; Git reports no whitespace errors; only the final release record is uncommitted before Step 5.
+
+- [ ] **Step 5: Commit the final audit record**
+
+```powershell
+git add -- docs/superpowers/reviews/2026-07-10-round-7-release.md docs/superpowers/plans/2026-07-10-full-codebase-review.md
+git commit -m "review: complete release readiness audit"
+git status --short
+```
+
+Expected: commit succeeds and the working tree is clean.
+
+- [ ] **Step 6: Run the completion audit after the final commit**
+
+Repeat the full commands from Step 4 against the committed tree, inspect `git log --oneline 61a02f5..HEAD`, and mark the goal complete only when every approved design condition has authoritative evidence and no required work remains.
