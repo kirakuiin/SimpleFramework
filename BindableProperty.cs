@@ -41,6 +41,9 @@ public interface IReadonlyBindableProperty<out T> : IEvent
 /// <typeparam name="T"></typeparam>
 public interface IBindableProperty<T> : IReadonlyBindableProperty<T>
 {
+    /// <summary>
+    /// 获取或设置存储的值；值发生变化时通知监听器。
+    /// </summary>
     new T Value { get; set; }
     
     /// <summary>
@@ -62,29 +65,47 @@ public class BindableProperty<T> : IBindableProperty<T>
 
     private Action<T, T>? OnValueChanged { get; set; } = (_, _) => {};
 
+    /// <summary>
+    /// 使用指定初始值创建可绑定属性。
+    /// </summary>
+    /// <param name="initialValue">初始值。</param>
     public BindableProperty(T initialValue = default!) => _value = initialValue;
 
-    public BindableProperty<T> WithComparer(Func<T, T, bool> comparer)
+    /// <summary>
+    /// 设置当前实例用于判断值是否相等的比较器。
+    /// </summary>
+    /// <param name="comparer">相等比较器；为 <see langword="null"/> 时恢复默认比较器。</param>
+    /// <returns>当前可绑定属性。</returns>
+    public BindableProperty<T> WithComparer(Func<T, T, bool>? comparer)
     {
         _comparer = comparer ?? EqualityComparer<T>.Default.Equals;
         return this;
     }
 
+    /// <inheritdoc />
     public T Value
     {
         get => GetValue();
         set
         {
-            if (_comparer(GetValue(), value)) return;
-
             var prev = GetValue();
+            if (_comparer(prev, value)) return;
+
             SetValue(value);
             OnValueChanged?.Invoke(prev, Value);
         }
     }
     
+    /// <summary>
+    /// 写入底层值。
+    /// </summary>
+    /// <param name="value">新值。</param>
     protected virtual void SetValue(T value) => _value = value;
 
+    /// <summary>
+    /// 读取底层值。
+    /// </summary>
+    /// <returns>当前值。</returns>
     protected virtual T GetValue() => _value;
     
     IUnRegister IEvent.Register(Action onEvent)
@@ -93,8 +114,10 @@ public class BindableProperty<T> : IBindableProperty<T>
         void Replace(T prev, T curr) => onEvent();
     }
 
+    /// <inheritdoc />
     public void SetValueWithoutNotify(T value) => SetValue(value);
 
+    /// <inheritdoc />
     public IUnRegister RegisterWithNotify(Action<T, T> onValueChanged)
     {
         var val = Value;
@@ -102,17 +125,23 @@ public class BindableProperty<T> : IBindableProperty<T>
         return Register(onValueChanged);
     }
 
+    /// <inheritdoc />
     public IUnRegister Register(Action<T, T> onValueChanged)
     {
         OnValueChanged += onValueChanged;
         return new BindablePropertyUnRegister<T>(this, onValueChanged);
     }
 
+    /// <inheritdoc />
     public void UnRegister(Action<T, T> onValueChanged)
     {
         OnValueChanged -= onValueChanged;
     }
 
+    /// <summary>
+    /// 返回当前值的字符串表示；值为 <see langword="null"/> 时返回空字符串。
+    /// </summary>
+    /// <returns>当前值的字符串表示。</returns>
     public override string ToString() => Value?.ToString() ?? string.Empty;
 }
 

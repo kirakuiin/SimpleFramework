@@ -104,6 +104,62 @@ git commit -m "review: harden core framework contracts"
 
 Use `superpowers:requesting-code-review` with the pre-round and post-round SHAs. Resolve all Critical and Important findings, rerun Step 5, commit any review corrections as `review: address core review feedback`, and record the disposition in the round record.
 
+#### Task 1 Repair A: Use an intentional missing-component exception
+
+**Files:** `AbstractDomain.cs`, `Framework.cs`, `FrameworkExtension.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Change `TestTryGetAndRequireModel`, `TestTryGetAndRequireUtility`, and `TestTryGetAndRequireSystem` to expect `InvalidOperationException` while retaining the missing type and domain assertions. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestTryGetAndRequire"`; expect all three tests to fail because the implementation still throws `NullReferenceException`.
+- [ ] Make `RequireModel`, `RequireUtility`, and `RequireSystem` throw `InvalidOperationException` with the same diagnostic type/domain details, and update every touched Chinese XML `<exception>` contract. Rerun the same command; expect all three tests to pass.
+
+#### Task 1 Repair B: Reject null container registrations immediately
+
+**Files:** `FrameworkImpl/Container.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestContainerRegisterRejectsNull`, calling `Container.Register<IUtility>(null!)` and expecting `ArgumentNullException` naming `instance`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestContainerRegisterRejectsNull"`; expect failure because the Release-safe null guard is absent.
+- [ ] Add `ArgumentNullException.ThrowIfNull(instance)` before changing container state and document the exception in Chinese XML. Rerun the focused command; expect the test to pass.
+
+#### Task 1 Repair C: Express missing events without null suppression
+
+**Files:** `FrameworkImpl/Event.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestEventContainerMissingEventReturnsNull`, asserting a new `EventContainer` returns null for `GetEvent<Event<EventA>>()`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestEventContainerMissingEventReturnsNull"`; expect the runtime assertion to pass, demonstrating the public non-null signature disagrees with behavior.
+- [ ] Change `GetEvent<T>` to return `T?`, remove the unchecked cast/null suppression through type-pattern matching, and update the Chinese XML return contract. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestEventContainerMissingEventReturnsNull|FullyQualifiedName~Test.Framework.TestFramework.TestEventBus"`; expect all selected tests to pass with nullable analysis clean.
+
+#### Task 1 Repair D: Prevent reentrant domain release from duplicating lifecycle calls
+
+**Files:** `AbstractDomain.cs`, `Framework.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestReentrantUninitializeReleasesComponentOnce` plus a guarded `ReentrantUninitializeModel` whose first `OnUninitialize` calls `Domain.UnInitialize()` and whose counter exposes duplicate release. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestReentrantUninitializeReleasesComponentOnce"`; expect failure with an uninitialize count of 2 instead of 1.
+- [ ] Treat a reentrant `UnInitialize` call as an idempotent no-op while the outer release owns cleanup, and document that contract on `IDomain.UnInitialize` and `AbstractDomain<T>.UnInitialize`. Rerun the focused command; expect one release and a passing test.
+
+#### Task 1 Repair E: Read a bindable property's old value only once
+
+**Files:** `BindableProperty.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestBindableSetterReadsOldValueOnce` plus a `CountingBindableProperty` subclass that counts `GetValue` calls; assert one old-value read and one post-write read when notifying. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestBindableSetterReadsOldValueOnce"`; expect failure because the setter reads the virtual getter three times.
+- [ ] Capture the old value once before comparison, retain the post-write read used for the delivered current value, and add accurate Chinese XML documentation to the touched public/protected members. Rerun the focused command; expect two reads and a passing test.
+
+#### Task 1 Repair F: Keep lifecycle replacement state atomic when cleanup fails
+
+**Files:** `AbstractDomain.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration` plus a controllable lifecycle model whose `OnUninitialize` throws. Assert the cleanup exception remains directly diagnosable, the previous model remains registered, and the replacement is not initialized. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration"`; expect failure because the container currently publishes the replacement before releasing the previous model.
+- [ ] Release a previous last lifecycle reference before replacing its container entry; determine last-reference status while excluding the key being replaced, preserve alias lifecycle behavior, and publish/initialize the replacement only after successful cleanup. Document the direct cleanup-exception contract. Rerun the focused command plus all `TestRegisterModel`, `TestRegisterSystem`, `TestDualRole`, and `TestUtility` lifecycle tests; expect all selected tests to pass.
+
+#### Task 1 Repair G: Remove components whose initialization fails
+
+**Files:** `AbstractDomain.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestRegisterModelInitializationFailureDoesNotPublishComponent` plus a model that throws from `OnInitialize`; assert the original exception is propagated and the failed component is absent from lookup. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterModelInitializationFailureDoesNotPublishComponent"`; expect failure because registration currently publishes the model before initialization succeeds.
+- [ ] Roll back the new container/lifecycle-key entry when initialization fails, restoring a prior still-valid non-released entry when applicable, and document the direct initialization-exception contract. Rerun the focused command and all core lifecycle tests; expect the failed component to remain absent and all selected tests to pass.
+
+#### Task 1 Repair H: Reject nested registration during replacement cleanup
+
+**Files:** `AbstractDomain.cs`, `Test/Framework/UnitTestFrame.cs`
+
+- [ ] Add `TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent` plus a model whose replacement cleanup attempts one nested registration. Assert `InvalidOperationException`, the old registration remains visible, and neither requested replacement initializes. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent"`; expect failure because nested registration currently publishes and initializes a component during outer cleanup.
+- [ ] Guard last-reference replacement cleanup with a dedicated lifecycle-cleanup state and reject component registration while it is active, resetting the guard in `finally`; retain the outer old registration when the callback propagates the guard exception. Rerun the focused command and all core lifecycle tests; expect the nested and outer replacements to remain uninitialized and all tests to pass.
+
 ### Task 2: Collections, Utility, Toolkit, and Maths
 
 **Files:**

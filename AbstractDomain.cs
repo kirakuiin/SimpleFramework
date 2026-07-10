@@ -20,6 +20,8 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     private readonly HashSet<Type> _constructableKeys = new();
 
     private bool _isUninitializing;
+
+    private bool _isReleasingComponent;
     
     /// <summary>
     /// 获取单例域实例；不存在时会创建并初始化。
@@ -42,10 +44,19 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         return domain;
     }
 
+    /// <summary>
+    /// 初始化新创建的域。
+    /// </summary>
     protected abstract void Init();
 
+    /// <inheritdoc />
     public void UnInitialize()
     {
+        if (_isUninitializing || _isReleasingComponent)
+        {
+            return;
+        }
+
         var exceptions = new List<Exception>();
 
         _isUninitializing = true;
@@ -106,10 +117,15 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         }
     }
     
+    /// <summary>
+    /// 在子域、生命周期组件和本地事件清理完成后释放域自身资源。
+    /// </summary>
     protected virtual void UnInit() {}
 
+    /// <inheritdoc />
     public IDomain? Parent => _parent?.TryGetTarget(out var parent) == true ? parent : null;
 
+    /// <inheritdoc />
     public void SetParent(IDomain? parent)
     {
         if (ReferenceEquals(Parent, parent))
@@ -157,6 +173,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         return false;
     }
 
+    /// <inheritdoc />
     public void AddChild(IDomain child)
     {
         child.SetParent(this);
@@ -170,6 +187,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         _children.Add(child);
     }
 
+    /// <inheritdoc />
     public void RemoveChild(IDomain child)
     {
         if (child == null) return;
@@ -190,95 +208,133 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         }
     }
 
+    /// <inheritdoc />
     public void RegisterSystem<TSystem>(TSystem system) where TSystem : ISystem
         => RegisterSystemAs(system);
 
+    /// <inheritdoc />
     public void RegisterSystemAs<TSystem>(TSystem system) where TSystem : ISystem
-    {
-        EnsureNotUninitializing();
+        => RegisterConstructable(system);
 
-        var hasSystem = IsConstructableRegistered(system);
-        var wasLifecycleManagedKey = _constructableKeys.Contains(typeof(TSystem));
-        var oldSystem = _container.Register(system);
-        _constructableKeys.Add(typeof(TSystem));
-        if (ReferenceEquals(oldSystem, system))
-        {
-            if (!hasSystem)
-            {
-                system.SetDomain(this);
-                system.Initialize();
-            }
-
-            return;
-        }
-
-        if (wasLifecycleManagedKey && oldSystem != null && !IsConstructableRegistered(oldSystem))
-        {
-            oldSystem.UnInitialize();
-        }
-
-        if (!hasSystem)
-        {
-            system.SetDomain(this);
-            system.Initialize();
-        }
-    }
-
+    /// <inheritdoc />
     public void RegisterModel<TModel>(TModel model) where TModel : IModel
         => RegisterModelAs(model);
 
+    /// <inheritdoc />
     public void RegisterModelAs<TModel>(TModel model) where TModel : IModel
+        => RegisterConstructable(model);
+
+    private void RegisterConstructable<TComponent>(TComponent component)
+        where TComponent : IDomainConfigurable, IConstructable
     {
         EnsureNotUninitializing();
 
-        var hasModel = IsConstructableRegistered(model);
-        var wasLifecycleManagedKey = _constructableKeys.Contains(typeof(TModel));
-        var oldModel = _container.Register(model);
-        _constructableKeys.Add(typeof(TModel));
-        if (ReferenceEquals(oldModel, model))
+        ArgumentNullException.ThrowIfNull(component);
+
+        var key = typeof(TComponent);
+        var isAlreadyManaged = IsConstructableRegistered(component);
+        var wasLifecycleManagedKey = _constructableKeys.Contains(key);
+        var previous = _container.Get(key) is TComponent registered ? registered : default;
+        if (ReferenceEquals(previous, component))
         {
-            if (!hasModel)
+            _constructableKeys.Add(key);
+            if (!isAlreadyManaged)
             {
-                model.SetDomain(this);
-                model.Initialize();
+                InitializeAndRollbackOnFailure(component, previous, wasLifecycleManagedKey, false);
             }
 
             return;
         }
 
-        if (wasLifecycleManagedKey && oldModel != null && !IsConstructableRegistered(oldModel))
+        var releasedPrevious = wasLifecycleManagedKey && previous is not null &&
+                               !IsConstructableRegistered(previous, key);
+        if (releasedPrevious)
         {
-            oldModel.UnInitialize();
+            ReleaseComponent(previous!);
         }
 
-        if (!hasModel)
+        _container.Register(component);
+        _constructableKeys.Add(key);
+        if (!isAlreadyManaged)
         {
-            model.SetDomain(this);
-            model.Initialize();
+            InitializeAndRollbackOnFailure(component, previous, wasLifecycleManagedKey, releasedPrevious);
         }
     }
 
+    private void InitializeAndRollbackOnFailure<TComponent>(
+        TComponent component,
+        TComponent? previous,
+        bool wasLifecycleManagedKey,
+        bool releasedPrevious)
+        where TComponent : IDomainConfigurable, IConstructable
+    {
+        try
+        {
+            component.SetDomain(this);
+            component.Initialize();
+        }
+        catch
+        {
+            var key = typeof(TComponent);
+            if (previous is not null && !releasedPrevious)
+            {
+                _container.Register(previous);
+            }
+            else
+            {
+                _container.Remove<TComponent>();
+            }
+
+            if (!wasLifecycleManagedKey || releasedPrevious)
+            {
+                _constructableKeys.Remove(key);
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
     public void RegisterUtility<TUtility>(TUtility utility) where TUtility : IUtility
         => RegisterUtilityAs(utility);
 
+    /// <inheritdoc />
     public void RegisterUtilityAs<TUtility>(TUtility utility) where TUtility : IUtility
     {
         EnsureNotUninitializing();
+        ArgumentNullException.ThrowIfNull(utility);
 
-        var wasLifecycleManagedKey = _constructableKeys.Remove(typeof(TUtility));
-        var oldUtility = _container.Register(utility);
+        var key = typeof(TUtility);
+        var wasLifecycleManagedKey = _constructableKeys.Contains(key);
+        var oldUtility = _container.Get(key);
         if (wasLifecycleManagedKey && oldUtility is IConstructable oldConstructable &&
-            !IsConstructableRegistered(oldConstructable))
+            !IsConstructableRegistered(oldConstructable, key))
         {
-            oldConstructable.UnInitialize();
+            ReleaseComponent(oldConstructable);
         }
+
+        _container.Register(utility);
+        _constructableKeys.Remove(key);
     }
 
     private void EnsureNotUninitializing()
     {
-        if (_isUninitializing)
+        if (_isUninitializing || _isReleasingComponent)
         {
-            throw new InvalidOperationException("Cannot register components while the domain is uninitializing.");
+            throw new InvalidOperationException("Cannot register components during lifecycle cleanup.");
+        }
+    }
+
+    private void ReleaseComponent(IConstructable component)
+    {
+        _isReleasingComponent = true;
+        try
+        {
+            component.UnInitialize();
+        }
+        finally
+        {
+            _isReleasingComponent = false;
         }
     }
 
@@ -307,11 +363,15 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         }
     }
 
-    private bool IsConstructableRegistered(IConstructable constructable)
+    private bool IsConstructableRegistered(IConstructable constructable, Type? excludedKey = null)
     {
-        return GetRegisteredConstructables().Any(component => ReferenceEquals(component, constructable));
+        return _constructableKeys
+            .Where(key => key != excludedKey)
+            .Select(_container.Get)
+            .Any(component => ReferenceEquals(component, constructable));
     }
 
+    /// <inheritdoc />
     public TSystem? GetSystem<TSystem>() where TSystem : class, ISystem
     {
         var result = _container.Get<TSystem>();
@@ -337,14 +397,15 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// </summary>
     /// <typeparam name="TSystem">系统类型。</typeparam>
     /// <returns><see cref="ISystem"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定系统。</exception>
     public TSystem RequireSystem<TSystem>() where TSystem : class, ISystem
     {
         var system = GetSystem<TSystem>();
         if (system != null) return system;
-        throw new NullReferenceException($"System not found: {typeof(TSystem).FullName} in {GetType().FullName}.");
+        throw new InvalidOperationException($"System not found: {typeof(TSystem).FullName} in {GetType().FullName}.");
     }
 
+    /// <inheritdoc />
     public TModel? GetModel<TModel>() where TModel : class, IModel
     {
         var result = _container.Get<TModel>();
@@ -370,14 +431,15 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// </summary>
     /// <typeparam name="TModel">模型类型。</typeparam>
     /// <returns><see cref="IModel"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定模型。</exception>
     public TModel RequireModel<TModel>() where TModel : class, IModel
     {
         var model = GetModel<TModel>();
         if (model != null) return model;
-        throw new NullReferenceException($"Model not found: {typeof(TModel).FullName} in {GetType().FullName}.");
+        throw new InvalidOperationException($"Model not found: {typeof(TModel).FullName} in {GetType().FullName}.");
     }
 
+    /// <inheritdoc />
     public TUtility? GetUtility<TUtility>() where TUtility : class, IUtility
     {
         var result = _container.Get<TUtility>();
@@ -403,46 +465,71 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// </summary>
     /// <typeparam name="TUtility">功能组件类型。</typeparam>
     /// <returns><see cref="IUtility"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定功能组件。</exception>
     public TUtility RequireUtility<TUtility>() where TUtility : class, IUtility
     {
         var utility = GetUtility<TUtility>();
         if (utility != null) return utility;
-        throw new NullReferenceException($"Utility not found: {typeof(TUtility).FullName} in {GetType().FullName}.");
+        throw new InvalidOperationException($"Utility not found: {typeof(TUtility).FullName} in {GetType().FullName}.");
     }
 
+    /// <inheritdoc />
     public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.Register(onEvent);
 
+    /// <inheritdoc />
     public void UnRegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.UnRegister(onEvent);
 
+    /// <inheritdoc />
     public void SendEvent<TEvent>() where TEvent : new() => _eventBus.Send<TEvent>();
 
+    /// <inheritdoc />
     public void SendEvent<TEvent>(TEvent @event) => _eventBus.Send(@event);
 
+    /// <inheritdoc />
     public void SendCommand<TCommand>(TCommand command) where TCommand : ICommand =>
         ExecuteCommand(command);
 
+    /// <summary>
+    /// 注入当前域并执行无返回值命令；派生域可重写调度过程。
+    /// </summary>
+    /// <param name="command">要执行的命令。</param>
+    /// <typeparam name="TCommand">命令类型。</typeparam>
     protected virtual void ExecuteCommand<TCommand>(TCommand command) where TCommand : ICommand
     {
         command.SetDomain(this);
         command.Execute();
     }
 
+    /// <inheritdoc />
     public TResult SendCommand<TResult>(ICommand<TResult> command) => ExecuteCommand(command);
-    
+
+    /// <summary>
+    /// 注入当前域并执行带返回值命令；派生域可重写调度过程。
+    /// </summary>
+    /// <param name="command">要执行的命令。</param>
+    /// <typeparam name="TResult">命令结果类型。</typeparam>
+    /// <returns>命令执行结果。</returns>
     protected virtual TResult ExecuteCommand<TResult>(ICommand<TResult> command)
     {
         command.SetDomain(this);
         return command.Execute();
     }
 
+    /// <inheritdoc />
     public TResult SendQuery<TResult>(IQuery<TResult> query) => ExecuteQuery(query);
-    
+
+    /// <summary>
+    /// 注入当前域并执行查询；派生域可重写调度过程。
+    /// </summary>
+    /// <param name="query">要执行的查询。</param>
+    /// <typeparam name="TResult">查询结果类型。</typeparam>
+    /// <returns>查询结果。</returns>
     protected virtual TResult ExecuteQuery<TResult>(IQuery<TResult> query)
     {
         query.SetDomain(this);
         return query.Execute();
     }
 
+    /// <inheritdoc />
     public override string ToString() => _container.ToString();
 }

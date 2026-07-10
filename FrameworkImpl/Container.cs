@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
@@ -17,10 +16,11 @@ public class Container
     /// <param name="instance">组件实例</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>同一键已注册的旧实例；不存在时返回默认值。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="instance"/> 为 <see langword="null"/>。</exception>
     [return: MaybeNull]
     public T Register<T>(T instance)
     {
-        Debug.Assert(instance != null, nameof(instance) + " != null");
+        ArgumentNullException.ThrowIfNull(instance);
 
         var key = typeof(T);
         var previous = _instances.TryGetValue(key, out var oldInstance) && oldInstance is T result ? result : default;

@@ -19,6 +19,10 @@ public interface IEvent
 /// <typeparam name="T"></typeparam>
 public interface IOnGlobalEvent<in T>
 {
+    /// <summary>
+    /// 处理收到的全局事件。
+    /// </summary>
+    /// <param name="event">事件数据。</param>
     void OnEvent(T @event);
 }
 
@@ -27,17 +31,22 @@ public interface IOnGlobalEvent<in T>
 /// </summary>
 public class CustomUnRegister : IUnRegister
 {
-    private Action _onUnRegister;
+    private Action? _onUnRegister;
 
+    /// <summary>
+    /// 使用指定的取消注册回调创建实例。
+    /// </summary>
+    /// <param name="onUnRegister">首次取消注册时执行的回调。</param>
     public CustomUnRegister(Action onUnRegister)
     {
         _onUnRegister = onUnRegister;
     }
     
+    /// <inheritdoc />
     public void UnRegister()
     {
         _onUnRegister?.Invoke();
-        _onUnRegister = null!;
+        _onUnRegister = null;
     }
 }
 
@@ -48,6 +57,9 @@ public class Event<T> : IEvent
 {
     private readonly List<Action<T>> _listeners = new();
 
+    /// <summary>
+    /// 获取当前是否没有监听器。
+    /// </summary>
     public bool IsEmpty => _listeners.Count == 0;
     
     /// <summary>
@@ -96,17 +108,23 @@ public class EventContainer
     /// <summary>
     /// 添加新的事件。
     /// </summary>
-    /// <typeparam name="T"><see cref="IEvent"/></typeparam>
-    public void AddEvent<T>() where T : IEvent, new() =>
-        _events.Add(typeof(T), new T());
+    /// <typeparam name="T">要创建的事件类型。</typeparam>
+    /// <returns>新建并存储的事件。</returns>
+    public T AddEvent<T>() where T : IEvent, new()
+    {
+        var @event = new T();
+        _events.Add(typeof(T), @event);
+        return @event;
+    }
 
     /// <summary>
     /// 查询事件。
     /// </summary>
     /// <typeparam name="T">事件类型</typeparam>
-    /// <returns><see cref="IEvent"/></returns>
+    /// <returns>已注册的事件；不存在时返回 <see langword="null"/>。</returns>
+    [return: System.Diagnostics.CodeAnalysis.MaybeNull]
     public T GetEvent<T>() where T : IEvent =>
-        (_events.TryGetValue(typeof(T), out var @event) ? (T)@event : default)!;
+        _events.TryGetValue(typeof(T), out var @event) && @event is T result ? result : default;
 
     /// <summary>
     /// 移除事件。
@@ -162,12 +180,7 @@ public class EventBus
     /// <returns></returns>
     public IUnRegister Register<T>(Action<T> onEvent)
     {
-        if (!Contains<T>())
-        {
-            _container.AddEvent<Event<T>>();
-        }
-
-        var @event = _container.GetEvent<Event<T>>();
+        var @event = _container.GetEvent<Event<T>>() ?? _container.AddEvent<Event<T>>();
         @event.Register(onEvent);
         return new CustomUnRegister(() =>
         {

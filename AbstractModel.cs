@@ -6,8 +6,10 @@ namespace SimpleFramework;
 /// </summary>
 public abstract class AbstractModel : IModel
 {
+    /// <inheritdoc />
     public IDomain Domain { get; private set; } = default!;
 
+    /// <inheritdoc />
     public void SetDomain(IDomain domain)
     {
         Domain = domain;
@@ -17,7 +19,13 @@ public abstract class AbstractModel : IModel
     
     void IConstructable.UnInitialize() => OnUninitialize();
 
+    /// <summary>
+    /// 初始化模型。
+    /// </summary>
     protected abstract void OnInitialize();
-    
+
+    /// <summary>
+    /// 释放模型持有的资源。
+    /// </summary>
     protected virtual void OnUninitialize() {}
 }

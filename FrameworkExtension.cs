@@ -2,6 +2,9 @@
 
 namespace SimpleFramework;
 
+/// <summary>
+/// 提供从域中读取模型的扩展方法。
+/// </summary>
 public static class ModelReadableExtensions
 {
     /// <summary>
@@ -19,7 +22,7 @@ public static class ModelReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IModel"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定模型。</exception>
     public static T RequireModel<T>(this IModelAccessible self) where T : class, IModel =>
         self.Domain.RequireModel<T>();
     
@@ -28,13 +31,16 @@ public static class ModelReadableExtensions
     /// </summary>
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定模型。</exception>
     public static void Require<T>(this IModelAccessible self) where T : class, IModel
     {
         self.RequireModel<T>();
     }
 }
 
+/// <summary>
+/// 提供从域中读取系统的扩展方法。
+/// </summary>
 public static class SystemReadableExtensions
 {
     /// <summary>
@@ -52,11 +58,14 @@ public static class SystemReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="ISystem"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定系统。</exception>
     public static T RequireSystem<T>(this ISystemAccessible self) where T : class, ISystem =>
         self.Domain.RequireSystem<T>();
 }
 
+/// <summary>
+/// 提供从域中读取功能组件的扩展方法。
+/// </summary>
 public static class UtilityReadableExtensions
 {
     /// <summary>
@@ -74,7 +83,7 @@ public static class UtilityReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IUtility"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定功能组件。</exception>
     public static T RequireUtility<T>(this IUtilityAccessible self) where T : class, IUtility =>
         self.Domain.RequireUtility<T>();
 
@@ -83,13 +92,16 @@ public static class UtilityReadableExtensions
     /// </summary>
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定功能组件。</exception>
     public static void Require<T>(this IUtilityAccessible self) where T : class, IUtility
     {
         self.RequireUtility<T>();
     }
 }
 
+/// <summary>
+/// 提供域事件订阅的扩展方法。
+/// </summary>
 public static class RegisterAbleExtensions
 {
     /// <summary>
@@ -112,6 +124,9 @@ public static class RegisterAbleExtensions
         self.Domain.UnRegisterEvent(action);
 }
 
+/// <summary>
+/// 提供域事件发送的扩展方法。
+/// </summary>
 public static class SendEventAbleExtensions
 {
     /// <summary>
@@ -132,6 +147,9 @@ public static class SendEventAbleExtensions
         self.Domain.SendEvent(@event);
 }
 
+/// <summary>
+/// 提供全局事件总线订阅的扩展方法。
+/// </summary>
 public static class GlobalEventsExtensions
 {
     /// <summary>
@@ -152,6 +170,9 @@ public static class GlobalEventsExtensions
         where T : struct => EventBus.Global.UnRegister<T>(self.OnEvent);
 }
 
+/// <summary>
+/// 提供命令发送的扩展方法。
+/// </summary>
 public static class CommandExtensions
 {
     /// <summary>
@@ -180,6 +201,9 @@ public static class CommandExtensions
     public static TResult SendCommand<TResult>(this ICommandTransmittable self, ICommand<TResult> command) => self.Domain.SendCommand(command);
 }
 
+/// <summary>
+/// 提供查询发送的扩展方法。
+/// </summary>
 public static class QueryExtensions
 {
     /// <summary>

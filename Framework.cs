@@ -38,6 +38,8 @@ public interface IDomain
     /// </summary>
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="system"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
     void RegisterSystem<T>(T system) where T : ISystem;
 
     /// <summary>
@@ -46,6 +48,8 @@ public interface IDomain
     /// </summary>
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="system"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
     void RegisterSystemAs<T>(T system) where T : ISystem;
     
     /// <summary>
@@ -53,6 +57,8 @@ public interface IDomain
     /// </summary>
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="model"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
     void RegisterModel<T>(T model) where T : IModel;
 
     /// <summary>
@@ -61,6 +67,8 @@ public interface IDomain
     /// </summary>
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="model"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
     void RegisterModelAs<T>(T model) where T : IModel;
     
     /// <summary>
@@ -68,6 +76,8 @@ public interface IDomain
     /// </summary>
     /// <param name="utility"><see cref="IUtility"/></param>
     /// <typeparam name="T"></typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="utility"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="Exception">替换生命周期组件时释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
     void RegisterUtility<T>(T utility) where T : IUtility;
 
     /// <summary>
@@ -76,6 +86,8 @@ public interface IDomain
     /// </summary>
     /// <param name="utility"><see cref="IUtility"/></param>
     /// <typeparam name="T"></typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="utility"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="Exception">替换生命周期组件时释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
     void RegisterUtilityAs<T>(T utility) where T : IUtility;
     
     /// <summary>
@@ -98,7 +110,7 @@ public interface IDomain
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="ISystem"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定系统。</exception>
     T RequireSystem<T>() where T : class, ISystem;
     
     /// <summary>
@@ -121,7 +133,7 @@ public interface IDomain
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IModel"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定模型。</exception>
     T RequireModel<T>() where T : class, IModel;
     
     /// <summary>
@@ -144,7 +156,7 @@ public interface IDomain
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IUtility"/></returns>
-    /// <exception cref="NullReferenceException"></exception>
+    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定功能组件。</exception>
     T RequireUtility<T>() where T : class, IUtility;
     
     /// <summary>
@@ -199,7 +211,7 @@ public interface IDomain
     TResult SendQuery<TResult>(IQuery<TResult> query);
 
     /// <summary>
-    /// 释放域中资源。
+    /// 释放域中资源；释放期间的重入调用不会重复执行生命周期回调。
     /// </summary>
     void UnInitialize();
 }
@@ -248,6 +260,10 @@ public interface ICommand : IDomainConfigurable,
     void Execute();
 }
 
+/// <summary>
+/// 表示一个可能修改状态并返回结果的命令。
+/// </summary>
+/// <typeparam name="TResult">命令结果类型。</typeparam>
 public interface ICommand<out TResult> : IDomainConfigurable,
     ISystemAccessible, IModelAccessible, IUtilityAccessible,
     IEventTransmittable, IQueryTransmittable, ICommandTransmittable

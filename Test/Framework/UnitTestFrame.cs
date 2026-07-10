@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
 using SimpleFramework;
 using SimpleFramework.FrameworkImpl;
@@ -113,6 +114,17 @@ public class TestFramework
     }
 
     [Test]
+    public void TestBindableSetterReadsOldValueOnce()
+    {
+        var property = new CountingBindableProperty(1);
+        property.Register((_, _) => { });
+
+        property.Value = 2;
+
+        Assert.AreEqual(2, property.GetValueCount);
+    }
+
+    [Test]
     public void TestUnRegister()
     {
         _control.UnRegister.UnRegister();
@@ -182,7 +194,7 @@ public class TestFramework
         Assert.IsNull(missing);
 
         Assert.AreSame(model, ADomain.Instance.RequireModel<Model>());
-        var ex = Assert.Throws<NullReferenceException>(() => ADomain.Instance.RequireModel<ModelNull>());
+        var ex = Assert.Throws<InvalidOperationException>(() => ADomain.Instance.RequireModel<ModelNull>());
         Assert.That(ex!.Message, Does.Contain(typeof(ModelNull).FullName));
         Assert.That(ex.Message, Does.Contain(typeof(ADomain).FullName));
     }
@@ -197,7 +209,7 @@ public class TestFramework
         Assert.IsNull(missing);
 
         Assert.AreSame(utility, ADomain.Instance.RequireUtility<Utility>());
-        var ex = Assert.Throws<NullReferenceException>(() => ADomain.Instance.RequireUtility<ITestUtility>());
+        var ex = Assert.Throws<InvalidOperationException>(() => ADomain.Instance.RequireUtility<ITestUtility>());
         Assert.That(ex!.Message, Does.Contain(typeof(ITestUtility).FullName));
         Assert.That(ex.Message, Does.Contain(typeof(ADomain).FullName));
     }
@@ -212,7 +224,7 @@ public class TestFramework
         Assert.IsNull(missing);
 
         Assert.AreSame(system, ADomain.Instance.RequireSystem<System>());
-        var ex = Assert.Throws<NullReferenceException>(() => ADomain.Instance.RequireSystem<LifecycleSystem>());
+        var ex = Assert.Throws<InvalidOperationException>(() => ADomain.Instance.RequireSystem<LifecycleSystem>());
         Assert.That(ex!.Message, Does.Contain(typeof(LifecycleSystem).FullName));
         Assert.That(ex.Message, Does.Contain(typeof(ADomain).FullName));
     }
@@ -287,6 +299,17 @@ public class TestFramework
         Assert.IsNull(empty);
         Assert.AreSame(first, previous);
         Assert.AreSame(second, container.Get<IUtility>());
+    }
+
+    [Test]
+    public void TestContainerRegisterRejectsNull()
+    {
+        var container = new Container();
+
+        var exception = Assert.Throws<ArgumentNullException>(() => container.Register<IUtility>(null!));
+
+        Assert.That(exception!.ParamName, Is.EqualTo("instance"));
+        Assert.IsNull(container.Get<IUtility>());
     }
     
     [Test]
@@ -374,6 +397,17 @@ public class TestFramework
         eventBus.UnRegister<EventA>(OnEvent);
 
         Assert.IsFalse(eventBus.Contains<EventA>());
+    }
+
+    [Test]
+    public void TestEventContainerMissingEventReturnsNull()
+    {
+        var container = new EventContainer();
+        var method = typeof(EventContainer).GetMethod(nameof(EventContainer.GetEvent))!;
+        var nullability = new NullabilityInfoContext().Create(method.ReturnParameter);
+
+        Assert.IsNull(container.GetEvent<Event<EventA>>());
+        Assert.That(nullability.ReadState, Is.EqualTo(NullabilityState.Nullable));
     }
 
     [Test]
@@ -537,6 +571,66 @@ public class TestFramework
     }
 
     [Test]
+    public void TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration()
+    {
+        var domain = ADomain.Create();
+        var first = new ControllableLifecycleModel { ThrowOnUninitialize = true };
+        var replacement = new ControllableLifecycleModel();
+
+        domain.RegisterModel(first);
+
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(replacement));
+
+            Assert.That(exception!.Message, Is.EqualTo("Replacement cleanup failed."));
+            Assert.AreSame(first, domain.GetModel<ControllableLifecycleModel>());
+            Assert.AreEqual(1, first.UninitializeCount);
+            Assert.AreEqual(0, replacement.InitializeCount);
+        }
+        finally
+        {
+            first.ThrowOnUninitialize = false;
+            domain.UnInitialize();
+        }
+    }
+
+    [Test]
+    public void TestRegisterModelInitializationFailureDoesNotPublishComponent()
+    {
+        var domain = ADomain.Create();
+        var model = new FailingInitializeModel();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(model));
+
+        Assert.That(exception!.Message, Is.EqualTo("Initialization failed."));
+        Assert.IsNull(domain.GetModel<FailingInitializeModel>());
+        Assert.DoesNotThrow(domain.UnInitialize);
+    }
+
+    [Test]
+    public void TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent()
+    {
+        var domain = ADomain.Create();
+        var first = new RegisteringDuringReplacementCleanupModel();
+        var replacement = new LifecycleModel();
+
+        domain.RegisterModelAs<IModel>(first);
+
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => domain.RegisterModelAs<IModel>(replacement));
+            Assert.AreSame(first, domain.GetModel<IModel>());
+            Assert.AreEqual(0, first.NestedReplacement.InitializeCount);
+            Assert.AreEqual(0, replacement.InitializeCount);
+        }
+        finally
+        {
+            domain.UnInitialize();
+        }
+    }
+
+    [Test]
     public void TestRegisterSameModelInstanceDoesNotInitializeTwice()
     {
         var domain = ADomain.Create();
@@ -659,6 +753,19 @@ public class TestFramework
         var replacement = new LifecycleModel();
         domain.RegisterModel(replacement);
         Assert.AreEqual(1, replacement.InitializeCount);
+    }
+
+    [Test]
+    public void TestReentrantUninitializeReleasesComponentOnce()
+    {
+        var domain = ADomain.Create();
+        var model = new ReentrantUninitializeModel();
+        domain.RegisterModel(model);
+
+        domain.UnInitialize();
+
+        Assert.AreEqual(1, model.UninitializeCount);
+        Assert.IsNull(domain.GetModel<ReentrantUninitializeModel>());
     }
 
     [Test]
@@ -1098,6 +1205,80 @@ public class LifecycleModel : AbstractModel
     }
 }
 
+public class ControllableLifecycleModel : AbstractModel
+{
+    public bool ThrowOnUninitialize { get; set; }
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
+    protected override void OnInitialize()
+    {
+        InitializeCount++;
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+        if (ThrowOnUninitialize)
+        {
+            throw new InvalidOperationException("Replacement cleanup failed.");
+        }
+    }
+}
+
+public class FailingInitializeModel : AbstractModel
+{
+    protected override void OnInitialize()
+    {
+        throw new InvalidOperationException("Initialization failed.");
+    }
+}
+
+public class ReentrantUninitializeModel : AbstractModel
+{
+    private bool _reentered;
+
+    public int UninitializeCount { get; private set; }
+
+    protected override void OnInitialize()
+    {
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+        if (_reentered)
+        {
+            return;
+        }
+
+        _reentered = true;
+        Domain.UnInitialize();
+    }
+}
+
+public class RegisteringDuringReplacementCleanupModel : AbstractModel
+{
+    private bool _attemptedRegistration;
+
+    public LifecycleModel NestedReplacement { get; } = new();
+
+    protected override void OnInitialize()
+    {
+    }
+
+    protected override void OnUninitialize()
+    {
+        if (_attemptedRegistration)
+        {
+            return;
+        }
+
+        _attemptedRegistration = true;
+        Domain.RegisterModelAs<IModel>(NestedReplacement);
+    }
+}
+
 public class LifecycleSystem : AbstractSystem
 {
     public int InitializeCount { get; private set; }
@@ -1267,6 +1448,21 @@ public class Utility : IUtility
     }
     
     public int Value { get; private set; }
+}
+
+public class CountingBindableProperty : BindableProperty<int>
+{
+    public CountingBindableProperty(int initialValue) : base(initialValue)
+    {
+    }
+
+    public int GetValueCount { get; private set; }
+
+    protected override int GetValue()
+    {
+        GetValueCount++;
+        return base.GetValue();
+    }
 }
 
 public interface ITestUtility : IUtility
