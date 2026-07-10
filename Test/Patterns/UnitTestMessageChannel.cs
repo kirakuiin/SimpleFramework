@@ -8,8 +8,8 @@ namespace Test.Patterns;
 [TestFixture]
 public class TestMessageChannel
 {
-    private MessageChannel<string> _channel;
-    private BufferedMessageChannel<string> _bufferedChannel;
+    private MessageChannel<string> _channel = default!;
+    private BufferedMessageChannel<string> _bufferedChannel = default!;
 
     [SetUp]
     public void Setup()

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+#nullable enable
+
 namespace Test.Net.TestDoubles;
 
 public sealed class ManualTimeProvider : TimeProvider
@@ -52,7 +54,7 @@ public sealed class ManualTimeProvider : TimeProvider
             timer.Fire();
     }
 
-    public override ITimer CreateTimer(TimerCallback callback, object state, TimeSpan dueTime, TimeSpan period)
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ManualTimer(this, callback, state, dueTime, period);
         lock (_gate)
@@ -70,12 +72,12 @@ public sealed class ManualTimeProvider : TimeProvider
     {
         private readonly ManualTimeProvider _owner;
         private readonly TimerCallback _callback;
-        private readonly object _state;
+        private readonly object? _state;
         private TimeSpan _period;
         private DateTimeOffset _dueAt;
         private bool _disposed;
 
-        public ManualTimer(ManualTimeProvider owner, TimerCallback callback, object state, TimeSpan dueTime, TimeSpan period)
+        public ManualTimer(ManualTimeProvider owner, TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             _owner = owner;
             _callback = callback;

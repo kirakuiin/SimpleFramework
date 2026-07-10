@@ -11,6 +11,8 @@ using NUnit.Framework;
 using SimpleFramework.Net;
 using Test.Net.TestDoubles;
 
+#nullable enable
+
 namespace Test.Net;
 
 [DiscoveryMetadata("room.list.v1")]
@@ -180,7 +182,7 @@ public class NetDiscoveryStatsTests
                 GamePort = 7777,
                 MetadataSchemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1")
             },
-            null);
+            null!);
 
         Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
     }
@@ -247,7 +249,7 @@ public class NetDiscoveryStatsTests
             7777,
             DiscoveryMetadataRegistry.GetSchemaId("room.list.v1"),
             0,
-            null));
+            null!));
         await using var discovery = new NetDiscovery(Options(appId), backend);
 
         var rooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMilliseconds(1));
@@ -809,7 +811,7 @@ public class NetDiscoveryStatsTests
     [Test]
     public void DiscoveryConvenienceConstructor_WithNullOptions_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => new NetDiscovery(null));
+        Assert.Throws<ArgumentNullException>(() => new NetDiscovery(null!));
     }
 
     [Test]
@@ -1185,9 +1187,9 @@ public class NetDiscoveryStatsTests
         Guid appId,
         int protocolVersion = 1,
         int maxMetadataPayloadSize = 8 * 1024,
-        TimeProvider timeProvider = null,
+        TimeProvider? timeProvider = null,
         TimeSpan? roomTimeout = null,
-        INetEventDispatcher dispatcher = null,
+        INetEventDispatcher? dispatcher = null,
         int discoveryPort = 3344,
         TimeSpan? advertiseInterval = null) => new()
     {
@@ -1380,10 +1382,10 @@ public class NetDiscoveryStatsTests
 
         public bool BlockSends { get; set; }
         public TaskCompletionSource SendStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) => _inner.StartServerAsync(options, token);
         public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) => _inner.ConnectAsync(options, token);
         public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) => _inner.StopServerAsync(token);

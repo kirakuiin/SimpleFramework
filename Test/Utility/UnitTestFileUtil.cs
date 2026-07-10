@@ -11,8 +11,8 @@ namespace Test.Utility;
 [TestFixture]
 public class TestFileUtil
 {
-    private string _testDirPath;
-    private TestData _testData;
+    private string _testDirPath = default!;
+    private TestData _testData = default!;
 
     [SetUp]
     public void Setup()
@@ -56,7 +56,7 @@ public class TestFileUtil
         // Assert
         Assert.IsTrue(loadResult);
         Assert.IsNotNull(loadedData);
-        Assert.AreEqual(_testData.Id, loadedData.Id);
+        Assert.AreEqual(_testData.Id, loadedData!.Id);
         Assert.AreEqual(_testData.Name, loadedData.Name);
         Assert.AreEqual(_testData.IsActive, loadedData.IsActive);
         Assert.AreEqual(_testData.Score, loadedData.Score);
@@ -76,7 +76,7 @@ public class TestFileUtil
         // Assert
         Assert.IsTrue(loadResult);
         Assert.IsNotNull(loadedData);
-        Assert.AreEqual(_testData.Id, loadedData.Id);
+        Assert.AreEqual(_testData.Id, loadedData!.Id);
         Assert.AreEqual(_testData.Name, loadedData.Name);
         Assert.AreEqual(_testData.IsActive, loadedData.IsActive);
         Assert.AreEqual(_testData.Score, loadedData.Score);
@@ -134,7 +134,7 @@ public class TestFileUtil
         // Assert
         Assert.IsTrue(jsonLoaded);
         Assert.IsNotNull(loadedFromJson);
-        Assert.AreEqual(complexData.Id, loadedFromJson.Id);
+        Assert.AreEqual(complexData.Id, loadedFromJson!.Id);
         Assert.AreEqual(complexData.Settings.Theme, loadedFromJson.Settings.Theme);
         Assert.AreEqual(complexData.Settings.Language, loadedFromJson.Settings.Language);
         Assert.AreEqual(complexData.Settings.MaxConnections, loadedFromJson.Settings.MaxConnections);
@@ -143,7 +143,7 @@ public class TestFileUtil
 
         Assert.IsTrue(binaryLoaded);
         Assert.IsNotNull(loadedFromBinary);
-        Assert.AreEqual(complexData.Id, loadedFromBinary.Id);
+        Assert.AreEqual(complexData.Id, loadedFromBinary!.Id);
         Assert.AreEqual(complexData.Settings.Theme, loadedFromBinary.Settings.Theme);
     }
 

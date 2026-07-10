@@ -8,6 +8,8 @@ using NUnit.Framework;
 using SimpleFramework.Net;
 using Test.Net.TestDoubles;
 
+#nullable enable
+
 namespace Test.Net;
 
 [NetMessage("player.ready")]
@@ -775,7 +777,7 @@ public class NetMessagingTests
     public async Task SendToServer_WhenTransportFails_RecordsStructuredError()
     {
         var diagnostics = new NetDiagnostics();
-        NetError recorded = null;
+        NetError? recorded = null;
         diagnostics.ErrorRecorded += error => recorded = error;
         var messenger = CreateMessenger(
             diagnostics,
@@ -794,7 +796,7 @@ public class NetMessagingTests
     public async Task SendToServer_WhenCodecEncodeFails_ReturnsTransportFailedAndRecordsCodecError()
     {
         var diagnostics = new NetDiagnostics();
-        NetError recorded = null;
+        NetError? recorded = null;
         diagnostics.ErrorRecorded += error => recorded = error;
         var messenger = CreateMessenger(
             diagnostics,
@@ -813,7 +815,7 @@ public class NetMessagingTests
     public async Task TryHandlePacket_WithUnknownMessage_RecordsStructuredError()
     {
         var diagnostics = new NetDiagnostics();
-        NetError recorded = null;
+        NetError? recorded = null;
         diagnostics.ErrorRecorded += error => recorded = error;
         var messenger = CreateMessenger(diagnostics, _ => new ValueTask<NetSendResult>(NetSendResult.Ok()));
         var packet = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
@@ -834,7 +836,7 @@ public class NetMessagingTests
     public async Task TryHandlePacket_WhenCodecDecodeFails_RecordsCodecErrorAndDoesNotInvokeHandler()
     {
         var diagnostics = new NetDiagnostics();
-        NetError recorded = null;
+        NetError? recorded = null;
         var invoked = false;
         diagnostics.ErrorRecorded += error => recorded = error;
         var messenger = CreateMessenger(
@@ -1864,8 +1866,8 @@ public class NetMessagingTests
 
     private static GameNetOptions Options(
         Guid appId,
-        INetEventDispatcher dispatcher = null,
-        TimeProvider timeProvider = null,
+        INetEventDispatcher? dispatcher = null,
+        TimeProvider? timeProvider = null,
         NetFingerprintPolicy fingerprintPolicy = NetFingerprintPolicy.Strict,
         int maxPacketSize = 64 * 1024) => new()
     {
@@ -1894,14 +1896,14 @@ public class NetMessagingTests
     private static NetMessenger CreateMessenger(
         NetDiagnostics diagnostics,
         Func<byte[], ValueTask<NetSendResult>> sendToServer,
-        Func<PeerId, byte[], ValueTask<NetSendResult>> sendToPeer = null,
-        IReadOnlyCollection<PeerId> broadcastTargets = null,
-        TimeProvider timeProvider = null,
+        Func<PeerId, byte[], ValueTask<NetSendResult>>? sendToPeer = null,
+        IReadOnlyCollection<PeerId>? broadcastTargets = null,
+        TimeProvider? timeProvider = null,
         int maxPacketSize = 64 * 1024,
         int maxSendQueueBytesPerPeer = 1024 * 1024,
         int maxSendQueuePacketsPerPeer = 1024,
         int maxSendsPerSecondPerPeer = int.MaxValue,
-        INetCodec codec = null)
+        INetCodec? codec = null)
     {
         return new NetMessenger(
             (data, _) => sendToServer(data),
@@ -1942,7 +1944,7 @@ public class NetMessagingTests
             if (_throwOnDecode)
                 throw new InvalidOperationException("decode failed");
 
-            return new JsonNetCodec().Decode(payload, messageType);
+            return new JsonNetCodec().Decode(payload, messageType)!;
         }
     }
 
@@ -1965,10 +1967,10 @@ public class NetMessagingTests
         public TaskCompletionSource ReleaseSend { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             _inner.StartServerAsync(options, token);

@@ -40,7 +40,7 @@ public class TestOuterClass
 /// </summary>
 public class TestGenericClass<T>
 {
-    public T Data;
+    public T Data = default!;
 }
 
 /// <summary>
@@ -190,7 +190,7 @@ public class TestMiscUtil
         {
             var cacheField = typeof(MiscUtil).GetField("_typeHashCaches",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            var cache = (System.Collections.Concurrent.ConcurrentDictionary<Type, ulong>)cacheField.GetValue(null);
+            var cache = (System.Collections.Concurrent.ConcurrentDictionary<Type, ulong>)cacheField!.GetValue(null)!;
             cache.Clear();
 
             var hash = MiscUtil.TypeHash(typeof(TestTypeForHash1));
@@ -264,7 +264,7 @@ public class TestMiscUtil
                     .First(m => m.Name == "TypeHash" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0);
 
                 var method = genericMethod.MakeGenericMethod(type);
-                var hash = (ulong)method.Invoke(null, null);
+                var hash = (ulong)method.Invoke(null, null)!;
                 hashes.Add(hash);
             }
 

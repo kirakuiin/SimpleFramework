@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,8 +11,8 @@ namespace Test.Framework;
 [TestFixture]
 public class TestFramework
 {
-    private ADomain _aDomain;
-    private Control _control;
+    private ADomain _aDomain = default!;
+    private Control _control = default!;
 
     private const int IntVal = 3;
     private const int AnoVal = 4;
@@ -47,20 +48,20 @@ public class TestFramework
     [Test]
     public void TestCommand()
     {
-        Assert.AreEqual(_aDomain.GetUtility<Utility>().Value, _control.SendCommand());
+        Assert.AreEqual(_aDomain.GetUtility<Utility>()!.Value, _control.SendCommand());
     }
     
     [Test]
     public void TestQuery()
     {
-        Assert.AreEqual(_aDomain.GetModel<Model>().Value.Value, _control.SendQuery());
+        Assert.AreEqual(_aDomain.GetModel<Model>()!.Value.Value, _control.SendQuery());
     }
 
     [Test]
     public void TestBindable()
     {
         const string newWord = "world";
-        _aDomain.GetModel<Model>().Value.Value = newWord;
+        _aDomain.GetModel<Model>()!.Value.Value = newWord;
         Assert.AreEqual(StrVal, _control.Old);
         Assert.AreEqual(newWord, _control.New);
     }
@@ -88,7 +89,7 @@ public class TestFramework
     [Test]
     public void TestBindableComparerHandlesNullValues()
     {
-        var property = new BindableProperty<string>(null);
+        var property = new BindableProperty<string?>(null);
         var changedCount = 0;
 
         property.Register((_, _) => changedCount++);
@@ -106,7 +107,7 @@ public class TestFramework
     [Test]
     public void TestBindableToStringHandlesNullValue()
     {
-        var property = new BindableProperty<string>(null);
+        var property = new BindableProperty<string?>(null);
 
         Assert.AreEqual(string.Empty, property.ToString());
     }
@@ -115,7 +116,7 @@ public class TestFramework
     public void TestUnRegister()
     {
         _control.UnRegister.UnRegister();
-        _aDomain.GetModel<Model>().Value.Value = "find";
+        _aDomain.GetModel<Model>()!.Value.Value = "find";
         
         Assert.IsNull(_control.Old);
         Assert.IsNull(_control.New);
@@ -136,11 +137,11 @@ public class TestFramework
     [Test]
     public void TestRegister()
     {
-        var system = _aDomain.GetSystem<System>();
+        var system = _aDomain.GetSystem<System>()!;
         
         Assert.AreEqual(System.InitVal, system.Value);
 
-        _aDomain.GetModel<Model>().Notify();
+        _aDomain.GetModel<Model>()!.Notify();
         
         Assert.AreNotEqual(System.InitVal, system.Value);
     }
@@ -150,7 +151,7 @@ public class TestFramework
     {
         BDomain.Instance.SetParent(ADomain.Instance);
         
-        Assert.AreEqual(IntVal, BDomain.Instance.GetUtility<Utility>().Value);
+        Assert.AreEqual(IntVal, BDomain.Instance.GetUtility<Utility>()!.Value);
     }
     
     [Test]
@@ -159,7 +160,7 @@ public class TestFramework
         BDomain.Instance.SetParent(ADomain.Instance);
         BDomain.Instance.RegisterUtility(new Utility(AnoVal));
         
-        Assert.AreEqual(AnoVal, BDomain.Instance.GetUtility<Utility>().Value);
+        Assert.AreEqual(AnoVal, BDomain.Instance.GetUtility<Utility>()!.Value);
     }
 
     [Test]
@@ -168,7 +169,7 @@ public class TestFramework
         ADomain.Instance.RegisterUtility<ITestUtility>(new InterfaceUtility(IntVal));
 
         Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
-        Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>().Value);
+        Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>()!.Value);
     }
 
     [Test]
@@ -267,7 +268,7 @@ public class TestFramework
         container.Register<IUtility>(new Utility(IntVal));
 
         Assert.IsTrue(container.TryGet<IUtility>(out var utility));
-        Assert.AreEqual(IntVal, ((Utility)utility).Value);
+        Assert.AreEqual(IntVal, ((Utility)utility!).Value);
 
         Assert.IsTrue(container.Remove<IUtility>());
         Assert.IsFalse(container.TryGet<IUtility>(out _));
@@ -316,9 +317,9 @@ public class TestFramework
         DDomain.Instance.AddChild(D2Domain.Instance);
         DDomain.Instance.RegisterModel(new Model("hello world"));
 
-        Assert.AreEqual(IntVal, DDomain.Instance.GetUtility<Utility>().Value);
-        Assert.AreEqual(IntVal, D1Domain.Instance.GetUtility<Utility>().Value);
-        Assert.AreEqual("hello world", D2Domain.Instance.GetModel<Model>().Value.Value);
+        Assert.AreEqual(IntVal, DDomain.Instance.GetUtility<Utility>()!.Value);
+        Assert.AreEqual(IntVal, D1Domain.Instance.GetUtility<Utility>()!.Value);
+        Assert.AreEqual("hello world", D2Domain.Instance.GetModel<Model>()!.Value.Value);
 
         PDomain.Instance.UnInitialize();
 
@@ -416,14 +417,14 @@ public class TestFramework
     public void TestEventUnregisterDuringTriggerDoesNotBreakIteration()
     {
         var eventBus = new EventBus();
-        IUnRegister unregister = null;
+        IUnRegister? unregister = null;
         var firstCalled = false;
         var secondCalled = false;
 
         unregister = eventBus.Register<EventA>(_ =>
         {
             firstCalled = true;
-            unregister.UnRegister();
+            unregister!.UnRegister();
         });
         eventBus.Register<EventA>(_ => secondCalled = true);
 
@@ -494,8 +495,8 @@ public class TestFramework
         Assert.AreNotSame(singleton, created);
 
         created.RegisterUtility(new Utility(AnoVal));
-        Assert.AreEqual(AnoVal, created.GetUtility<Utility>().Value);
-        Assert.AreEqual(IntVal, singleton.GetUtility<Utility>().Value);
+        Assert.AreEqual(AnoVal, created.GetUtility<Utility>()!.Value);
+        Assert.AreEqual(IntVal, singleton.GetUtility<Utility>()!.Value);
 
         created.UnInitialize();
 
@@ -631,7 +632,7 @@ public class TestFramework
         domain.RegisterModel(new LifecycleModel());
 
         var exception = Assert.Throws<AggregateException>(() => domain.UnInitialize());
-        Assert.IsTrue(exception.InnerExceptions.Any(inner => inner is InvalidOperationException));
+        Assert.IsTrue(exception!.InnerExceptions.Any(inner => inner is InvalidOperationException));
         Assert.AreEqual(1, model.UninitializeCount);
         Assert.AreEqual(0, model.RegisteredModel.InitializeCount);
         Assert.AreEqual(0, model.RegisteredModel.UninitializeCount);
@@ -651,7 +652,7 @@ public class TestFramework
         domain.RegisterModel(throwing);
 
         var exception = Assert.Throws<AggregateException>(() => domain.UnInitialize());
-        Assert.IsTrue(exception.InnerExceptions.Any(inner => inner is InvalidOperationException));
+        Assert.IsTrue(exception!.InnerExceptions.Any(inner => inner is InvalidOperationException));
         Assert.AreEqual(1, throwing.UninitializeCount);
         Assert.IsNull(domain.GetModel<ThrowingOnUninitializeModel>());
 
@@ -928,16 +929,16 @@ public class TestFramework
         // BDomain 应该能访问 ADomain 的 Utility
         var utility = BDomain.Instance.GetUtility<Utility>();
         Assert.IsNotNull(utility);
-        Assert.AreEqual(IntVal, utility.Value);
+        Assert.AreEqual(IntVal, utility!.Value);
 
         // BDomain 覆盖父域的 Utility
         BDomain.Instance.RegisterUtility(new Utility(AnoVal));
         var overriddenUtility = BDomain.Instance.GetUtility<Utility>();
-        Assert.AreEqual(AnoVal, overriddenUtility.Value);
+        Assert.AreEqual(AnoVal, overriddenUtility!.Value);
 
         // ADomain 的 Utility 不应该受影响
         var originalUtility = ADomain.Instance.GetUtility<Utility>();
-        Assert.AreEqual(IntVal, originalUtility.Value);
+        Assert.AreEqual(IntVal, originalUtility!.Value);
     }
 
     [Test]
@@ -1012,11 +1013,11 @@ public class Control : IController
 
     public Control()
     {
-        UnRegister = this.GetModel<Model>().Value.Register(OnValueChanged);
+        UnRegister = this.GetModel<Model>()!.Value.Register(OnValueChanged);
     }
     
-    public string Old { get; private set; }
-    public string New { get; private set; }
+    public string? Old { get; private set; }
+    public string? New { get; private set; }
 
     private void OnValueChanged(string prev, string current)
     {
@@ -1038,7 +1039,7 @@ public class Control : IController
 public class System : AbstractSystem
 {
     public const string InitVal = "init";
-    public string Value { get; private set; }
+    public string Value { get; private set; } = default!;
     
     protected override void OnInitialize()
     {
@@ -1184,7 +1185,7 @@ public class ThrowingOnUninitializeModel : AbstractModel
 
 public class DualRoleComponent : ISystem, IModel
 {
-    public IDomain Domain { get; private set; }
+    public IDomain Domain { get; private set; } = default!;
     public int InitializeCount { get; private set; }
     public int UninitializeCount { get; private set; }
 
@@ -1206,7 +1207,7 @@ public class DualRoleComponent : ISystem, IModel
 
 public class UtilityLifecycleTrap : IUtility, ISystem
 {
-    public IDomain Domain { get; private set; }
+    public IDomain Domain { get; private set; } = default!;
     public int InitializeCount { get; private set; }
     public int UninitializeCount { get; private set; }
 
@@ -1228,7 +1229,7 @@ public class UtilityLifecycleTrap : IUtility, ISystem
 
 public class UtilityModelLifecycleTrap : IUtility, IModel
 {
-    public IDomain Domain { get; private set; }
+    public IDomain Domain { get; private set; } = default!;
     public int InitializeCount { get; private set; }
     public int UninitializeCount { get; private set; }
 
@@ -1287,7 +1288,7 @@ public class Command : AbstractCommand<int>
 {
     protected override int OnExecute()
     {
-        return this.GetUtility<Utility>().Value;
+        return this.GetUtility<Utility>()!.Value;
     }
 }
 
@@ -1295,7 +1296,7 @@ public class Query : AbstractQuery<string>
 {
     protected override string OnExecute()
     {
-        return this.GetModel<Model>().Value.Value;
+        return this.GetModel<Model>()!.Value.Value;
     }
 }
 

@@ -8,6 +8,8 @@ using System.Xml.Linq;
 using NUnit.Framework;
 using SimpleFramework.Net;
 
+#nullable enable
+
 namespace Test.Net;
 
 [TestFixture]
@@ -100,7 +102,7 @@ public class NetCoreTests
     public void Diagnostics_RecordError_RaisesErrorEventAndUpdatesSnapshot()
     {
         var diagnostics = new NetDiagnostics();
-        NetError recorded = null;
+        NetError? recorded = null;
         diagnostics.ErrorRecorded += error => recorded = error;
 
         diagnostics.RecordError(new NetError("TestError", "failed"));
@@ -115,7 +117,7 @@ public class NetCoreTests
     {
         var dispatcher = new InlineCountingDispatcher();
         var diagnostics = new NetDiagnostics(dispatcher);
-        NetError recorded = null;
+        NetError? recorded = null;
         diagnostics.ErrorRecorded += error => recorded = error;
 
         diagnostics.RecordError(new NetError("TestError", "failed"));
@@ -136,10 +138,10 @@ public class NetCoreTests
     }
 
     [Test]
-    public void NetProject_TargetFramework_RemainsNet8()
+    public void SharedProjectDefaults_TargetFramework_RemainsNet8()
     {
-        var projectPath = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "Net", "Net.csproj"));
-        var document = XDocument.Load(projectPath);
+        var propsPath = Path.Combine(GetRepositoryRoot(), "Directory.Build.props");
+        var document = XDocument.Load(propsPath);
 
         Assert.That(document.Root!.Element("PropertyGroup")!.Element("TargetFramework")!.Value, Is.EqualTo("net8.0"));
     }
@@ -442,27 +444,27 @@ public class NetCoreTests
 
     private sealed class ErrorReportingTransport : INetTransport
     {
-        private Action<TransportError> _error = _ => { };
+        private Action<TransportError>? _error;
 
-        public event Action<TransportPeerConnected> PeerConnected
+        public event Action<TransportPeerConnected>? PeerConnected
         {
             add { }
             remove { }
         }
 
-        public event Action<TransportPeerDisconnected> PeerDisconnected
+        public event Action<TransportPeerDisconnected>? PeerDisconnected
         {
             add { }
             remove { }
         }
 
-        public event Action<TransportPacketReceived> PacketReceived
+        public event Action<TransportPacketReceived>? PacketReceived
         {
             add { }
             remove { }
         }
 
-        public event Action<TransportError> Error
+        public event Action<TransportError>? Error
         {
             add => _error += value;
             remove => _error -= value;
@@ -484,7 +486,7 @@ public class NetCoreTests
             ValueTask.FromResult(new NetSendResult(NetSendStatus.TransportFailed));
 
         public void RaiseError(string message) =>
-            _error(new TransportError(TransportConnectionId.None, message));
+            _error?.Invoke(new TransportError(TransportConnectionId.None, message));
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -516,5 +518,16 @@ public class NetCoreTests
             });
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "SimpleFramework.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Could not find repository root.");
     }
 }

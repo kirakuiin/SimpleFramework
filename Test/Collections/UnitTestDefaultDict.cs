@@ -6,7 +6,7 @@ namespace Test.Collections;
 [TestFixture]
 public class TestDefaultDict
 {
-    private DefaultDict<string, int> _dict;
+    private DefaultDict<string, int> _dict = default!;
 
     private const int InitialVal = 10;
     

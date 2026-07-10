@@ -9,6 +9,8 @@ using NUnit.Framework;
 using SimpleFramework.Net;
 using Test.Net.TestDoubles;
 
+#nullable enable
+
 namespace Test.Net;
 
 [TestFixture]
@@ -352,7 +354,7 @@ public class NetSessionTests
         var appId = Guid.NewGuid();
         var network = new MemoryNetNetwork();
         var expectedPassword = new byte[] { 1, 2, 3, 4 };
-        byte[] receivedPayload = null;
+        byte[]? receivedPayload = null;
         await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
         await using var client = new GameNet(network.CreateTransport("client"), Options(appId));
 
@@ -1538,8 +1540,8 @@ public class NetSessionTests
     private static GameNetOptions Options(
         Guid appId,
         int protocolVersion = 1,
-        INetEventDispatcher dispatcher = null,
-        TimeProvider timeProvider = null,
+        INetEventDispatcher? dispatcher = null,
+        TimeProvider? timeProvider = null,
         int maxPacketSize = 64 * 1024) => new()
     {
         Application = new NetApplicationInfo
@@ -1586,10 +1588,10 @@ public class NetSessionTests
 
         public bool FailNextJoinAcceptedSend { get; set; }
 
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             _inner.StartServerAsync(options, token);
@@ -1647,10 +1649,10 @@ public class NetSessionTests
         public TaskCompletionSource ReleaseConnect { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             _inner.StartServerAsync(options, token);
@@ -1681,10 +1683,10 @@ public class NetSessionTests
         public TaskCompletionSource ReleaseDispose { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event Action<TransportPeerConnected> PeerConnected { add { } remove { } }
-        public event Action<TransportPeerDisconnected> PeerDisconnected { add { } remove { } }
-        public event Action<TransportPacketReceived> PacketReceived { add { } remove { } }
-        public event Action<TransportError> Error { add { } remove { } }
+        public event Action<TransportPeerConnected>? PeerConnected { add { } remove { } }
+        public event Action<TransportPeerDisconnected>? PeerDisconnected { add { } remove { } }
+        public event Action<TransportPacketReceived>? PacketReceived { add { } remove { } }
+        public event Action<TransportError>? Error { add { } remove { } }
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
@@ -1718,10 +1720,10 @@ public class NetSessionTests
         public TaskCompletionSource JoinRequestSent { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event Action<TransportPeerConnected> PeerConnected { add { } remove { } }
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error { add { } remove { } }
+        public event Action<TransportPeerConnected>? PeerConnected { add { } remove { } }
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error { add { } remove { } }
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
@@ -1839,10 +1841,10 @@ public class NetSessionTests
         public TaskCompletionSource ReleaseStop { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             _inner.StartServerAsync(options, token);
@@ -1890,10 +1892,10 @@ public class NetSessionTests
         public TaskCompletionSource ReleaseSend { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             _inner.StartServerAsync(options, token);
@@ -1928,10 +1930,10 @@ public class NetSessionTests
     private sealed class FailingStopResultTransport : INetTransport
     {
         public bool FailStop { get; set; } = true;
-        public event Action<TransportPeerConnected> PeerConnected { add { } remove { } }
-        public event Action<TransportPeerDisconnected> PeerDisconnected { add { } remove { } }
-        public event Action<TransportPacketReceived> PacketReceived { add { } remove { } }
-        public event Action<TransportError> Error { add { } remove { } }
+        public event Action<TransportPeerConnected>? PeerConnected { add { } remove { } }
+        public event Action<TransportPeerDisconnected>? PeerDisconnected { add { } remove { } }
+        public event Action<TransportPacketReceived>? PacketReceived { add { } remove { } }
+        public event Action<TransportError>? Error { add { } remove { } }
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
         public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
@@ -1959,10 +1961,10 @@ public class NetSessionTests
             _inner.Error += error => Error?.Invoke(error);
         }
 
-        public event Action<TransportPeerConnected> PeerConnected;
-        public event Action<TransportPeerDisconnected> PeerDisconnected;
-        public event Action<TransportPacketReceived> PacketReceived;
-        public event Action<TransportError> Error;
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
 
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
             _inner.StartServerAsync(options, token);

@@ -11,9 +11,9 @@ namespace Test.Toolkit;
 [TestFixture]
 public class TestIniConfigTool
 {
-    private string _testDirPath;
-    private IniConfigTool _configTool;
-    private IniConfigTool _autoFlushConfigTool;
+    private string _testDirPath = default!;
+    private IniConfigTool _configTool = default!;
+    private IniConfigTool _autoFlushConfigTool = default!;
 
     [SetUp]
     public void Setup()
@@ -184,7 +184,7 @@ public class TestIniConfigTool
         _configTool.LoadConfig(testFile);
 
         // Act & Assert - 这些操作都不应该抛出异常
-        Assert.DoesNotThrow(() => _configTool.LoadConfig(null));
+        Assert.DoesNotThrow(() => _configTool.LoadConfig(null!));
         Assert.DoesNotThrow(() => _configTool.LoadConfig(""));
         Assert.DoesNotThrow(() => _configTool.LoadConfig("   "));
         Assert.DoesNotThrow(() => _configTool.Set("", "Key", "Value"));

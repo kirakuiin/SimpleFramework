@@ -112,7 +112,7 @@ public class TestSystemGroup
     {
         var group = new SystemGroup();
 
-        Assert.Throws<ArgumentNullException>(() => group.Add(null));
+        Assert.Throws<ArgumentNullException>(() => group.Add(null!));
     }
 
     [Test]
@@ -120,7 +120,7 @@ public class TestSystemGroup
     {
         var group = new SystemGroup();
 
-        Assert.Throws<ArgumentNullException>(() => group.Remove(null));
+        Assert.Throws<ArgumentNullException>(() => group.Remove(null!));
     }
 
     [Test]
@@ -176,8 +176,8 @@ public class TestSystemGroup
     [Test]
     public void DependencyAttributesThrowWhenSystemTypeIsNull()
     {
-        Assert.Throws<ArgumentNullException>(() => new RunBeforeAttribute(null));
-        Assert.Throws<ArgumentNullException>(() => new RunAfterAttribute(null));
+        Assert.Throws<ArgumentNullException>(() => new RunBeforeAttribute(null!));
+        Assert.Throws<ArgumentNullException>(() => new RunAfterAttribute(null!));
     }
 
     [Test]
@@ -289,7 +289,7 @@ public class TestSystemGroup
 
         var exception = Assert.Throws<InvalidOperationException>(() => group.Update());
 
-        StringAssert.Contains("SystemGroup dependency cycle detected:", exception.Message);
+        StringAssert.Contains("SystemGroup dependency cycle detected:", exception!.Message);
         StringAssert.Contains("CycleASystem -> CycleBSystem -> CycleASystem", exception.Message);
     }
 
@@ -354,7 +354,7 @@ public class TestSystemGroup
 
         var exception = Assert.Throws<InvalidOperationException>(() => group.Validate());
 
-        StringAssert.Contains("CycleASystem -> CycleBSystem -> CycleASystem", exception.Message);
+        StringAssert.Contains("CycleASystem -> CycleBSystem -> CycleASystem", exception!.Message);
         CollectionAssert.IsEmpty(calls);
     }
 
@@ -437,10 +437,10 @@ public class TestSystemGroup
 
     private class RecordingSystem : EcsSystem
     {
-        private readonly List<string> _calls;
+        private readonly List<string>? _calls;
         private readonly string _name;
 
-        public RecordingSystem(World world, List<string> calls = null, string name = "") : base(world)
+        public RecordingSystem(World world, List<string>? calls = null, string name = "") : base(world)
         {
             _calls = calls;
             _name = name;

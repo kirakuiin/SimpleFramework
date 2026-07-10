@@ -7,7 +7,7 @@ namespace Test.Collections;
 [TestFixture]
 public class TestCounter
 {
-    private Counter<string> _counter;
+    private Counter<string> _counter = default!;
     
     [SetUp]
     public void Setup()
