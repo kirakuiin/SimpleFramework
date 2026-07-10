@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using SimpleFramework.Maths;
 
@@ -163,5 +164,90 @@ public class TestHexagonGrid
         // 验证右上角顶点（右上方的尖角）
         Assert.That(flatCorners[5].X, Is.EqualTo(size.X/2).Within(1e-5));
         Assert.That(flatCorners[5].Y, Is.EqualTo(size.Y*Math.Sqrt(3)/2).Within(1e-5));
+    }
+
+    [Test]
+    public void TestHexRejectsOverflowInvalidCoordinates()
+    {
+        Assert.Throws<ArgumentException>(() => new Hex(int.MaxValue, int.MaxValue, 2));
+    }
+
+    [Test]
+    public void TestHexArithmeticThrowsOnOverflow()
+    {
+        var left = new Hex(int.MaxValue, -int.MaxValue, 0);
+        var right = new Hex(1, -1, 0);
+
+        Assert.Throws<OverflowException>(() => _ = left + right);
+    }
+
+    [Test]
+    public void TestFractionalHexRejectsNonFiniteCoordinates()
+    {
+        Assert.Multiple(() =>
+        {
+            var nan = Assert.Throws<ArgumentOutOfRangeException>(() => new FractionalHex(double.NaN, 0, 0));
+            var infinity = Assert.Throws<ArgumentOutOfRangeException>(
+                () => new FractionalHex(0, double.PositiveInfinity, double.NegativeInfinity));
+            Assert.AreEqual("q", nan?.ParamName);
+            Assert.AreEqual("r", infinity?.ParamName);
+        });
+    }
+
+    [Test]
+    public void TestOrientationPresetsAreReadOnlyProperties()
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+
+        Assert.Multiple(() =>
+        {
+            Assert.IsNull(typeof(HexOrientation).GetField(nameof(HexOrientation.Pointy), flags));
+            Assert.IsNull(typeof(HexOrientation).GetField(nameof(HexOrientation.Flat), flags));
+            Assert.IsFalse(typeof(HexOrientation).GetProperty(nameof(HexOrientation.Pointy), flags)?.CanWrite);
+            Assert.IsFalse(typeof(HexOrientation).GetProperty(nameof(HexOrientation.Flat), flags)?.CanWrite);
+        });
+    }
+
+    [Test]
+    public void TestLayoutRejectsZeroOrNonFiniteSize()
+    {
+        Assert.Multiple(() =>
+        {
+            var zero = Assert.Throws<ArgumentOutOfRangeException>(() => new HexLayout(
+                HexOrientation.Pointy, new Point(0, 1), new Point(0, 0)));
+            var nan = Assert.Throws<ArgumentOutOfRangeException>(() => new HexLayout(
+                HexOrientation.Pointy, new Point(1, double.NaN), new Point(0, 0)));
+            Assert.AreEqual("size", zero?.ParamName);
+            Assert.AreEqual("size", nan?.ParamName);
+        });
+    }
+
+    [Test]
+    public void TestLayoutRejectsNonFiniteOrigin()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => new HexLayout(
+            HexOrientation.Pointy,
+            new Point(1, 1),
+            new Point(double.NaN, double.PositiveInfinity)));
+
+        Assert.AreEqual("origin", exception!.ParamName);
+    }
+
+    [Test]
+    public void TestDirectionMethodsNameInvalidDirection()
+    {
+        var invalid = (HexDirection)6;
+        var hex = new Hex(0, 0, 0);
+        var layout = new HexLayout(HexOrientation.Pointy, new Point(1, 1), new Point(0, 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual("direction",
+                Assert.Throws<ArgumentOutOfRangeException>(() => hex.GetNeighbor(invalid))?.ParamName);
+            Assert.AreEqual("direction",
+                Assert.Throws<ArgumentOutOfRangeException>(() => hex.DiagonalNeighbor(invalid))?.ParamName);
+            Assert.AreEqual("direction",
+                Assert.Throws<ArgumentOutOfRangeException>(() => layout.HexCornerOffset(invalid))?.ParamName);
+        });
     }
 } 

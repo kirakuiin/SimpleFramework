@@ -72,7 +72,7 @@ public readonly struct Matrix2D
     public Matrix2D Inverse()
     {
         var det = Determinant;
-        if (Math.Abs(det) < InvertibleDeterminantEpsilon)
+        if (!double.IsFinite(det) || Math.Abs(det) < InvertibleDeterminantEpsilon)
         {
             throw new InvalidOperationException("Matrix is not invertible.");
         }

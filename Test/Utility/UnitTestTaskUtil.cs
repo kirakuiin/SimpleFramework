@@ -79,4 +79,14 @@ public class TestTaskUtil
 
         Assert.AreEqual(3, counter);
     }
+
+    [Test]
+    public void TestWaitUntilHonorsCancellation()
+    {
+        using var source = new CancellationTokenSource();
+        source.Cancel();
+
+        Assert.ThrowsAsync<OperationCanceledException>(
+            () => TaskUtil.WaitUntil(() => false, 1000, 10, source.Token));
+    }
 }

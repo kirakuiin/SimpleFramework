@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Globalization;
 using NUnit.Framework;
 using SimpleFramework.Toolkit;
 
@@ -295,5 +296,40 @@ public class TestIniConfigTool
         _configTool.Reload();
         
         Assert.AreEqual("Value", _configTool.Get<string>("Section", "Key"));
+    }
+
+    [Test]
+    public void TestTypedValuesRoundTripAcrossCultures()
+    {
+        var testFile = Path.Combine(_testDirPath, "culture.ini");
+        var value = 1234.5;
+        var date = new DateTime(2026, 7, 10, 13, 14, 15, 123, DateTimeKind.Utc).AddTicks(4567);
+        var originalCulture = CultureInfo.CurrentCulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            _configTool.LoadConfig(testFile);
+            _configTool.Set("Values", "Number", value);
+            _configTool.Set("Values", "Date", date);
+            _configTool.Set("Values", "Raw", "1,5");
+            _configTool.SaveConfig();
+
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            using var reloaded = new IniConfigTool();
+            reloaded.LoadConfig(testFile);
+
+            Assert.Multiple(() =>
+            {
+                Assert.AreEqual(value, reloaded.Get<double>("Values", "Number"));
+                Assert.AreEqual(date, reloaded.Get<DateTime>("Values", "Date"));
+                Assert.AreEqual("1,5", reloaded.Get<string>("Values", "Raw"));
+                Assert.That(File.ReadAllText(testFile), Does.Contain("Number=1234.5"));
+            });
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
     }
 }

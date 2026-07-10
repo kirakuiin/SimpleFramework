@@ -3,18 +3,18 @@
 namespace SimpleFramework.Utility;
 
 /// <summary>
-/// 文件读写工具, 提供了常用的文件读写接口
+/// 文件读写工具；I/O 或序列化失败时记录日志，不向调用方传播异常。
 /// </summary>
 public static class FileUtil
 {
     private static readonly JsonSerializerOptions DefaultOptions = new () { WriteIndented = true, IncludeFields = true };
     
     /// <summary>
-    /// 以json的形式
+    /// 将对象以格式化 JSON 写入文件，覆盖已有内容。
     /// </summary>
-    /// <param name="obj"></param>
-    /// <param name="filePath"></param>
-    /// <typeparam name="T"></typeparam>
+    /// <param name="obj">要保存的对象。</param>
+    /// <param name="filePath">目标文件路径。</param>
+    /// <typeparam name="T">对象类型。</typeparam>
     public static void SaveAsJson<T>(T obj, string filePath)
     {
         var result = SerializeUtil.Serialize(obj, DefaultOptions);
@@ -31,13 +31,13 @@ public static class FileUtil
     }
 
     /// <summary>
-    /// 从文件中加载json并转为对象
+    /// 从文件读取 JSON 并反序列化对象。
     /// </summary>
-    /// <param name="filePath"></param>
-    /// <param name="obj"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
-    public static bool LoadFromJson<T>(string filePath, out T obj)
+    /// <param name="filePath">源文件路径。</param>
+    /// <param name="obj">读取成功时为反序列化结果；JSON <see langword="null"/> 或失败时可为空。</param>
+    /// <typeparam name="T">对象类型。</typeparam>
+    /// <returns>文件存在且 JSON 成功解析时为 <see langword="true"/>。</returns>
+    public static bool LoadFromJson<T>(string filePath, [System.Diagnostics.CodeAnalysis.MaybeNull] out T obj)
     {
         obj = default!;
         if (!File.Exists(filePath))
@@ -60,11 +60,11 @@ public static class FileUtil
     }
 
     /// <summary>
-    /// 以二进制的形式存储对象
+    /// 将对象序列化为 UTF-8 JSON 字节并写入文件，覆盖已有内容。
     /// </summary>
-    /// <param name="obj"></param>
-    /// <param name="filePath"></param>
-    /// <typeparam name="T"></typeparam>
+    /// <param name="obj">要保存的对象。</param>
+    /// <param name="filePath">目标文件路径。</param>
+    /// <typeparam name="T">对象类型。</typeparam>
     public static void SaveAsBinary<T>(T obj, string filePath)
     {
         try
@@ -81,13 +81,13 @@ public static class FileUtil
 
 
     /// <summary>
-    /// 以二进制的形式读取文件，并转为对象
+    /// 读取 UTF-8 JSON 字节文件并反序列化对象。
     /// </summary>
-    /// <param name="filePath"></param>
-    /// <param name="obj"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
-    public static bool LoadFromBinary<T>(string filePath, out T obj)
+    /// <param name="filePath">源文件路径。</param>
+    /// <param name="obj">读取成功时为反序列化结果；JSON <see langword="null"/> 或失败时可为空。</param>
+    /// <typeparam name="T">对象类型。</typeparam>
+    /// <returns>文件存在且内容成功解析时为 <see langword="true"/>。</returns>
+    public static bool LoadFromBinary<T>(string filePath, [System.Diagnostics.CodeAnalysis.MaybeNull] out T obj)
     {
         obj = default!;
         if (!File.Exists(filePath))

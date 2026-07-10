@@ -51,13 +51,13 @@ public class TestFileUtil
 
         // Act
         FileUtil.SaveAsJson(_testData, testFile);
-        bool loadResult = FileUtil.LoadFromJson(testFile, out TestData loadedData);
+        bool loadResult = FileUtil.LoadFromJson(testFile, out TestData? loadedData);
 
         // Assert
         Assert.IsTrue(loadResult);
         Assert.IsNotNull(loadedData);
         Assert.AreEqual(_testData.Id, loadedData!.Id);
-        Assert.AreEqual(_testData.Name, loadedData.Name);
+        Assert.AreEqual(_testData.Name, loadedData!.Name);
         Assert.AreEqual(_testData.IsActive, loadedData.IsActive);
         Assert.AreEqual(_testData.Score, loadedData.Score);
         Assert.IsTrue(File.Exists(testFile));
@@ -71,13 +71,13 @@ public class TestFileUtil
 
         // Act
         FileUtil.SaveAsBinary(_testData, testFile);
-        bool loadResult = FileUtil.LoadFromBinary(testFile, out TestData loadedData);
+        bool loadResult = FileUtil.LoadFromBinary(testFile, out TestData? loadedData);
 
         // Assert
         Assert.IsTrue(loadResult);
         Assert.IsNotNull(loadedData);
         Assert.AreEqual(_testData.Id, loadedData!.Id);
-        Assert.AreEqual(_testData.Name, loadedData.Name);
+        Assert.AreEqual(_testData.Name, loadedData!.Name);
         Assert.AreEqual(_testData.IsActive, loadedData.IsActive);
         Assert.AreEqual(_testData.Score, loadedData.Score);
         Assert.IsTrue(File.Exists(testFile));
@@ -90,8 +90,8 @@ public class TestFileUtil
         string nonExistentFile = Path.Combine(_testDirPath, "nonexistent.json");
 
         // Act
-        bool jsonResult = FileUtil.LoadFromJson(nonExistentFile, out TestData jsonData);
-        bool binaryResult = FileUtil.LoadFromBinary(nonExistentFile, out TestData binaryData);
+        bool jsonResult = FileUtil.LoadFromJson(nonExistentFile, out TestData? jsonData);
+        bool binaryResult = FileUtil.LoadFromBinary(nonExistentFile, out TestData? binaryData);
 
         // Assert
         Assert.IsFalse(jsonResult);
@@ -126,16 +126,16 @@ public class TestFileUtil
 
         // Act
         FileUtil.SaveAsJson(complexData, jsonFile);
-        bool jsonLoaded = FileUtil.LoadFromJson(jsonFile, out ComplexTestData loadedFromJson);
+        bool jsonLoaded = FileUtil.LoadFromJson(jsonFile, out ComplexTestData? loadedFromJson);
 
         FileUtil.SaveAsBinary(complexData, binaryFile);
-        bool binaryLoaded = FileUtil.LoadFromBinary(binaryFile, out ComplexTestData loadedFromBinary);
+        bool binaryLoaded = FileUtil.LoadFromBinary(binaryFile, out ComplexTestData? loadedFromBinary);
 
         // Assert
         Assert.IsTrue(jsonLoaded);
         Assert.IsNotNull(loadedFromJson);
         Assert.AreEqual(complexData.Id, loadedFromJson!.Id);
-        Assert.AreEqual(complexData.Settings.Theme, loadedFromJson.Settings.Theme);
+        Assert.AreEqual(complexData.Settings.Theme, loadedFromJson!.Settings.Theme);
         Assert.AreEqual(complexData.Settings.Language, loadedFromJson.Settings.Language);
         Assert.AreEqual(complexData.Settings.MaxConnections, loadedFromJson.Settings.MaxConnections);
         CollectionAssert.AreEqual(complexData.Tags, loadedFromJson.Tags);
@@ -144,7 +144,7 @@ public class TestFileUtil
         Assert.IsTrue(binaryLoaded);
         Assert.IsNotNull(loadedFromBinary);
         Assert.AreEqual(complexData.Id, loadedFromBinary!.Id);
-        Assert.AreEqual(complexData.Settings.Theme, loadedFromBinary.Settings.Theme);
+        Assert.AreEqual(complexData.Settings.Theme, loadedFromBinary!.Settings.Theme);
     }
 
     [Test]
@@ -158,11 +158,12 @@ public class TestFileUtil
         // Act
         FileUtil.SaveAsJson(originalData, testFile);
         FileUtil.SaveAsJson(newData, testFile); // 覆盖写入
-        bool loadResult = FileUtil.LoadFromJson(testFile, out TestData loadedData);
+        bool loadResult = FileUtil.LoadFromJson(testFile, out TestData? loadedData);
 
         // Assert
         Assert.IsTrue(loadResult);
-        Assert.AreEqual(newData.Id, loadedData.Id);
+        Assert.IsNotNull(loadedData);
+        Assert.AreEqual(newData.Id, loadedData!.Id);
         Assert.AreEqual(newData.Name, loadedData.Name);
         Assert.AreEqual(newData.IsActive, loadedData.IsActive);
         Assert.AreEqual(newData.Score, loadedData.Score);

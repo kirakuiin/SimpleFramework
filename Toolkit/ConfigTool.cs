@@ -15,7 +15,11 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
     /// 存储读取的数据
     /// </summary>
     private readonly Dictionary<string, Dictionary<string, string>> _config = new ();
-    
+
+    /// <summary>
+    /// 从指定 UTF-8 INI 文件加载配置；文件不存在时清空内存配置并保留该路径供后续保存。
+    /// </summary>
+    /// <param name="filePath">配置文件路径。</param>
     public void LoadConfig(string filePath)
     {
         if (IsDisposed)
@@ -186,24 +190,18 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
             if (typeof(T) == typeof(string))
                 return (T)(object)rawValue;
 
-            // 尝试类型转换
-            if (typeof(T) == typeof(int))
-                return (T)(object)Convert.ToInt32(rawValue);
-            if (typeof(T) == typeof(double))
-                return (T)(object)Convert.ToDouble(rawValue);
-            if (typeof(T) == typeof(float))
-                return (T)(object)Convert.ToSingle(rawValue);
-            if (typeof(T) == typeof(bool))
-                return (T)(object)Convert.ToBoolean(rawValue);
-            if (typeof(T) == typeof(long))
-                return (T)(object)Convert.ToInt64(rawValue);
-            if (typeof(T) == typeof(decimal))
-                return (T)(object)Convert.ToDecimal(rawValue);
             if (typeof(T) == typeof(DateTime))
-                return (T)(object)Convert.ToDateTime(rawValue);
+            {
+                return (T)(object)DateTime.Parse(
+                    rawValue,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind);
+            }
 
-            // 使用Convert.ChangeType进行通用转换
-            return (T)Convert.ChangeType(rawValue, typeof(T));
+            return (T)Convert.ChangeType(
+                rawValue,
+                typeof(T),
+                System.Globalization.CultureInfo.InvariantCulture);
         }
         catch (Exception ex)
         {
@@ -239,8 +237,15 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
             if (!_config.ContainsKey(section))
                 _config[section] = new Dictionary<string, string>();
 
-            // 将值转换为字符串
-            var stringValue = value?.ToString() ?? "";
+            var stringValue = value switch
+            {
+                null => "",
+                string text => text,
+                DateTime dateTime => dateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                DateTimeOffset dateTimeOffset => dateTimeOffset.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                IFormattable formattable => formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+                _ => value.ToString() ?? ""
+            };
             _config[section][key] = stringValue;
 
             ToolkitLog.Info($"设置配置项 [{section}].{key} = {stringValue}");
@@ -305,6 +310,7 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
         Dispose(false);
     }
 
+    /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
         if (IsDisposed) return;

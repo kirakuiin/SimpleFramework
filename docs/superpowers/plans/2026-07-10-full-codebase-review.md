@@ -217,6 +217,90 @@ git commit -m "review: harden foundation modules"
 
 Request review for the exact Git range, resolve Critical and Important feedback, rerun Step 4, and record the disposition.
 
+#### Task 2 Repair A: Preserve complete Counter subtraction semantics
+
+**Files:** `Collections/Counter.cs`, `Test/Collections/UnitTestCounter.cs`
+
+- [ ] Add `TestSubtractIncludesRightOnlyKeys`, subtracting a counter that contains a key absent from the left operand and asserting that the result contains the negated right-hand count. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestCounter.TestSubtractIncludesRightOnlyKeys"`; expect failure because binary subtraction currently enumerates only left-hand keys.
+- [ ] Build the result from the union of both key sets and subtract missing values as zero. Rerun the same command; expect the right-only key to be present with its negative count and the test to pass.
+
+#### Task 2 Repair B: Preserve caller-supplied key comparers
+
+**Files:** `Collections/DefaultDict.cs`, `Collections/Counter.cs`, `Test/Collections/UnitTestDefaultDict.cs`, `Test/Collections/UnitTestCounter.cs`
+
+- [ ] Add `TestUsesSuppliedComparer` and `TestCopyAndOperatorsPreserveComparer`; use reflection only for the initial RED so the tests compile before the comparer-aware constructors exist, then assert case-insensitive lookup, copy, addition, and subtraction keep one logical key. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestDefaultDict.TestUsesSuppliedComparer|FullyQualifiedName~Test.Collections.TestCounter.TestCopyAndOperatorsPreserveComparer"`; expect both tests to fail because neither type accepts or exposes a comparer.
+- [ ] Let `DefaultDict` accept an optional comparer and expose the effective comparer; let every `Counter` constructor and derived operator preserve the originating counter's comparer. Refactor the green tests to call the public APIs directly, rerun the same command, and expect both tests to pass without duplicate case-variant keys.
+
+#### Task 2 Repair C: Reject a missing DefaultDict factory immediately
+
+**Files:** `Collections/DefaultDict.cs`, `Test/Collections/UnitTestDefaultDict.cs`
+
+- [ ] Add `TestConstructorRejectsNullFactory`, constructing the dictionary with a null callback and expecting `ArgumentNullException` naming `initCallback`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestDefaultDict.TestConstructorRejectsNullFactory"`; expect failure because construction currently succeeds and defers a null-reference failure until a missing-key read.
+- [ ] Guard the constructor before storing the callback and document the exception in Chinese XML. Rerun the same command; expect the test to pass.
+
+#### Task 2 Repair D: Complete grouped disposal deterministically
+
+**Files:** `Utility/Disposable.cs`, `Test/Utility/UnitTestDisposable.cs`
+
+- [ ] Add `TestDisposableGroupDisposesAllChildrenWhenOneThrows`, registering a throwing child before a tracking child and expecting an `AggregateException` containing the original failure while both children are called once. Add `TestDisposableGroupDisposesItemsAddedAfterDisposal`, asserting an item added after group disposal is immediately disposed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestDisposable.TestDisposableGroupDisposesAllChildrenWhenOneThrows|FullyQualifiedName~Test.Utility.TestDisposable.TestDisposableGroupDisposesItemsAddedAfterDisposal"`; expect failures because the first exception aborts cleanup and post-disposal additions are retained without disposal.
+- [ ] Consume the group's children once, attempt every disposal in insertion order, aggregate failures deterministically, ignore null entries, and immediately dispose non-null items added after the group is closed. Rerun the same command; expect both tests to pass and repeated group disposal to remain a no-op.
+
+#### Task 2 Repair E: Express nullable JSON results and remove the UTF-8 round-trip allocation
+
+**Files:** `Utility/SerializeUtil.cs`, `Utility/FileUtil.cs`, `Test/Utility/UnitTestSerializeUtil.cs`
+
+- [ ] Add `TestDeserializeDeclaresNullableResult`, using `NullabilityInfoContext` to require nullable return metadata on generic and runtime-type deserialize overloads, and `TestSerializeBytesAvoidsIntermediateStringAllocation`, comparing warmed repeated allocations for a large ASCII payload against string serialization. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestSerializeUtil.TestDeserializeDeclaresNullableResult|FullyQualifiedName~Test.Utility.TestSerializeUtil.TestSerializeBytesAvoidsIntermediateStringAllocation"`; expect metadata and allocation assertions to fail because deserialize suppresses null and byte serialization creates a JSON string before UTF-8 encoding.
+- [ ] Return nullable results without suppression, cache the default serializer options, call `JsonSerializer.SerializeToUtf8Bytes` and byte-span deserialize APIs directly, and make `FileUtil` treat a JSON `null` payload as a successful nullable result. Rerun the same command plus all serialization/file tests; expect nullable metadata, allocation, and round trips to pass.
+
+#### Task 2 Repair F: Allow WaitUntil cancellation
+
+**Files:** `Utility/TaskUtil.cs`, `Test/Utility/UnitTestTaskUtil.cs`
+
+- [ ] Add `TestWaitUntilHonorsCancellation`, using reflection for the initial RED to require the direct four-parameter overload and invoking it with a pre-cancelled token. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestTaskUtil.TestWaitUntilHonorsCancellation"`; expect failure because no token-aware API exists.
+- [ ] Add an optional trailing `CancellationToken`, check cancellation before polling, and pass it into `Task.Delay`; document cancellation propagation in Chinese XML. Refactor the green test to call the API directly and rerun the same command; expect `OperationCanceledException` and a passing test.
+
+#### Task 2 Repair G: Reject invalid utility boundary inputs
+
+**Files:** `Utility/TimeUtil.cs`, `Utility/Extensions/RandomExtension.cs`, `Utility/Extensions/StringExtension.cs`, `Test/Utility/UnitTestTimeUtil.cs`, `Test/Extensions/UnitTestExtension.cs`
+
+- [ ] Add `TestToMsThrowsOnOverflow`, `TestChoiceRejectsEmptyList`, `TestSampleRejectsNegativeCount`, and `TestRepeatRejectsNegativeCount`, asserting `OverflowException` or an argument exception naming the invalid parameter. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestTimeUtil.TestToMsThrowsOnOverflow|FullyQualifiedName~Test.Extensions.TestRandom.TestChoiceRejectsEmptyList|FullyQualifiedName~Test.Extensions.TestRandom.TestSampleRejectsNegativeCount|FullyQualifiedName~Test.Extensions.TestString.TestRepeatRejectsNegativeCount"`; expect all four to fail because overflow wraps, empty choice fails through an index, and negative counts silently produce empty results.
+- [ ] Use checked seconds-to-milliseconds arithmetic and direct parameter validation for empty/negative inputs, with exact Chinese XML exception contracts. Rerun the same command; expect all four tests to pass.
+
+#### Task 2 Repair H: Persist typed INI values independently of ambient culture
+
+**Files:** `Toolkit/ConfigTool.cs`, `Test/Toolkit/UnitTestIniConfigTool.cs`
+
+- [ ] Add `TestTypedValuesRoundTripAcrossCultures`, setting a double and `DateTime` under `fr-FR`, saving, then loading and reading under `en-US`, while asserting an explicitly supplied raw string containing a comma is unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Toolkit.TestIniConfigTool.TestTypedValuesRoundTripAcrossCultures"`; expect failure because typed values currently use ambient-culture `ToString` and `Convert` behavior.
+- [ ] Format non-string `IFormattable` values with invariant culture (using round-trip format for `DateTime`) and convert typed reads with invariant culture, while returning raw string values unchanged. Rerun the same command; expect exact numeric/date values and raw text to round-trip across cultures.
+
+#### Task 2 Repair I: Reject non-finite matrix inversion
+
+**Files:** `Maths/Matrix.cs`, `Test/Maths/UnitTestMatrix2D.cs`
+
+- [ ] Add `TestNonFiniteMatrixThrows`, constructing matrices whose determinants are `NaN` or infinity and expecting `InvalidOperationException`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestMatrix2D.TestNonFiniteMatrixThrows"`; expect failure because the epsilon comparison lets non-finite determinants through and returns non-finite inverse values.
+- [ ] Treat a non-finite determinant as non-invertible and document the exception contract. Rerun the same command and the existing inverse tests; expect all selected tests to pass.
+
+#### Task 2 Repair J: Validate hex coordinates and checked arithmetic
+
+**Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
+
+- [ ] Add `TestHexRejectsOverflowInvalidCoordinates`, `TestHexArithmeticThrowsOnOverflow`, and `TestFractionalHexRejectsNonFiniteCoordinates`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestHexRejectsOverflowInvalidCoordinates|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestHexArithmeticThrowsOnOverflow|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestFractionalHexRejectsNonFiniteCoordinates"`; expect failures because integer-sum overflow can satisfy the invariant, coordinate operators wrap, and NaN/infinity bypass the fractional sum check.
+- [ ] Validate integer sums in widened arithmetic, perform integer coordinate arithmetic in checked context, reject each non-finite fractional coordinate with `ArgumentOutOfRangeException`, and retain `ArgumentException` for finite coordinates whose sum is invalid. Rerun the same command and all hex arithmetic/rounding tests; expect all selected tests to pass.
+
+#### Task 2 Repair K: Make hex presets immutable and reject unusable layout inputs
+
+**Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
+
+- [ ] Add `TestOrientationPresetsAreReadOnlyProperties`, `TestLayoutRejectsZeroOrNonFiniteSize`, and `TestDirectionMethodsNameInvalidDirection`; require preset properties rather than mutable fields, reject a zero/non-finite scale axis, and require invalid direction failures to name `direction`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestOrientationPresetsAreReadOnlyProperties|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsZeroOrNonFiniteSize|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestDirectionMethodsNameInvalidDirection"`; expect failures because presets are writable fields, invalid scales create non-finite inverse transforms, and list indexing reports `index`.
+- [ ] Make `HexOrientation` readonly with get-only static presets, validate finite non-zero layout size axes while allowing finite negative mirroring scales, and validate direction values before lookup. Rerun the same command plus all layout/corner tests; expect all selected tests to pass.
+
+#### Task 2 Repair L: Reject a non-finite hex layout origin
+
+**Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
+
+- [ ] Add `TestLayoutRejectsNonFiniteOrigin`, constructing a layout with a NaN or infinite origin coordinate and expecting `ArgumentOutOfRangeException` naming `origin`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsNonFiniteOrigin"`; expect failure because non-finite origin values are currently stored and later poison every coordinate conversion.
+- [ ] Validate both origin coordinates as finite while retaining every finite origin value. Rerun the same command and the existing layout round-trip tests; expect all selected tests to pass.
+
 ### Task 3: Patterns
 
 **Files:**

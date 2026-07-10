@@ -5,7 +5,7 @@ namespace SimpleFramework.Collections;
 /// <summary>
 /// 计数字典，用来统计各个元素的数量。
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">要计数的键类型。</typeparam>
 public class Counter<T>
     : IDictionary<T, long>, IReadOnlyDictionary<T, long>, IEquatable<Counter<T>>
     where T : notnull
@@ -15,9 +15,10 @@ public class Counter<T>
     /// <summary>
     /// 对序列里面的各个元素数量进行计数。
     /// </summary>
-    /// <param name="sequence"></param>
-    public Counter(IEnumerable<T> sequence)
-        : this()
+    /// <param name="sequence">用于初始化计数的元素序列。</param>
+    /// <param name="comparer">键比较器；为空时使用键类型的默认比较器。</param>
+    public Counter(IEnumerable<T> sequence, IEqualityComparer<T>? comparer = null)
+        : this(comparer)
     {
         foreach (var elem in sequence)
         {
@@ -25,8 +26,12 @@ public class Counter<T>
         }
     }
 
+    /// <summary>
+    /// 复制另一个计数字典，并保留其键比较器。
+    /// </summary>
+    /// <param name="other">要复制的计数字典。</param>
     public Counter(Counter<T> other)
-        : this()
+        : this(other.Comparer)
     {
         foreach (var pair in other)
         {
@@ -34,11 +39,29 @@ public class Counter<T>
         }
     }
 
+    /// <summary>
+    /// 使用键类型的默认比较器创建空计数字典。
+    /// </summary>
     public Counter()
+        : this((IEqualityComparer<T>?)null)
     {
-        _delegate = new DefaultDict<T, long>(() => 0);
     }
 
+    /// <summary>
+    /// 使用指定键比较器创建空计数字典。
+    /// </summary>
+    /// <param name="comparer">键比较器；为空时使用键类型的默认比较器。</param>
+    public Counter(IEqualityComparer<T>? comparer)
+    {
+        _delegate = new DefaultDict<T, long>(() => 0, comparer);
+    }
+
+    /// <summary>
+    /// 获取计数字典实际使用的键比较器。
+    /// </summary>
+    public IEqualityComparer<T> Comparer => _delegate.Comparer;
+
+    /// <inheritdoc/>
     public IEnumerator<KeyValuePair<T, long>> GetEnumerator()
     {
         return _delegate.GetEnumerator();
@@ -49,6 +72,7 @@ public class Counter<T>
         return GetEnumerator();
     }
 
+    /// <inheritdoc/>
     public void Clear()
     {
         _delegate.Clear();
@@ -87,28 +111,36 @@ public class Counter<T>
         }
     }
 
+    /// <inheritdoc/>
     public int Count => _delegate.Count;
 
+    /// <inheritdoc/>
     public void Add(T key, long value)
     {
         _delegate.Add(key, value);
     }
 
+    /// <inheritdoc/>
     public bool Remove(T key)
     {
         return _delegate.Remove(key);
     }
 
+    /// <inheritdoc/>
     public bool ContainsKey(T key)
     {
         return _delegate.ContainsKey(key);
     }
 
+    /// <inheritdoc/>
     public bool TryGetValue(T key, out long value)
     {
         return _delegate.TryGetValue(key, out value);
     }
 
+    /// <summary>
+    /// 获取或设置键的计数；读取缺失键时会插入计数零。
+    /// </summary>
     public long this[T key]
     {
         get => _delegate[key];
@@ -119,16 +151,18 @@ public class Counter<T>
 
     IEnumerable<long> IReadOnlyDictionary<T, long>.Values => _delegate.Values;
 
+    /// <inheritdoc/>
     public ICollection<T> Keys => _delegate.Keys;
 
+    /// <inheritdoc/>
     public ICollection<long> Values => _delegate.Values;
 
     /// <summary>
     /// 列举计数字典中最多的元素，返回前<c>n</c>多的。
     /// </summary>
     /// <remarks>默认降序返回全部键值</remarks>
-    /// <param name="n"></param>
-    /// <returns></returns>
+    /// <param name="n">最多返回的元素数。</param>
+    /// <returns>按计数降序排列的键值对。</returns>
     public IEnumerable<KeyValuePair<T, long>> MostCommon(ulong n = ulong.MaxValue)
     {
         var commonList = from pair in _delegate
@@ -167,7 +201,7 @@ public class Counter<T>
     /// <summary>
     /// 获得所有值的总数。
     /// </summary>
-    /// <returns></returns>
+    /// <returns>全部计数之和。</returns>
     public long Total()
     {
         return _delegate.Values.Sum();
@@ -176,7 +210,7 @@ public class Counter<T>
     /// <summary>
     /// 将所有的键依据其数量填充到一个序列中。
     /// </summary>
-    /// <returns></returns>
+    /// <returns>按正计数次数重复每个键的延迟序列。</returns>
     public IEnumerable<T> Elements()
     {
         foreach (var pair in MostCommon())
@@ -191,7 +225,7 @@ public class Counter<T>
     /// <summary>
     /// 将另一个计数器的内容合并到自身。
     /// </summary>
-    /// <param name="other"></param>
+    /// <param name="other">要合并的计数字典。</param>
     public void Update(Counter<T> other)
     {
         foreach (var pair in other)
@@ -204,6 +238,7 @@ public class Counter<T>
     /// 减去另一个计数器内的数值。
     /// </summary>
     /// <remarks>如果本身不存在某个键则会出现负数。</remarks>
+    /// <param name="other">要减去的计数字典。</param>
     public void Subtract(Counter<T> other)
     {
         foreach (var pair in other)
@@ -212,9 +247,12 @@ public class Counter<T>
         }
     }
 
+    /// <summary>
+    /// 返回每个计数取反的新计数字典，并保留键比较器。
+    /// </summary>
     public static Counter<T> operator -(Counter<T> origin)
     {
-        var result = new Counter<T>();
+        var result = new Counter<T>(origin.Comparer);
         foreach (var pair in origin)
         {
             result[pair.Key] = -pair.Value;
@@ -226,15 +264,15 @@ public class Counter<T>
     /// <summary>
     /// 作为集合的减法。
     /// </summary>
-    /// <param name="a"></param>
-    /// <param name="b"></param>
-    /// <returns></returns>
+    /// <param name="a">左操作数，其键比较器由结果保留。</param>
+    /// <param name="b">右操作数。</param>
+    /// <returns>包含双方全部键的计数差。</returns>
     public static Counter<T> operator -(Counter<T> a, Counter<T> b)
     {
-        var result = new Counter<T>();
-        foreach (var pair in a)
+        var result = new Counter<T>(a.Comparer);
+        foreach (var key in GetAllKeys(a, b))
         {
-            result[pair.Key] = pair.Value - b.GetValueOrDefault(pair.Key, 0);
+            result[key] = a.GetValueOrDefault(key, 0) - b.GetValueOrDefault(key, 0);
         }
 
         return result;
@@ -243,13 +281,13 @@ public class Counter<T>
     /// <summary>
     /// 作为集合的加法。
     /// </summary>
-    /// <param name="a"></param>
-    /// <param name="b"></param>
-    /// <returns></returns>
+    /// <param name="a">左操作数，其键比较器由结果保留。</param>
+    /// <param name="b">右操作数。</param>
+    /// <returns>包含双方全部键的计数和。</returns>
     public static Counter<T> operator +(Counter<T> a, Counter<T> b)
     {
-        var result = new Counter<T>();
-        foreach (var key in new HashSet<T>(a.Keys.Concat(b.Keys)))
+        var result = new Counter<T>(a.Comparer);
+        foreach (var key in GetAllKeys(a, b))
         {
             result[key] = a.GetValueOrDefault(key, 0) + b.GetValueOrDefault(key, 0);
         }
@@ -257,21 +295,25 @@ public class Counter<T>
         return result;
     }
 
+    /// <summary>判断左侧所有计数是否逐项大于或等于右侧，且两者不相等。</summary>
     public static bool operator >(Counter<T> a, Counter<T> b)
     {
         return a >= b && !a.Equals(b);
     }
         
+    /// <summary>判断左侧所有计数是否逐项小于或等于右侧，且两者不相等。</summary>
     public static bool operator <(Counter<T> a, Counter<T> b)
     {
         return a <= b && !a.Equals(b);
     }
         
+    /// <summary>判断左侧所有计数是否逐项大于或等于右侧。</summary>
     public static bool operator >=(Counter<T> a, Counter<T> b)
     {
         return CompareAllKeys(a, b, static (left, right) => left >= right);
     }
         
+    /// <summary>判断左侧所有计数是否逐项小于或等于右侧。</summary>
     public static bool operator <=(Counter<T> a, Counter<T> b)
     {
         return CompareAllKeys(a, b, static (left, right) => left <= right);
@@ -279,30 +321,39 @@ public class Counter<T>
 
     private static bool CompareAllKeys(Counter<T> a, Counter<T> b, Func<long, long, bool> comparer)
     {
-        var allKey = new HashSet<T>(a.Keys.Concat(b.Keys));
-        return allKey.All(key => comparer(a.GetValueOrDefault(key, 0), b.GetValueOrDefault(key, 0)));
+        return GetAllKeys(a, b).All(key => comparer(a.GetValueOrDefault(key, 0), b.GetValueOrDefault(key, 0)));
     }
 
+    private static HashSet<T> GetAllKeys(Counter<T> a, Counter<T> b)
+    {
+        var keys = new HashSet<T>(a.Keys, a.Comparer);
+        keys.UnionWith(b.Keys);
+        return keys;
+    }
+
+    /// <inheritdoc/>
     public bool Equals(Counter<T>? other)
     {
         if (other is null) return false;
         if (ReferenceEquals(this, other)) return true;
-        var allKey = new HashSet<T>(Keys.Concat(other.Keys));
-        return allKey.All(key => this.GetValueOrDefault(key, 0) == other.GetValueOrDefault(key, 0));
+        if (!Comparer.Equals(other.Comparer)) return false;
+        return GetAllKeys(this, other).All(key => this.GetValueOrDefault(key, 0) == other.GetValueOrDefault(key, 0));
     }
 
+    /// <inheritdoc/>
     public override bool Equals(object? obj)
     {
         return obj is Counter<T> other && Equals(other);
     }
 
+    /// <inheritdoc/>
     public override int GetHashCode()
     {
         var hash = 0;
         foreach (var pair in this)
         {
             if (pair.Value == 0) continue;
-            hash ^= HashCode.Combine(pair.Key, pair.Value);
+            hash ^= HashCode.Combine(Comparer.GetHashCode(pair.Key), pair.Value);
         }
 
         return hash;

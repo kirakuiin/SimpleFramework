@@ -60,4 +60,10 @@ public class TestTimeUtil
         Assert.Greater(timeSpan.TotalMilliseconds, 0);
         Assert.Greater(timeSpan.TotalDays, 365); // 至少过了一年多
     }
+
+    [Test]
+    public void TestToMsThrowsOnOverflow()
+    {
+        Assert.Throws<OverflowException>(() => TimeUtil.ToMs(int.MaxValue));
+    }
 }

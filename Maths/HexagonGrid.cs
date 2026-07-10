@@ -10,7 +10,7 @@ using System.Collections.Generic;
 /// <summary>
 /// 定义六边形网格的布局方向和变换矩阵。
 /// </summary>
-public struct HexOrientation
+public readonly struct HexOrientation
 {
     /// <summary>前向变换矩阵</summary>
     public Matrix2D Forward { get; }
@@ -19,6 +19,13 @@ public struct HexOrientation
     /// <summary>起始角度(degree)</summary>
     public double StartAngle { get; }
 
+    /// <summary>使用前向矩阵元素和起始角度创建布局方向。</summary>
+    /// <param name="f0">前向矩阵第一行第一列。</param>
+    /// <param name="f1">前向矩阵第一行第二列。</param>
+    /// <param name="f2">前向矩阵第二行第一列。</param>
+    /// <param name="f3">前向矩阵第二行第二列。</param>
+    /// <param name="startAngle">第一个顶点相对 X 轴的角度。</param>
+    /// <exception cref="InvalidOperationException">前向矩阵不可逆。</exception>
     public HexOrientation(double f0, double f1, double f2, double f3, double startAngle)
     {
         Forward = new Matrix2D(f0, f1, f2, f3);
@@ -27,12 +34,12 @@ public struct HexOrientation
     }
     
     /// <summary>尖角朝上的布局</summary>
-    public static HexOrientation Pointy = new (
+    public static HexOrientation Pointy { get; } = new(
         Math.Sqrt(3.0), Math.Sqrt(3.0) / 2.0, 0.0, 3.0 / 2.0,
         30);
 
     /// <summary>平边朝上的布局</summary>
-    public static HexOrientation Flat = new (
+    public static HexOrientation Flat { get; } = new(
         3.0 / 2.0, 0.0, Math.Sqrt(3.0) / 2.0, Math.Sqrt(3.0),
         0);
 }
@@ -69,8 +76,11 @@ public enum HexDirection
 /// </summary>
 public readonly struct Hex
 {
+    /// <summary>获取 q 轴坐标。</summary>
     public int Q { get; }
+    /// <summary>获取 r 轴坐标。</summary>
     public int R { get; }
+    /// <summary>获取 s 轴坐标。</summary>
     public int S { get; }
 
     /// <summary>
@@ -85,47 +95,61 @@ public readonly struct Hex
         Q = q;
         R = r;
         S = s;
-        if (q + r + s != 0) throw new ArgumentException("q + r + s must be 0");
+        if ((long)q + r + s != 0) throw new ArgumentException("q + r + s must be 0");
     }
 
     /// <summary>
     /// 将两个六边形坐标相加。
     /// </summary>
+    /// <exception cref="OverflowException">任一坐标运算溢出。</exception>
     public static Hex operator +(Hex a, Hex b)
     {
-        return new Hex(a.Q + b.Q, a.R + b.R, a.S + b.S);
+        checked
+        {
+            return new Hex(a.Q + b.Q, a.R + b.R, a.S + b.S);
+        }
     }
 
     /// <summary>
     /// 将两个六边形坐标相减。
     /// </summary>
+    /// <exception cref="OverflowException">任一坐标运算溢出。</exception>
     public static Hex operator -(Hex a, Hex b)
     {
-        return new Hex(a.Q - b.Q, a.R - b.R, a.S - b.S);
+        checked
+        {
+            return new Hex(a.Q - b.Q, a.R - b.R, a.S - b.S);
+        }
     }
 
     /// <summary>
     /// 将六边形坐标乘以一个系数。
     /// </summary>
+    /// <exception cref="OverflowException">任一坐标运算溢出。</exception>
     public static Hex operator *(Hex a, int k)
     {
-        return new Hex(a.Q * k, a.R * k, a.S * k);
+        checked
+        {
+            return new Hex(a.Q * k, a.R * k, a.S * k);
+        }
     }
 
     /// <summary>
     /// 将六边形坐标乘以一个系数。
     /// </summary>
+    /// <exception cref="OverflowException">任一坐标运算溢出。</exception>
     public static Hex operator *(int k, Hex a)
     {
-        return new Hex(a.Q * k, a.R * k, a.S * k);
+        return a * k;
     }
     
     /// <summary>
     /// 计算从原点(0,0,0)到当前六边形的距离。
     /// </summary>
+    /// <exception cref="OverflowException">距离超出 <see cref="int"/> 范围。</exception>
     public int Length()
     {
-        return (Math.Abs(Q) + Math.Abs(R) + Math.Abs(S)) / 2;
+        return checked((int)((Math.Abs((long)Q) + Math.Abs((long)R) + Math.Abs((long)S)) / 2));
     }
 }
 
@@ -135,16 +159,26 @@ public readonly struct Hex
 /// </summary>
 public readonly struct FractionalHex
 {
+    /// <summary>获取 q 轴坐标。</summary>
     public double Q { get; }
+    /// <summary>获取 r 轴坐标。</summary>
     public double R { get; }
+    /// <summary>获取 s 轴坐标。</summary>
     public double S { get; }
 
     /// <summary>
     /// 使用浮点坐标初始化一个六边形单元格。
     /// </summary>
-    /// <exception cref="ArgumentException">当q + r + s的四舍五入值不为0时抛出</exception>
+    /// <param name="q">q 轴坐标。</param>
+    /// <param name="r">r 轴坐标。</param>
+    /// <param name="s">s 轴坐标。</param>
+    /// <exception cref="ArgumentOutOfRangeException">任一坐标不是有限数值。</exception>
+    /// <exception cref="ArgumentException">三个有限坐标之和不在零的允许误差内。</exception>
     public FractionalHex(double q, double r, double s)
     {
+        if (!double.IsFinite(q)) throw new ArgumentOutOfRangeException(nameof(q), "坐标必须是有限数值。");
+        if (!double.IsFinite(r)) throw new ArgumentOutOfRangeException(nameof(r), "坐标必须是有限数值。");
+        if (!double.IsFinite(s)) throw new ArgumentOutOfRangeException(nameof(s), "坐标必须是有限数值。");
         Q = q;
         R = r;
         S = s;
@@ -208,8 +242,19 @@ public readonly struct HexLayout
     /// </para>
     /// </param>
     /// <param name="origin">布局的原点（屏幕坐标）</param>
+    /// <exception cref="ArgumentOutOfRangeException">大小含零或非有限轴，或原点含非有限坐标。</exception>
     public HexLayout(HexOrientation hexOrientation, Point size, Point origin)
     {
+        if (!double.IsFinite(size.X) || !double.IsFinite(size.Y) || size.X == 0 || size.Y == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(size), "六边形大小的两个轴必须是有限非零数值。");
+        }
+
+        if (!double.IsFinite(origin.X) || !double.IsFinite(origin.Y))
+        {
+            throw new ArgumentOutOfRangeException(nameof(origin), "布局原点必须使用有限数值。");
+        }
+
         HexOrientation = hexOrientation;
         Origin = origin;
         Size = size;
@@ -222,6 +267,8 @@ public readonly struct HexLayout
     /// <summary>
     /// 将六边形坐标转换为屏幕坐标。
     /// </summary>
+    /// <param name="h">六边形坐标。</param>
+    /// <returns>对应屏幕坐标。</returns>
     public Point HexToPixel(Hex h)
     {
         var point = _transformMatrix.Transform(new Point(h.Q, h.R));
@@ -231,6 +278,8 @@ public readonly struct HexLayout
     /// <summary>
     /// 将屏幕坐标转换为六边形坐标。
     /// </summary>
+    /// <param name="p">屏幕坐标。</param>
+    /// <returns>最近的六边形坐标。</returns>
     public Hex PixelToHex(Point p)
     {
         var pt = new Point(p.X - Origin.X, p.Y - Origin.Y);
@@ -242,8 +291,12 @@ public readonly struct HexLayout
     /// <summary>
     /// 计算六边形顶点相对于中心的偏移。
     /// </summary>
+    /// <param name="direction">顶点方向。</param>
+    /// <returns>顶点偏移。</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="direction"/> 不是有效方向。</exception>
     public Point HexCornerOffset(HexDirection direction)
     {
+        ValidateDirection(direction);
         var angle = MathUtils.ToRadians(HexOrientation.StartAngle - 60 * (int)direction);
         return new Point(Math.Cos(angle)*Size.X, Math.Sin(angle)*Size.Y);
     }
@@ -263,6 +316,14 @@ public readonly struct HexLayout
             corners.Add(new Point(center.X + offset.X, center.Y + offset.Y));
         }
         return corners;
+    }
+
+    private static void ValidateDirection(HexDirection direction)
+    {
+        if ((uint)direction >= (uint)Directions.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(direction));
+        }
     }
 }
 
@@ -296,7 +357,10 @@ public static class HexExtensions
     /// <returns>旋转后的六边形</returns>
     public static Hex GetRotateLeft(this Hex h)
     {
-        return new Hex(-h.S, -h.Q, -h.R);
+        checked
+        {
+            return new Hex(-h.S, -h.Q, -h.R);
+        }
     }
 
     /// <summary>
@@ -306,7 +370,10 @@ public static class HexExtensions
     /// <returns>旋转后的六边形</returns>
     public static Hex GetRotateRight(this Hex h)
     {
-        return new Hex(-h.R, -h.S, -h.Q);
+        checked
+        {
+            return new Hex(-h.R, -h.S, -h.Q);
+        }
     }
 
     /// <summary>
@@ -315,9 +382,10 @@ public static class HexExtensions
     /// <param name="h">当前六边形</param>
     /// <param name="direction">方向</param>
     /// <returns>相邻的六边形</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="direction"/> 不是有效方向。</exception>
     public static Hex GetNeighbor(this Hex h, HexDirection direction)
     {
-        return h + Directions[(int)direction];
+        return h + Directions[GetDirectionIndex(direction)];
     }
 
     /// <summary>
@@ -326,9 +394,10 @@ public static class HexExtensions
     /// <param name="h">当前六边形</param>
     /// <param name="direction">方向</param>
     /// <returns>对角线方向的六边形</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="direction"/> 不是有效方向。</exception>
     public static Hex DiagonalNeighbor(this Hex h, HexDirection direction)
     {
-        return h + Diagonals[(int)direction];
+        return h + Diagonals[GetDirectionIndex(direction)];
     }
 
     /// <summary>
@@ -398,5 +467,15 @@ public static class HexExtensions
             l.Q * (1.0 - t) + r.Q * t,
             l.R * (1.0 - t) + r.R * t,
             l.S * (1.0 - t) + r.S * t);
+    }
+
+    private static int GetDirectionIndex(HexDirection direction)
+    {
+        if ((uint)direction >= (uint)Directions.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(direction));
+        }
+
+        return (int)direction;
     }
 }

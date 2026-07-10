@@ -156,4 +156,43 @@ public class TestCounter
         Assert.IsFalse(left >= right);
         Assert.IsFalse(left <= right);
     }
+
+    [Test]
+    public void TestSubtractIncludesRightOnlyKeys()
+    {
+        var left = new Counter<string> { ["left"] = 3 };
+        var right = new Counter<string> { ["right"] = 2 };
+
+        var result = left - right;
+
+        Assert.AreEqual(3, result["left"]);
+        Assert.AreEqual(-2, result["right"]);
+    }
+
+    [Test]
+    public void TestCopyAndOperatorsPreserveComparer()
+    {
+        var left = new Counter<string>(StringComparer.OrdinalIgnoreCase);
+        left["Alpha"] = 2;
+        var copy = new Counter<string>(left);
+        copy["ALPHA"]++;
+
+        var right = new Counter<string>(StringComparer.OrdinalIgnoreCase);
+        right["Beta"] = 4;
+        var sum = left + right;
+        var difference = left - right;
+        sum["ALPHA"]++;
+        difference["BETA"]--;
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual(1, copy.Count);
+            Assert.AreEqual(3, copy["alpha"]);
+            Assert.AreSame(StringComparer.OrdinalIgnoreCase, copy.Comparer);
+            Assert.AreEqual(2, sum.Count);
+            Assert.AreEqual(3, sum["alpha"]);
+            Assert.AreEqual(2, difference.Count);
+            Assert.AreEqual(-5, difference["beta"]);
+        });
+    }
 }

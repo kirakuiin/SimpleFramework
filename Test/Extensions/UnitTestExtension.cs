@@ -14,6 +14,13 @@ public class TestString
         var str = "mi";
         Assert.AreEqual("mimi", str.Repeat(2));
     }
+
+    [Test]
+    public void TestRepeatRejectsNegativeCount()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => "mi".Repeat(-1));
+        Assert.AreEqual("count", exception!.ParamName);
+    }
 }
 
 [TestFixture]
@@ -89,5 +96,20 @@ public class TestRandom
         
         Assert.AreNotEqual(result[0], result[1]);
         Assert.AreNotEqual(result[1], result[2]);
+    }
+
+    [Test]
+    public void TestChoiceRejectsEmptyList()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => new Random(1).Choice(new List<int>()));
+        Assert.AreEqual("list", exception!.ParamName);
+    }
+
+    [Test]
+    public void TestSampleRejectsNegativeCount()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => new Random(1).Sample(new[] { 1, 2, 3 }, -1));
+        Assert.AreEqual("k", exception!.ParamName);
     }
 }

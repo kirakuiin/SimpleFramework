@@ -8,7 +8,7 @@ namespace SimpleFramework.Utility;
 /// </summary>
 public static class MiscUtil
 {
-    private static ConcurrentDictionary<Type, ulong> _typeHashCaches = new ();
+    private static readonly ConcurrentDictionary<Type, ulong> _typeHashCaches = new();
     
     /// <summary>
     /// 获得类型的唯一名称
@@ -62,7 +62,9 @@ public static class MiscUtil
     /// <summary>
     /// 生成一个64位hash值
     /// </summary>
-    /// <returns></returns>
+    /// <param name="data">要按其 JSON 字节计算哈希的数据。</param>
+    /// <typeparam name="T">数据类型。</typeparam>
+    /// <returns>数据的 FNV-1a 64 位哈希。</returns>
     public static ulong ComputeHash<T>(T data)
     {
         var bytes = SerializeUtil.SerializeBytes(data);

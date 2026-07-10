@@ -7,11 +7,17 @@ namespace SimpleFramework.Utility;
 /// </summary>
 public enum LogLevel
 {
+    /// <summary>不筛选任何日志。</summary>
     NoTest = 0,
+    /// <summary>调试信息。</summary>
     Debug = 10,
+    /// <summary>普通信息。</summary>
     Info = 20,
+    /// <summary>警告信息。</summary>
     Warning = 30,
+    /// <summary>错误信息。</summary>
     Error = 40,
+    /// <summary>严重错误信息。</summary>
     Critical = 50,
 }
 
@@ -139,6 +145,7 @@ public class ConsoleHandler : IHandler
         Console.ForegroundColor = originalColor;
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
     }
@@ -181,6 +188,7 @@ public class FileHandler : IHandler
     /// <summary>
     /// 将日志记录写入文件。
     /// </summary>
+    /// <param name="record">日志记录。</param>
     public void Emit(LogRecord record)
     {
         if (record.Level < Level) return;
@@ -192,6 +200,7 @@ public class FileHandler : IHandler
         }
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
         Dispose(true);

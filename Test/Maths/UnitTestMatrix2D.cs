@@ -55,4 +55,16 @@ public class TestMatrix2D
 
         Assert.Throws<InvalidOperationException>(() => matrix.Inverse());
     }
+
+    [Test]
+    public void TestNonFiniteMatrixThrows()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<InvalidOperationException>(
+                () => new Matrix2D(double.NaN, 0, 0, 1).Inverse());
+            Assert.Throws<InvalidOperationException>(
+                () => new Matrix2D(double.PositiveInfinity, 0, 0, 1).Inverse());
+        });
+    }
 }

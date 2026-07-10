@@ -8,14 +8,14 @@ namespace SimpleFramework.Utility;
 /// </summary>
 public static class SerializeUtil
 {
-    private static JsonSerializerOptions DefaultOptions => new() {IncludeFields = true};
+    private static readonly JsonSerializerOptions DefaultOptions = new() { IncludeFields = true };
     
     /// <summary>
-    /// 序列化对象
+    /// 将对象序列化为 JSON 字符串。
     /// </summary>
-    /// <param name="obj"></param>
-    /// <param name="options"></param>
-    /// <returns>返回字符串</returns>
+    /// <param name="obj">要序列化的对象。</param>
+    /// <param name="options">序列化选项；为空时包含公共字段。</param>
+    /// <returns>JSON 字符串。</returns>
     public static string Serialize<T>(T obj, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
@@ -23,66 +23,66 @@ public static class SerializeUtil
     }
     
     /// <summary>
-    /// 序列化对象
+    /// 将对象直接序列化为 UTF-8 JSON 字节。
     /// </summary>
-    /// <param name="obj"></param>
-    /// <param name="options"></param>
-    /// <returns>返回字节流</returns>
+    /// <param name="obj">要序列化的对象。</param>
+    /// <param name="options">序列化选项；为空时包含公共字段。</param>
+    /// <returns>UTF-8 JSON 字节。</returns>
     public static byte[] SerializeBytes<T>(T obj, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
-        return Encoding.UTF8.GetBytes(Serialize(obj, options));
+        return JsonSerializer.SerializeToUtf8Bytes(obj, options);
     }
     
     /// <summary>
-    /// 反序列化对象
+    /// 将 JSON 字符串反序列化为指定类型。
     /// </summary>
-    /// <param name="bytes"></param>
-    /// <param name="options"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
-    public static T Deserialize<T>(string bytes, JsonSerializerOptions? options = null)
+    /// <param name="bytes">JSON 字符串。</param>
+    /// <param name="options">反序列化选项；为空时包含公共字段。</param>
+    /// <typeparam name="T">目标类型。</typeparam>
+    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回默认值。</returns>
+    public static T? Deserialize<T>(string bytes, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
-        return JsonSerializer.Deserialize<T>(bytes, options)!;
+        return JsonSerializer.Deserialize<T>(bytes, options);
     }
 
     /// <summary>
-    /// 反序列化字符串
+    /// 按运行时类型反序列化 JSON 字符串。
     /// </summary>
-    /// <param name="bytes"></param>
-    /// <param name="type"></param>
-    /// <param name="options"></param>
-    /// <returns></returns>
-    public static object Deserialize(string bytes, Type type, JsonSerializerOptions? options = null)
+    /// <param name="bytes">JSON 字符串。</param>
+    /// <param name="type">目标运行时类型。</param>
+    /// <param name="options">反序列化选项；为空时包含公共字段。</param>
+    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回空。</returns>
+    public static object? Deserialize(string bytes, Type type, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
-        return JsonSerializer.Deserialize(bytes, returnType:type, options:options)!;
+        return JsonSerializer.Deserialize(bytes, returnType: type, options: options);
     }
     
     /// <summary>
-    /// 反序列化对象
+    /// 将 UTF-8 JSON 字节反序列化为指定类型。
     /// </summary>
-    /// <param name="bytes"></param>
-    /// <param name="options"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
-    public static T Deserialize<T>(byte[] bytes, JsonSerializerOptions? options = null)
+    /// <param name="bytes">UTF-8 JSON 字节。</param>
+    /// <param name="options">反序列化选项；为空时包含公共字段。</param>
+    /// <typeparam name="T">目标类型。</typeparam>
+    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回默认值。</returns>
+    public static T? Deserialize<T>(byte[] bytes, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
-        return JsonSerializer.Deserialize<T>(Encoding.UTF8.GetString(bytes), options:options)!;
+        return JsonSerializer.Deserialize<T>(bytes, options);
     }
     
     /// <summary>
-    /// 根据指定类型反序列化字节流
+    /// 按运行时类型反序列化 UTF-8 JSON 字节。
     /// </summary>
-    /// <param name="bytes"></param>
-    /// <param name="type"></param>
-    /// <param name="options"></param>
-    /// <returns></returns>
-    public static object Deserialize(byte[] bytes, Type type, JsonSerializerOptions? options = null)
+    /// <param name="bytes">UTF-8 JSON 字节。</param>
+    /// <param name="type">目标运行时类型。</param>
+    /// <param name="options">反序列化选项；为空时包含公共字段。</param>
+    /// <returns>反序列化结果；JSON 为 <see langword="null"/> 时返回空。</returns>
+    public static object? Deserialize(byte[] bytes, Type type, JsonSerializerOptions? options = null)
     {
         options ??= DefaultOptions;
-        return Deserialize(Encoding.UTF8.GetString(bytes), type, options);
+        return JsonSerializer.Deserialize(bytes, type, options);
     }
 }

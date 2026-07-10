@@ -5,9 +5,14 @@
 /// </summary>
 public struct Point
 {
+    /// <summary>获取 X 坐标。</summary>
     public double X { get; }
+    /// <summary>获取 Y 坐标。</summary>
     public double Y { get; }
 
+    /// <summary>创建二维点。</summary>
+    /// <param name="x">X 坐标。</param>
+    /// <param name="y">Y 坐标。</param>
     public Point(double x, double y)
     {
         X = x;

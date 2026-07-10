@@ -1,15 +1,19 @@
 ﻿namespace SimpleFramework.Utility;
 
+/// <summary>
+/// 提供 Unix 时间与常用时间单位转换方法。
+/// </summary>
 public static class TimeUtil
 {
     /// <summary>
     /// 将秒转为毫秒
     /// </summary>
-    /// <param name="seconds"></param>
-    /// <returns></returns>
+    /// <param name="seconds">秒数。</param>
+    /// <returns>对应的毫秒数。</returns>
+    /// <exception cref="OverflowException">转换结果超出 <see cref="int"/> 范围。</exception>
     public static int ToMs(int seconds)
     {
-        return seconds * 1000;
+        return checked(seconds * 1000);
     }
 
     /// <summary>

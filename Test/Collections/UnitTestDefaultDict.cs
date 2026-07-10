@@ -1,4 +1,6 @@
 ﻿using NUnit.Framework;
+using System;
+using System.Collections.Generic;
 using SimpleFramework.Collections;
 
 namespace Test.Collections;
@@ -75,5 +77,27 @@ public class TestDefaultDict
         
         _dict.Clear();
         Assert.AreEqual(0, _dict.Count);
+    }
+
+    [Test]
+    public void TestUsesSuppliedComparer()
+    {
+        var factoryCalls = 0;
+        var dict = new DefaultDict<string, int>(() => ++factoryCalls, StringComparer.OrdinalIgnoreCase);
+
+        Assert.AreEqual(1, dict["Key"]);
+        Assert.AreEqual(1, dict["KEY"]);
+        Assert.AreEqual(1, dict.Count);
+        Assert.AreEqual(1, factoryCalls);
+        Assert.AreSame(StringComparer.OrdinalIgnoreCase, dict.Comparer);
+    }
+
+    [Test]
+    public void TestConstructorRejectsNullFactory()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(
+            () => new DefaultDict<string, int>(null!));
+
+        Assert.AreEqual("initCallback", exception!.ParamName);
     }
 }

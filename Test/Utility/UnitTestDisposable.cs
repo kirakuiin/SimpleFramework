@@ -70,6 +70,50 @@ public class TestDisposable
 
         Assert.DoesNotThrow(() => group.Add(new CustomDisposable()));
     }
+
+    [Test]
+    public void TestDisposableGroupDisposesAllChildrenWhenOneThrows()
+    {
+        var group = new DisposableGroup();
+        var throwing = new ThrowingDisposable();
+        var tracking = new CustomDisposable();
+        group.Add(throwing);
+        group.Add(tracking);
+
+        var exception = Assert.Throws<AggregateException>(() => group.Dispose());
+
+        Assert.Multiple(() =>
+        {
+            Assert.AreEqual(1, exception!.InnerExceptions.Count);
+            Assert.That(exception.InnerExceptions[0], Is.TypeOf<InvalidOperationException>());
+            Assert.AreEqual(1, throwing.DisposeCallCount);
+            Assert.AreEqual(1, tracking.DisposeCallCount);
+        });
+        Assert.DoesNotThrow(() => group.Dispose());
+    }
+
+    [Test]
+    public void TestDisposableGroupDisposesItemsAddedAfterDisposal()
+    {
+        var group = new DisposableGroup();
+        var disposable = new CustomDisposable();
+        group.Dispose();
+
+        group.Add(disposable);
+
+        Assert.AreEqual(1, disposable.DisposeCallCount);
+    }
+
+    private sealed class ThrowingDisposable : IDisposable
+    {
+        public int DisposeCallCount { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeCallCount++;
+            throw new InvalidOperationException("expected disposal failure");
+        }
+    }
 }
 
 public class CustomDisposable : Disposable
