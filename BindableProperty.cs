@@ -60,9 +60,9 @@ public class BindableProperty<T> : IBindableProperty<T>
 
     private Func<T, T, bool> _comparer = EqualityComparer<T>.Default.Equals;
 
-    private Action<T, T> OnValueChanged { get; set; } = (_, _) => {};
+    private Action<T, T>? OnValueChanged { get; set; } = (_, _) => {};
 
-    public BindableProperty(T initialValue = default) => _value = initialValue;
+    public BindableProperty(T initialValue = default!) => _value = initialValue;
 
     public BindableProperty<T> WithComparer(Func<T, T, bool> comparer)
     {
@@ -79,7 +79,7 @@ public class BindableProperty<T> : IBindableProperty<T>
 
             var prev = GetValue();
             SetValue(value);
-            OnValueChanged.Invoke(prev, Value);
+            OnValueChanged?.Invoke(prev, Value);
         }
     }
     
@@ -122,9 +122,9 @@ public class BindableProperty<T> : IBindableProperty<T>
 /// <typeparam name="T"></typeparam>
 internal class BindablePropertyUnRegister<T> : IUnRegister
 {
-    private IReadonlyBindableProperty<T> _property;
+    private IReadonlyBindableProperty<T>? _property;
    
-    private Action<T, T> _onValueChanged;
+    private Action<T, T>? _onValueChanged;
     
     public BindablePropertyUnRegister(IReadonlyBindableProperty<T> property, Action<T, T> onValueChanged)
     {
@@ -134,7 +134,7 @@ internal class BindablePropertyUnRegister<T> : IUnRegister
     
     public void UnRegister()
     {
-        if (_property == null) return;
+        if (_property == null || _onValueChanged == null) return;
         _property.UnRegister(_onValueChanged);
         _property = null;
         _onValueChanged = null;

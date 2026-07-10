@@ -13,12 +13,12 @@ public interface IDomain
     /// <para>当 System、Model、Utility 在当前作用域中无法找到时，会尝试去父作用域查找。</para>
     /// </summary>
     /// <param name="domain">父<see cref="IDomain"/></param>
-    void SetParent(IDomain domain);
+    void SetParent(IDomain? domain);
     
     /// <summary>
     /// 获得父Domain
     /// </summary>
-    IDomain Parent { get; }
+    IDomain? Parent { get; }
     
     /// <summary>
     /// 添加一个新的子域
@@ -83,7 +83,7 @@ public interface IDomain
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="ISystem"/></returns>
-    T GetSystem<T>() where T : class, ISystem;
+    T? GetSystem<T>() where T : class, ISystem;
 
     /// <summary>
     /// 尝试在域中获取系统。
@@ -91,7 +91,7 @@ public interface IDomain
     /// <param name="system">找到的系统；未找到时为 null。</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>找到系统时返回 true。</returns>
-    bool TryGetSystem<T>(out T system) where T : class, ISystem;
+    bool TryGetSystem<T>(out T? system) where T : class, ISystem;
 
     /// <summary>
     /// 在域中获取系统，未找到时抛出异常。
@@ -106,7 +106,7 @@ public interface IDomain
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IModel"/></returns>
-    T GetModel<T>() where T : class, IModel;
+    T? GetModel<T>() where T : class, IModel;
 
     /// <summary>
     /// 尝试在域中获取模型。
@@ -114,7 +114,7 @@ public interface IDomain
     /// <param name="model">找到的模型；未找到时为 null。</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>找到模型时返回 true。</returns>
-    bool TryGetModel<T>(out T model) where T : class, IModel;
+    bool TryGetModel<T>(out T? model) where T : class, IModel;
 
     /// <summary>
     /// 在域中获取模型，未找到时抛出异常。
@@ -129,7 +129,7 @@ public interface IDomain
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IUtility"/></returns>
-    T GetUtility<T>() where T : class, IUtility;
+    T? GetUtility<T>() where T : class, IUtility;
 
     /// <summary>
     /// 尝试在域中获取功能组件。
@@ -137,7 +137,7 @@ public interface IDomain
     /// <param name="utility">找到的功能组件；未找到时为 null。</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>找到功能组件时返回 true。</returns>
-    bool TryGetUtility<T>(out T utility) where T : class, IUtility;
+    bool TryGetUtility<T>(out T? utility) where T : class, IUtility;
 
     /// <summary>
     /// 在域中获取功能组件，未找到时抛出异常。

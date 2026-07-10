@@ -10,7 +10,7 @@ public static class ModelReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IModel"/></returns>
-    public static T GetModel<T>(this IModelAccessible self) where T : class, IModel =>
+    public static T? GetModel<T>(this IModelAccessible self) where T : class, IModel =>
         self.Domain.GetModel<T>();
 
     /// <summary>
@@ -43,7 +43,7 @@ public static class SystemReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="ISystem"/></returns>
-    public static T GetSystem<T>(this ISystemAccessible self) where T : class, ISystem =>
+    public static T? GetSystem<T>(this ISystemAccessible self) where T : class, ISystem =>
         self.Domain.GetSystem<T>();
 
     /// <summary>
@@ -65,7 +65,7 @@ public static class UtilityReadableExtensions
     /// <param name="self"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IUtility"/></returns>
-    public static T GetUtility<T>(this IUtilityAccessible self) where T : class, IUtility =>
+    public static T? GetUtility<T>(this IUtilityAccessible self) where T : class, IUtility =>
         self.Domain.GetUtility<T>();
 
     /// <summary>

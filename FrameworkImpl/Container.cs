@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace SimpleFramework.FrameworkImpl;
@@ -16,6 +17,7 @@ public class Container
     /// <param name="instance">组件实例</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>同一键已注册的旧实例；不存在时返回默认值。</returns>
+    [return: MaybeNull]
     public T Register<T>(T instance)
     {
         Debug.Assert(instance != null, nameof(instance) + " != null");
@@ -31,9 +33,9 @@ public class Container
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns>组件实例</returns>
-    public T Get<T>() where T : class
+    public T? Get<T>() where T : class
     {
-        return TryGet<T>(out var instance) ? instance : null!;
+        return TryGet<T>(out var instance) ? instance : null;
     }
 
     /// <summary>
@@ -41,7 +43,7 @@ public class Container
     /// </summary>
     /// <param name="key">注册键类型</param>
     /// <returns>组件实例</returns>
-    public object Get(Type key)
+    public object? Get(Type key)
     {
         return _instances.GetValueOrDefault(key);
     }
@@ -52,7 +54,7 @@ public class Container
     /// <param name="instance">组件实例</param>
     /// <typeparam name="T"></typeparam>
     /// <returns>是否存在组件</returns>
-    public bool TryGet<T>(out T instance) where T : class
+    public bool TryGet<T>(out T? instance) where T : class
     {
         if (_instances.TryGetValue(typeof(T), out var value) && value is T result)
         {
@@ -60,7 +62,7 @@ public class Container
             return true;
         }
 
-        instance = null!;
+        instance = null;
         return false;
     }
 

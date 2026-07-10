@@ -5,7 +5,7 @@
 /// </summary>
 public abstract class AbstractCommand : ICommand
 {
-    public IDomain Domain { get; private set; }
+    public IDomain Domain { get; private set; } = default!;
 
     public void SetDomain(IDomain domain) => Domain = domain;
 
@@ -16,7 +16,7 @@ public abstract class AbstractCommand : ICommand
 
 public abstract class AbstractCommand<TResult> : ICommand<TResult>
 {
-    public IDomain Domain { get; private set; } = null!;
+    public IDomain Domain { get; private set; } = default!;
 
     public void SetDomain(IDomain domain) => Domain = domain;
 

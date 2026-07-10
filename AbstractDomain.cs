@@ -11,9 +11,9 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     private readonly Container _container = new();
     
-    private static T _domain;
+    private static T? _domain;
 
-    private WeakReference<IDomain> _parent;
+    private WeakReference<IDomain>? _parent;
     
     private readonly List<IDomain> _children = new();
 
@@ -30,7 +30,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// 获取对象，如果对象不存在则返回null
     /// </summary>
     /// <returns></returns>
-    public static T GetInstance() => _domain;
+    public static T? GetInstance() => _domain;
     
     /// <summary>
     /// 创建一个新的独立域实例，并立即初始化。
@@ -109,9 +109,9 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     
     protected virtual void UnInit() {}
 
-    public IDomain Parent => _parent?.TryGetTarget(out var parent) == true ? parent : null;
+    public IDomain? Parent => _parent?.TryGetTarget(out var parent) == true ? parent : null;
 
-    public void SetParent(IDomain parent)
+    public void SetParent(IDomain? parent)
     {
         if (ReferenceEquals(Parent, parent))
         {
@@ -141,7 +141,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// </summary>
     /// <param name="domain"></param>
     /// <returns></returns>
-    private bool _CheckCycle(IDomain domain)
+    private bool _CheckCycle(IDomain? domain)
     {
         if (domain is null) return false;
         if (ReferenceEquals(this, domain)) return true;
@@ -313,7 +313,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         return GetRegisteredConstructables().Any(component => ReferenceEquals(component, constructable));
     }
 
-    public TSystem GetSystem<TSystem>() where TSystem : class, ISystem
+    public TSystem? GetSystem<TSystem>() where TSystem : class, ISystem
     {
         var result = _container.Get<TSystem>();
         if (result != null) return result;
@@ -327,7 +327,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <param name="system">找到的系统；未找到时为 null。</param>
     /// <typeparam name="TSystem"></typeparam>
     /// <returns>找到系统时返回 true。</returns>
-    public bool TryGetSystem<TSystem>(out TSystem system) where TSystem : class, ISystem
+    public bool TryGetSystem<TSystem>(out TSystem? system) where TSystem : class, ISystem
     {
         system = GetSystem<TSystem>();
         return system != null;
@@ -346,7 +346,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         throw new NullReferenceException($"System not found: {typeof(TSystem).FullName} in {GetType().FullName}.");
     }
 
-    public TModel GetModel<TModel>() where TModel : class, IModel
+    public TModel? GetModel<TModel>() where TModel : class, IModel
     {
         var result = _container.Get<TModel>();
         if (result != null) return result;
@@ -360,7 +360,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <param name="model">找到的模型；未找到时为 null。</param>
     /// <typeparam name="TModel"></typeparam>
     /// <returns>找到模型时返回 true。</returns>
-    public bool TryGetModel<TModel>(out TModel model) where TModel : class, IModel
+    public bool TryGetModel<TModel>(out TModel? model) where TModel : class, IModel
     {
         model = GetModel<TModel>();
         return model != null;
@@ -379,7 +379,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
         throw new NullReferenceException($"Model not found: {typeof(TModel).FullName} in {GetType().FullName}.");
     }
 
-    public TUtility GetUtility<TUtility>() where TUtility : class, IUtility
+    public TUtility? GetUtility<TUtility>() where TUtility : class, IUtility
     {
         var result = _container.Get<TUtility>();
         if (result != null) return result;
@@ -393,7 +393,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <param name="utility">找到的功能组件；未找到时为 null。</param>
     /// <typeparam name="TUtility"></typeparam>
     /// <returns>找到功能组件时返回 true。</returns>
-    public bool TryGetUtility<TUtility>(out TUtility utility) where TUtility : class, IUtility
+    public bool TryGetUtility<TUtility>(out TUtility? utility) where TUtility : class, IUtility
     {
         utility = GetUtility<TUtility>();
         return utility != null;
