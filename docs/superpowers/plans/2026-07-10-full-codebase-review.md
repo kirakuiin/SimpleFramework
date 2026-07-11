@@ -473,6 +473,34 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [ ] Add `TestExitCallbackCannotReenterTransition`, where an exit callback catches the exception from dispatching a second transition and records it; assert the outer transition reaches its intended target and the nested target is never entered. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestExitCallbackCannotReenterTransition"`; expect failure because the nested transition succeeds before being silently overwritten.
 - [ ] Track the state-change lifecycle scope and make `Dispatch` throw `InvalidOperationException` while entry or exit callbacks are running, resetting the guard in `finally`; document the reentrancy contract. Rerun the focused command; expect the nested transition to be rejected without corrupting the outer transition.
 
+#### Task 3 Review Repair K: Reject activation changes reentered from lifecycle callbacks
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestTransitionExitCannotDeactivateMachine` and `TestDeactivationExitCannotReactivateMachine`. In each exit callback, capture the `InvalidOperationException` from reentrant `SetActive`; assert the outer operation completes atomically, with one exit callback and a consistent `IsActive`/`CurrentState` pair. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionExitCannotDeactivateMachine|FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitCannotReactivateMachine"`; expect failures because `SetActive` currently mutates lifecycle state without consulting the transition guard.
+- [ ] Check the lifecycle guard at the start of `SetActive`, before equality checks or mutation, and wrap both activation and deactivation lifecycle callbacks in the same `try/finally` guard used by transitions. Rerun the focused command; expect reentrant calls to fail before mutation while outer operations finish in a consistent state.
+
+#### Task 3 Review Repair L: Validate child states before hierarchy mutation
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestAddNullChildDoesNotCreateHierarchy`, expecting `ArgumentNullException` naming `subState` and no child state machine, and `TestAddForeignChildPreservesOriginalHierarchy`, attempting to attach an already-owned nested child elsewhere and asserting its owner, depth, original-parent event propagation, and target parent remain unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddNullChildDoesNotCreateHierarchy|FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddForeignChildPreservesOriginalHierarchy"`; expect failures because the method creates hierarchy state or rewrites the parent reference before validation.
+- [ ] Validate null and ownership before creating `ChildrenStateMachine` or assigning `_parentStateRef`; then attach the child only after `StateMachine.AddState` succeeds. Document parameters and exceptions in Chinese. Rerun the focused command; expect both failures to leave hierarchy and propagation unchanged.
+
+#### Task 3 Review Repair M: Prove object-pool return rollback on callback failure
+
+**Files:** `Patterns/ObjectPool.cs`, `Test/Patterns/UnitTestObjectPool.cs`
+
+- [ ] Add `TestConfiguredOnReturnFailureCanRetry` and `TestListenerOnReturnFailureCanRetry`, asserting a failed return leaves `Count` at zero and permits the same reference to be returned successfully after the callback stops throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestObjectPool.TestConfiguredOnReturnFailureCanRetry|FullyQualifiedName~Test.Patterns.TestObjectPool.TestListenerOnReturnFailureCanRetry"`; characterize the current implementation without calling a passing run RED.
+- [ ] Temporarily isolate the regression by removing membership rollback from the catch path, run the same focused command and require both tests to fail as duplicate returns, restore the rollback, then rerun and require both tests to pass. Commit no production change unless the characterization reveals a defect.
+
+#### Task 3 Review Repair N: Correct state-machine XML ownership contracts
+
+**Files:** `Patterns/StateMachine.cs`
+
+- [ ] Move the `toState`, event-name, and ownership exception documentation from `AddEventHandler` to `AddTransition`; remove the nonexistent parameter reference and give `AddEventHandler`, `SetActive`, and touched child-state APIs accurate Chinese parameter, return, and exception contracts.
+- [ ] Run the Release solution build and source-quality fixture; expect zero warnings/errors and the source-quality test to pass.
+
 ### Task 4: ECS
 
 **Files:**

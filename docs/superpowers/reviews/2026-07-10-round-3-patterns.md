@@ -34,16 +34,24 @@
 - **Retained:** object pools accept objects not originally created by the pool, matching existing public usage; only duplicate references already in the pool are rejected.
 - **Retained:** message handler exceptions propagate directly. Pending subscription mutations are committed when the outermost publication frame exits.
 - **Retained:** Blackboard notifications already run outside its lock. Local reads may delegate to a parent while holding the child read lock, but no production path acquires those locks in reverse order; no lock change was justified.
+- **Independent review — Important, fixed:** `SetActive` did not share the lifecycle reentrancy guard, allowing active/`CurrentState` pairs to become inconsistent from exit callbacks.
+- **Independent review — Important, fixed:** child-state attachment mutated `ChildrenStateMachine` and `_parentStateRef` before null/ownership validation completed.
+- **Independent review — Normal, verified:** object-pool callback rollback was implemented but lacked direct regression evidence for configured and listener callbacks.
+- **Independent review — Documentation, fixed:** transition ownership exceptions were attached to `AddEventHandler`, including a nonexistent `toState` parameter reference.
 
 ## Changes
 
-- Appended Repairs A–J to the approved implementation plan before each production behavior edit.
+- Appended Repairs A–N to the approved implementation plan before each production behavior edit.
 - Publish singleton instances only after successful initialization and reset initialization status after callback failure.
 - Track pooled references by identity and roll back membership if return callbacks fail.
 - Make message dispatch depth-aware, apply mutations at stable boundaries, stop safely on disposal, and guard buffered state before mutation.
 - Enforce state ownership, use caller-specific argument/state exceptions, reject lifecycle reentrancy, unwind child states first, and remove the LINQ allocation from dispatch.
 - Reject null services at registration.
 - Added 11 tests, increasing the Patterns fixture count from 84 to 95.
+- Added 6 independent-review tests, increasing the Patterns fixture count from 95 to 101.
+- Applied one lifecycle guard consistently to `Dispatch` and `SetActive`, with rejection before equality checks or state mutation and `try/finally` reset around entry/exit callbacks.
+- Validated child null/ownership before creating a hierarchy or assigning a parent, while retaining idempotent addition to the same child state machine.
+- Proved pool rollback by temporarily isolating the missing membership removal: both retry tests failed, then passed after restoring the production repair; no net pool production edit was required.
 
 ## Verification
 
@@ -54,7 +62,15 @@
 - Release solution build: succeeded with 0 warnings and 0 errors.
 - Source-quality fixture: 1 passed, 0 failed, 0 skipped.
 - `git diff --check`: exit 0; only Git line-ending conversion notices were emitted.
+- Independent-review focused RED: 4 state/hierarchy failures and 2 passing pool characterizations across 6 selected tests.
+- Pool isolated regression: 2 failed with rollback removed; restored GREEN: 2 passed.
+- Independent-review state/hierarchy GREEN: 4 passed, 0 failed, 0 skipped.
+- Corrected focused final after review: 101 passed, 0 failed, 0 skipped.
+- Full `Test/Test.csproj` after review: 696 passed, 0 failed, 0 skipped.
+- Release solution build after review: succeeded with 0 warnings and 0 errors.
+- Source-quality fixture after review: 1 passed, 0 failed, 0 skipped.
+- `git diff --check` after review: exit 0; only Git line-ending conversion notices were emitted.
 
 ## Independent Review
 
-Not dispatched, as explicitly required by the Task 3 assignment. The round is prepared as one reviewable commit from base `e872be89b389234ef110ec2ab84417d088534cf2`.
+Independent review of commit `4c9033a9499fb83160fb515dceaee88d68404396` reported four findings. All were resolved: lifecycle reentrancy and pre-mutation child validation received failing regression tests and production fixes; pool rollback received isolated fail/pass regression proof; XML ownership contracts were moved to the correct method. No further reviewer was dispatched, as explicitly required.

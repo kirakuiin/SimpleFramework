@@ -23,6 +23,7 @@ public class TestObjectPool
     {
         public bool OnGetCalled { get; private set; }
         public bool OnReturnCalled { get; private set; }
+        public bool ThrowOnReturn { get; set; }
 
         public void OnGet()
         {
@@ -32,6 +33,10 @@ public class TestObjectPool
         public void OnReturn()
         {
             OnReturnCalled = true;
+            if (ThrowOnReturn)
+            {
+                throw new InvalidOperationException("Listener return failed.");
+            }
         }
     }
 
@@ -217,5 +222,45 @@ public class TestObjectPool
         Assert.That(pool.Count, Is.EqualTo(1));
         Assert.That(pool.Get(), Is.SameAs(obj));
         Assert.That(pool.Count, Is.Zero);
+    }
+
+    [Test]
+    public void TestConfiguredOnReturnFailureCanRetry()
+    {
+        var throwOnReturn = true;
+        using var pool = new ObjectPool<TestObject>(
+            () => new TestObject(),
+            onReturn: _ =>
+            {
+                if (throwOnReturn)
+                {
+                    throw new InvalidOperationException("Configured return failed.");
+                }
+            });
+        var obj = pool.Get();
+
+        Assert.Throws<InvalidOperationException>(() => pool.Return(obj));
+        Assert.That(pool.Count, Is.Zero);
+
+        throwOnReturn = false;
+        Assert.DoesNotThrow(() => pool.Return(obj));
+        Assert.That(pool.Count, Is.EqualTo(1));
+        Assert.That(pool.Get(), Is.SameAs(obj));
+    }
+
+    [Test]
+    public void TestListenerOnReturnFailureCanRetry()
+    {
+        using var pool = new ObjectPool<PooledObject>(() => new PooledObject());
+        var obj = pool.Get();
+        obj.ThrowOnReturn = true;
+
+        Assert.Throws<InvalidOperationException>(() => pool.Return(obj));
+        Assert.That(pool.Count, Is.Zero);
+
+        obj.ThrowOnReturn = false;
+        Assert.DoesNotThrow(() => pool.Return(obj));
+        Assert.That(pool.Count, Is.EqualTo(1));
+        Assert.That(pool.Get(), Is.SameAs(obj));
     }
 }

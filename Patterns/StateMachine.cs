@@ -138,18 +138,37 @@ public class State
     }
 
     /// <summary>
-    /// 添加子状态
+    /// 添加子状态，并可将其设为子状态机的初始状态。
     /// </summary>
-    /// <param name="subState"></param>
+    /// <param name="subState">要添加的子状态。</param>
     /// <param name="isInitState">是否为初始状态</param>
+    /// <exception cref="ArgumentNullException"><paramref name="subState"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="subState"/> 已属于其他状态机。</exception>
     public void AddState(State subState, bool isInitState=false)
     {
-        ChildrenStateMachine ??= new StateMachine();
+        ArgumentNullException.ThrowIfNull(subState);
+        if (subState.StateMachine is not null)
+        {
+            if (ReferenceEquals(subState.StateMachine, ChildrenStateMachine))
+            {
+                if (isInitState)
+                {
+                    ChildrenStateMachine.InitialState = subState;
+                }
+
+                return;
+            }
+
+            throw new InvalidOperationException("子状态已经属于另一个状态机。");
+        }
+
+        var childrenStateMachine = ChildrenStateMachine ?? new StateMachine();
+        childrenStateMachine.AddState(subState);
         subState._parentStateRef = new WeakReference<State>(this);
-        ChildrenStateMachine.AddState(subState);
+        ChildrenStateMachine = childrenStateMachine;
         if (isInitState)
         {
-            ChildrenStateMachine.InitialState = subState;
+            childrenStateMachine.InitialState = subState;
         }
     }
 
@@ -319,6 +338,9 @@ public class StateMachine
     /// <param name="fromState">源状态，使用StateEvents.AnyState表示任意状态</param>
     /// <param name="toState">目标状态</param>
     /// <param name="eventName">事件名称</param>
+    /// <exception cref="ArgumentNullException"><paramref name="toState"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="ArgumentException"><paramref name="eventName"/> 为 <see langword="null"/> 或空字符串。</exception>
+    /// <exception cref="InvalidOperationException">源状态或目标状态不属于当前状态机。</exception>
     public void AddTransition(State? fromState, State toState, string eventName)
     {
         ArgumentNullException.ThrowIfNull(toState);
@@ -343,10 +365,9 @@ public class StateMachine
     /// 添加状态机级别的事件处理器，无论当前状态是什么都会生效。
     /// </summary>
     /// <param name="eventName">事件名称</param>
-    /// <exception cref="ArgumentNullException"><paramref name="toState"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="ArgumentException"><paramref name="eventName"/> 为空。</exception>
-    /// <exception cref="InvalidOperationException">源状态或目标状态不属于当前状态机。</exception>
     /// <param name="handler">事件处理器</param>
+    /// <exception cref="ArgumentException"><paramref name="eventName"/> 为 <see langword="null"/> 或空字符串。</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
     public void AddEventHandler(string eventName, StateEventHandler handler)
     {
         if (string.IsNullOrEmpty(eventName))
@@ -363,26 +384,40 @@ public class StateMachine
     }
 
     /// <summary>
-    /// 设置活跃状态
+    /// 激活或停用状态机；激活时进入初始状态，停用时退出当前状态。
     /// </summary>
     /// <param name="active">是否活跃</param>
+    /// <exception cref="InvalidOperationException">正在执行状态进入或退出回调，不能重入生命周期变更。</exception>
     public void SetActive(bool active)
     {
+        if (_isChangingState)
+        {
+            throw new InvalidOperationException("状态进入或退出期间不能更改状态机的激活状态。");
+        }
+
         if (active == _isActive) return;
 
-        _isActive = active;
-
-        if (active)
+        _isChangingState = true;
+        try
         {
-            if (_initialState != null)
+            _isActive = active;
+
+            if (active)
             {
-                ChangeToState(_initialState);
+                if (_initialState != null)
+                {
+                    ChangeToState(_initialState);
+                }
+            }
+            else
+            {
+                _currentState?.ExitState();
+                _currentState = null;
             }
         }
-        else
+        finally
         {
-            _currentState?.ExitState();
-            _currentState = null;
+            _isChangingState = false;
         }
     }
 
