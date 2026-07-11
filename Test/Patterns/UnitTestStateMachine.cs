@@ -297,6 +297,90 @@ public class TestStateMachine
     }
 
     [Test]
+    public void TestDeactivationExitExceptionPreservesActiveState()
+    {
+        var stateMachine = new StateMachine();
+        var state = new TestState("State");
+        var expected = new InvalidOperationException("Exit failed.");
+        var shouldThrow = true;
+        state.CallOnExit(() =>
+        {
+            if (shouldThrow) throw expected;
+        });
+        stateMachine.AddState(state);
+        stateMachine.InitialState = state;
+        stateMachine.SetActive(true);
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(false));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(state.ExitCount, Is.EqualTo(1));
+
+        shouldThrow = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(false));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(state.ExitCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void TestUncaughtReentrantActivationPreservesActiveState()
+    {
+        var stateMachine = new StateMachine();
+        var state = new TestState("State");
+        var shouldReenter = true;
+        state.CallOnExit(() =>
+        {
+            if (shouldReenter) stateMachine.SetActive(true);
+        });
+        stateMachine.AddState(state);
+        stateMachine.InitialState = state;
+        stateMachine.SetActive(true);
+
+        Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(false));
+
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(state.ExitCount, Is.EqualTo(1));
+
+        shouldReenter = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(false));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(state.ExitCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void TestActivationEnterExceptionPreservesInactiveState()
+    {
+        var stateMachine = new StateMachine();
+        var state = new TestState("State");
+        var expected = new InvalidOperationException("Enter failed.");
+        var shouldThrow = true;
+        state.CallOnEnter(() =>
+        {
+            if (shouldThrow) throw expected;
+        });
+        stateMachine.AddState(state);
+        stateMachine.InitialState = state;
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(true));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(state.EnterCount, Is.EqualTo(1));
+
+        shouldThrow = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(state.EnterCount, Is.EqualTo(2));
+    }
+
+    [Test]
     public void TestAnyStateTransition()
     {
         var stateMachine = new StateMachine();

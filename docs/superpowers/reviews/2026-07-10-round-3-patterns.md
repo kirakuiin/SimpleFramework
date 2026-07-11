@@ -38,6 +38,8 @@
 - **Independent review — Important, fixed:** child-state attachment mutated `ChildrenStateMachine` and `_parentStateRef` before null/ownership validation completed.
 - **Independent review — Normal, verified:** object-pool callback rollback was implemented but lacked direct regression evidence for configured and listener callbacks.
 - **Independent review — Documentation, fixed:** transition ownership exceptions were attached to `AddEventHandler`, including a nonexistent `toState` parameter reference.
+- **Final review — Important, fixed:** `SetActive` changed lifecycle fields before callbacks succeeded, so uncaught exit/enter exceptions left inconsistent active/current-state pairs.
+- **Final review — Important, fixed:** a buffered replay exception leaked the new subscription into pending delivery.
 
 ## Changes
 
@@ -52,6 +54,9 @@
 - Applied one lifecycle guard consistently to `Dispatch` and `SetActive`, with rejection before equality checks or state mutation and `try/finally` reset around entry/exit callbacks.
 - Validated child null/ownership before creating a hierarchy or assigning a parent, while retaining idempotent addition to the same child state machine.
 - Proved pool rollback by temporarily isolating the missing membership removal: both retry tests failed, then passed after restoring the production repair; no net pool production edit was required.
+- Added 5 final-wave tests, increasing the Patterns fixture count from 101 to 106.
+- Made `SetActive` transactional across callback exceptions: deactivation commits fields after exit succeeds, activation restores prior fields when entry fails, and the original exception propagates.
+- Roll back buffered subscriptions when immediate replay fails, including subscriptions created during an active publication frame.
 
 ## Verification
 
@@ -70,7 +75,16 @@
 - Release solution build after review: succeeded with 0 warnings and 0 errors.
 - Source-quality fixture after review: 1 passed, 0 failed, 0 skipped.
 - `git diff --check` after review: exit 0; only Git line-ending conversion notices were emitted.
+- Final-wave RED: 4 selected tests failed, covering direct exit failure, uncaught lifecycle reentrancy, initial entry failure, and buffered replay leakage.
+- Final-wave affected GREEN: 5 passed, including buffered replay failure during active publication.
+- Final-wave Patterns: 106 passed, 0 failed, 0 skipped.
+- Final-wave full `Test/Test.csproj`: 701 passed, 0 failed, 0 skipped.
+- Final-wave Release solution build: succeeded with 0 warnings and 0 errors.
+- Final-wave source-quality fixture: 1 passed, 0 failed, 0 skipped.
+- Final-wave `git diff --check`: exit 0; only Git line-ending conversion notices were emitted.
 
 ## Independent Review
 
 Independent review of commit `4c9033a9499fb83160fb515dceaee88d68404396` reported four findings. All were resolved: lifecycle reentrancy and pre-mutation child validation received failing regression tests and production fixes; pool rollback received isolated fail/pass regression proof; XML ownership contracts were moved to the correct method. No further reviewer was dispatched, as explicitly required.
+
+The final follow-up from base `9ee91aa422b9367a18914ed34a725000d645a66c` identified exception atomicity and buffered replay rollback. Both received failing regression tests and fixes; exception identity, final lifecycle fields, guard reset, and pending-subscription cleanup were self-reviewed. No further reviewer was dispatched.

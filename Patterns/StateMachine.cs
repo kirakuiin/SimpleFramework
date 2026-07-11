@@ -388,6 +388,10 @@ public class StateMachine
     /// </summary>
     /// <param name="active">是否活跃</param>
     /// <exception cref="InvalidOperationException">正在执行状态进入或退出回调，不能重入生命周期变更。</exception>
+    /// <remarks>
+    /// 进入或退出回调抛出的异常会原样传播。回调失败时，<see cref="IsActive"/> 和
+    /// <see cref="CurrentState"/> 保持调用前的值。
+    /// </remarks>
     public void SetActive(bool active)
     {
         if (_isChangingState)
@@ -398,12 +402,13 @@ public class StateMachine
         if (active == _isActive) return;
 
         _isChangingState = true;
+        var previousActive = _isActive;
+        var previousState = _currentState;
         try
         {
-            _isActive = active;
-
             if (active)
             {
+                _isActive = true;
                 if (_initialState != null)
                 {
                     ChangeToState(_initialState);
@@ -413,7 +418,14 @@ public class StateMachine
             {
                 _currentState?.ExitState();
                 _currentState = null;
+                _isActive = false;
             }
+        }
+        catch
+        {
+            _isActive = previousActive;
+            _currentState = previousState;
+            throw;
         }
         finally
         {

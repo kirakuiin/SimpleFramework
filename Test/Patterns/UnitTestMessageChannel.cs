@@ -198,4 +198,46 @@ public class TestMessageChannel
         Assert.That(_channel.IsDisposed, Is.True);
         Assert.That(laterHandlerCalled, Is.False);
     }
+
+    [Test]
+    public void TestBufferedReplayFailureDoesNotLeakSubscription()
+    {
+        var expected = new InvalidOperationException("Replay failed.");
+        var invocationCount = 0;
+        _bufferedChannel.Publish("buffered");
+
+        var actual = Assert.Throws<InvalidOperationException>(() => _bufferedChannel.Subscribe(_ =>
+        {
+            invocationCount++;
+            throw expected;
+        }));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.DoesNotThrow(() => _bufferedChannel.Publish("later"));
+        Assert.That(invocationCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TestBufferedReplayFailureDuringPublishDoesNotLeakPendingSubscription()
+    {
+        var expected = new InvalidOperationException("Nested replay failed.");
+        var failedHandlerCount = 0;
+        var attempted = false;
+        _bufferedChannel.Subscribe(_ =>
+        {
+            if (attempted) return;
+            attempted = true;
+            var actual = Assert.Throws<InvalidOperationException>(() => _bufferedChannel.Subscribe(_ =>
+            {
+                failedHandlerCount++;
+                throw expected;
+            }));
+            Assert.That(actual, Is.SameAs(expected));
+        });
+
+        Assert.DoesNotThrow(() => _bufferedChannel.Publish("outer"));
+        Assert.DoesNotThrow(() => _bufferedChannel.Publish("later"));
+
+        Assert.That(failedHandlerCount, Is.EqualTo(1));
+    }
 } 

@@ -501,6 +501,20 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [ ] Move the `toState`, event-name, and ownership exception documentation from `AddEventHandler` to `AddTransition`; remove the nonexistent parameter reference and give `AddEventHandler`, `SetActive`, and touched child-state APIs accurate Chinese parameter, return, and exception contracts.
 - [ ] Run the Release solution build and source-quality fixture; expect zero warnings/errors and the source-quality test to pass.
 
+#### Task 3 Final Repair O: Make activation and deactivation exception-atomic
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestDeactivationExitExceptionPreservesActiveState`, `TestUncaughtReentrantActivationPreservesActiveState`, and `TestActivationEnterExceptionPreservesInactiveState`. Assert the original exception instance propagates, failed deactivation retains `IsActive == true` and the original `CurrentState`, failed activation retains `IsActive == false` and null `CurrentState`, callback counts are exact, and a later lifecycle call proves the guard reset. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitExceptionPreservesActiveState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestUncaughtReentrantActivationPreservesActiveState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestActivationEnterExceptionPreservesInactiveState"`; expect all three to fail because lifecycle fields are currently mutated before callbacks complete.
+- [ ] Commit activation/deactivation fields only after successful callbacks or restore their prior values when activation entry fails; keep the shared reentrancy guard checked before mutation and reset in `finally`. Document direct callback exception propagation and post-failure field state in Chinese XML. Rerun the focused command; expect exact exception identity and consistent final fields for all three paths.
+
+#### Task 3 Final Repair P: Roll back failed buffered replay subscriptions
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestBufferedReplayFailureDoesNotLeakSubscription`, buffering one value, subscribing a handler that throws the same exception during replay, then publishing again and asserting the failed handler is not invoked. Also add `TestBufferedReplayFailureDuringPublishDoesNotLeakPendingSubscription` to exercise the same rollback while the channel is dispatching. Run the first test with `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestBufferedReplayFailureDoesNotLeakSubscription"`; expect failure because `base.Subscribe` leaves the handler pending when replay throws. After the repair, run both tests and expect no leaked ordinary or in-dispatch pending registration.
+- [ ] Catch replay failure, dispose the subscription token to cancel pending or active registration, and rethrow without wrapping so exception identity is preserved. Rerun the focused command; expect one replay invocation, no later delivery, and the original exception instance.
+
 ### Task 4: ECS
 
 **Files:**

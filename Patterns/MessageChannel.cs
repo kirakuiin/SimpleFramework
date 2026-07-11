@@ -271,14 +271,28 @@ public class BufferedMessageChannel<T> : MessageChannel<T>, IBufferedMessageChan
         base.Publish(message);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// 订阅消息；已有缓存时立即向新处理器重放最后一条消息。
+    /// </summary>
+    /// <param name="handler">消息处理器。</param>
+    /// <returns>用于取消订阅的一次性句柄。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
+    /// <remarks>重放处理器抛出异常时会取消本次订阅，并原样传播该异常。</remarks>
     public override IDisposable Subscribe(Action<T> handler)
     {
         var subscription = base.Subscribe(handler);
 
         if (HasBufferedMessage)
         {
-            handler?.Invoke(BufferedMessage);
+            try
+            {
+                handler(BufferedMessage);
+            }
+            catch
+            {
+                subscription.Dispose();
+                throw;
+            }
         }
 
         return subscription;
