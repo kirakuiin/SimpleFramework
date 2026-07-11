@@ -245,6 +245,64 @@ public class TestStateMachine
     }
 
     [Test]
+    public void TestInitialEnterCannotUpdateMachine()
+    {
+        var stateMachine = new StateMachine();
+        var state = new TestState("State");
+        var shouldUpdate = true;
+        state.CallOnEnter(() =>
+        {
+            if (shouldUpdate) stateMachine.Update(0.1f);
+        });
+        stateMachine.AddState(state);
+        stateMachine.InitialState = state;
+
+        Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(true));
+
+        Assert.That(state.UpdateCount, Is.Zero);
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+
+        shouldUpdate = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.DoesNotThrow(() => stateMachine.Update(0.1f));
+        Assert.That(state.UpdateCount, Is.EqualTo(1));
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+    }
+
+    [Test]
+    public void TestTransitionExitCannotUpdateMachine()
+    {
+        var stateMachine = new StateMachine();
+        var source = new TestState("Source");
+        var target = new TestState("Target");
+        var shouldUpdate = true;
+        source.CallOnExit(() =>
+        {
+            if (shouldUpdate) stateMachine.Update(0.1f);
+        });
+        stateMachine.AddState(source);
+        stateMachine.AddState(target);
+        stateMachine.AddTransition(source, target, "go");
+        stateMachine.InitialState = source;
+        stateMachine.SetActive(true);
+
+        Assert.Throws<InvalidOperationException>(() => stateMachine.Dispatch("go"));
+
+        Assert.That(source.UpdateCount, Is.Zero);
+        Assert.That(target.UpdateCount, Is.Zero);
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+
+        shouldUpdate = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.Dispatch("go"), Is.True);
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(target));
+    }
+
+    [Test]
     public void TestTransitionExitCannotDeactivateMachine()
     {
         var stateMachine = new StateMachine();

@@ -605,6 +605,19 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [ ] Add `TestSetupFailureRestoresStateOwnedConfiguration`, starting with a named state, an existing state event handler, and configured setup/enter/update/exit callbacks. During failed setup replace/add handlers, rename the state, replace all callbacks, and throw one retained exception; assert the original name, handlers, and callbacks are restored exactly, failed handlers/callbacks are absent, retry invokes the original setup callback, and successful retry handler configuration remains. Run its exact fully-qualified filter and expect failure because setup snapshots omit every state-owned mutable configuration field.
 - [ ] Add a state configuration snapshot containing `_name`, a clone of `_eventHandlers`, `_onSetupCallback`, `_onEnterCallback`, `_onUpdateCallback`, and `_onExitCallback`; capture/restore it for the directly added state and every recursively snapshotted pre-existing state. Keep ownership, parent, and child-machine topology in the existing hierarchy snapshot path. Rerun the focused test and all state-machine tests.
 
+#### Task 3 Lifecycle Update Closure Repair AD: Reject updates during lifecycle callbacks
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [x] Add `TestInitialEnterCannotUpdateMachine` and `TestTransitionExitCannotUpdateMachine`. The first calls the owning machine's public `Update` from the initial state's enter callback; the second calls it from the current state's exit callback during a transition. Assert `InvalidOperationException` occurs before any update callback side effect, the outer operation preserves the recursive fail-close inactive/null contract, and a later activation/update or transition succeeds after the callback condition is disabled. Run the exact two-test filter and expect both tests to fail because public `Update` does not consult `_isChangingState`.
+- [x] Reject `_isChangingState` at the first public `Update` boundary, after the setup-hierarchy guard but before active/current-state inspection, and document both rejection conditions in Chinese XML. Keep the existing catch path so lifecycle callback exceptions propagate unchanged and recursively fail close. Rerun the exact filter and all state-machine tests.
+
+#### Task 3 Documentation Closure Repair AE: Correct Blackboard notification XML
+
+**Files:** `Patterns/BlackBoard.cs`
+
+- [x] Replace the nonexistent `key`, `type`, `oldValue`, and `newValue` parameter documentation on `NotifyDataChanged` with accurate Chinese documentation for the captured `handler` and event `args`. Record that a null handler is a no-op and handler exceptions propagate directly. Verify with the source-quality fixture and Release build.
+
 ### Task 4: ECS
 
 **Files:**

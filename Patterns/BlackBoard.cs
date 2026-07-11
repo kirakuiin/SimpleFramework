@@ -272,12 +272,11 @@ public class BlackBoard
     }
 
     /// <summary>
-    /// 通知数据变更。
+    /// 使用已捕获的处理器通知数据变更。
     /// </summary>
-    /// <param name="key">变更的键</param>
-    /// <param name="type">变化类型</param>
-    /// <param name="oldValue">旧值</param>
-    /// <param name="newValue">新值</param>
+    /// <param name="handler">锁外调用的事件处理器；为 <see langword="null"/> 时不执行操作。</param>
+    /// <param name="args">描述数据变更的事件参数。</param>
+    /// <remarks>处理器抛出的异常不包装并直接传播给调用方。</remarks>
     private void NotifyDataChanged(EventHandler<BlackBoardEventArgs>? handler, BlackBoardEventArgs args)
     {
         handler?.Invoke(this, args);

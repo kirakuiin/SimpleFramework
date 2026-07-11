@@ -174,3 +174,19 @@ The failure-state follow-up from base `9aae063465f7dd1cb0f285fd2cc1ade8f4819968`
 - Source-quality fixture: 1 passed, 0 failed, 0 skipped.
 - `git diff --check`: exit 0; only Git line-ending conversion notices were emitted by subsequent diff inspection.
 - Self-review confirmed descendant-first detach at every depth, pre-existing owner/parent restoration, setup-time update rejection before callback side effects, complete state-owned configuration coverage, successful setup handler retention, direct exception identity, reset setup guards, and clean retry behavior. No additional reviewer was dispatched, as explicitly required.
+
+## Lifecycle Update Guard Closure Follow-up
+
+### Finding and Repair
+
+- Public `Update` checked setup isolation but omitted the lifecycle guard shared by `SetActive` and `Dispatch`. Initial-state entry and current-state exit callbacks could therefore execute an update against a partially changed machine. `Update` now rejects `_isChangingState` before inspecting active/current state or invoking update callbacks; the outer lifecycle operation retains the recursive inactive/null fail-close contract and resets the guard for explicit recovery.
+- `BlackBoard.NotifyDataChanged` documented four nonexistent parameters. Its Chinese XML now describes the captured handler, event arguments, null-handler no-op, and unwrapped handler-exception behavior.
+
+### TDD and Verification
+
+- Appended plan Repairs AD–AE before production edits.
+- Exact RED: 2 failed, 0 passed because neither lifecycle callback received the required `InvalidOperationException`.
+- Exact GREEN: 2 passed, 0 failed, 0 skipped; both tests also prove zero premature update side effects, coherent fail-close fields, guard reset, and successful retry.
+- StateMachine fixture: 49 passed; Patterns: 125 passed; full Test project: 720 passed.
+- Release solution build: 0 warnings, 0 errors; source-quality fixture: 1 passed.
+- No additional reviewer was dispatched, as explicitly required for this closure.

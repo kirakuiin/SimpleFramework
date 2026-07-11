@@ -594,12 +594,17 @@ public class StateMachine
     /// 更新状态机
     /// </summary>
     /// <param name="delta">帧间隔时间</param>
-    /// <exception cref="InvalidOperationException">当前状态机或祖先状态机正在初始化状态。</exception>
+    /// <exception cref="InvalidOperationException">当前状态机或祖先状态机正在初始化状态，或正在执行状态进入/退出回调。</exception>
     public void Update(float delta)
     {
         if (IsSetupInHierarchy())
         {
             throw new InvalidOperationException("状态初始化期间不能更新状态机。");
+        }
+
+        if (_isChangingState)
+        {
+            throw new InvalidOperationException("状态进入或退出期间不能更新状态机。");
         }
 
         try
