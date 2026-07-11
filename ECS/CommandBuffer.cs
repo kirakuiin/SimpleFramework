@@ -10,13 +10,13 @@ public readonly struct BufferedEntity : IEquatable<BufferedEntity>
     {
     }
 
-    internal BufferedEntity(long ownerId, int id)
+    internal BufferedEntity(long batchId, int id)
     {
-        OwnerId = ownerId;
+        BatchId = batchId;
         Id = id;
     }
 
-    internal long OwnerId { get; }
+    internal long BatchId { get; }
 
     /// <summary>
     /// 占位实体在来源命令批次内的局部编号。
@@ -30,7 +30,7 @@ public readonly struct BufferedEntity : IEquatable<BufferedEntity>
     /// <returns>如果两个句柄标识同一来源批次内的占位实体则为 <c>true</c>。</returns>
     public bool Equals(BufferedEntity other)
     {
-        return OwnerId == other.OwnerId && Id == other.Id;
+        return BatchId == other.BatchId && Id == other.Id;
     }
 
     /// <inheritdoc/>
@@ -42,7 +42,7 @@ public readonly struct BufferedEntity : IEquatable<BufferedEntity>
     /// <inheritdoc/>
     public override int GetHashCode()
     {
-        return HashCode.Combine(OwnerId, Id);
+        return HashCode.Combine(BatchId, Id);
     }
 
     public static bool operator ==(BufferedEntity left, BufferedEntity right)
@@ -101,10 +101,10 @@ public sealed class CommandBufferResult
 /// </summary>
 public sealed class CommandBuffer
 {
-    private static long _nextBufferId;
+    private static long _nextBatchId;
 
     private readonly List<ICommand> _commands = new();
-    private long _bufferId;
+    private long _batchId;
     private readonly World _world;
     private int _nextBufferedEntityId;
 
@@ -116,7 +116,7 @@ public sealed class CommandBuffer
     public CommandBuffer(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
-        _bufferId = Interlocked.Increment(ref _nextBufferId);
+        _batchId = Interlocked.Increment(ref _nextBatchId);
     }
 
     /// <summary>
@@ -280,20 +280,20 @@ public sealed class CommandBuffer
         {
             _commands.Clear();
             _nextBufferedEntityId = 0;
-            _bufferId = Interlocked.Increment(ref _nextBufferId);
+            _batchId = Interlocked.Increment(ref _nextBatchId);
         }
     }
 
     private BufferedEntity CreateEntity(IReadOnlyCollection<IComponent> components)
     {
-        var bufferedEntity = new BufferedEntity(_bufferId, _nextBufferedEntityId++);
+        var bufferedEntity = new BufferedEntity(_batchId, _nextBufferedEntityId++);
         _commands.Add(new CreateEntityCommand(bufferedEntity, components.ToArray()));
         return bufferedEntity;
     }
 
     private void ValidateCurrentBatch(BufferedEntity entity)
     {
-        if (entity.OwnerId != _bufferId)
+        if (entity.BatchId != _batchId)
         {
             throw new InvalidOperationException(
                 $"Buffered entity {entity.Id} belongs to an expired or foreign command batch.");
