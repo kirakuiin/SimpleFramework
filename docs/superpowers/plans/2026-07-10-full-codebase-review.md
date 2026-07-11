@@ -867,6 +867,13 @@ Expected: the complete suite and source-quality test pass, Release has zero warn
 - RED: `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~DiscoveryScan_PublicOverloadsExposeTrailingCancellationToken"` must fail because neither public scan overload currently exposes the token.
 - GREEN: rerun the exact filter, then the complete Net discovery/stats fixture.
 
+#### Repair B: remove discovery scan overload ambiguity
+
+- Files: `Net/Discovery/NetDiscovery.cs`, `Test/Net/NetDiscoveryStatsTests.cs`, `Net/README.md`.
+- Contract: keep the ordinary scan as `ScanAsync<TMetadata>(TimeSpan duration, CancellationToken token = default)` and make the explicit-schema overload `ScanAsync<TMetadata>(uint metadataSchemaId, TimeSpan duration, CancellationToken token = default)`. The distinct first parameter types keep both APIs under the conventional async name, keep cancellation optional and last, and make ordinary, schema, token, and bare-`default` calls unambiguous.
+- RED: `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~DiscoveryScan_PublicApiIsUnambiguousAndForwardsCancellation"` must fail to compile because the schema-first calls do not match the duration-first schema overload.
+- GREEN: rerun the exact filter, then the complete Net discovery/stats fixture.
+
 ### Task 7: Independent Final Audit and Release Verification
 
 **Files:**

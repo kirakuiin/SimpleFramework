@@ -122,7 +122,11 @@ await server.Discovery.StartAdvertiseAsync(
     },
     new RoomMetadata("Test Room", 1, 4, false));
 
-var rooms = await client.Discovery.ScanAsync<RoomMetadata>(TimeSpan.FromMilliseconds(200));
+using var scanCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+var rooms = await client.Discovery.ScanAsync<RoomMetadata>(
+    schemaId,
+    TimeSpan.FromMilliseconds(200),
+    scanCancellation.Token);
 ```
 
 `GameNet` 默认使用 UDP broadcast 后端用于 LAN 发现。单元测试需要确定性行为时，可以注入共享的 `MemoryDiscoveryNetwork`：

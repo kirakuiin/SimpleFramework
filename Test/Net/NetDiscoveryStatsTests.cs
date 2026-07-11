@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -810,27 +809,27 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
-    public void DiscoveryScan_PublicOverloadsExposeTrailingCancellationToken()
+    public async Task DiscoveryScan_PublicApiIsUnambiguousAndForwardsCancellation()
     {
-        var scanOverloads = typeof(NetDiscovery).GetMethods()
-            .Where(method => method is { Name: nameof(NetDiscovery.ScanAsync), IsPublic: true, IsGenericMethodDefinition: true })
-            .Select(method => method.GetParameters())
-            .ToArray();
+        await using var discovery = new NetDiscovery(Options(Guid.NewGuid()), new MemoryDiscoveryNetwork());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var schemaId = DiscoveryMetadataRegistry.GetSchemaId("room.list.v1");
+
+        var defaultTokenRooms = await discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero, default);
+        var schemaRooms = await discovery.ScanAsync<RoomListMetadata>(schemaId, TimeSpan.Zero);
 
         Assert.Multiple(() =>
         {
-            Assert.That(scanOverloads, Has.Length.EqualTo(2));
-            Assert.That(scanOverloads, Has.Some.Matches<ParameterInfo[]>(parameters =>
-                parameters.Length == 2 &&
-                parameters[0].ParameterType == typeof(TimeSpan) &&
-                parameters[1].ParameterType == typeof(CancellationToken) &&
-                parameters[1].HasDefaultValue));
-            Assert.That(scanOverloads, Has.Some.Matches<ParameterInfo[]>(parameters =>
-                parameters.Length == 3 &&
-                parameters[0].ParameterType == typeof(TimeSpan) &&
-                parameters[1].ParameterType == typeof(uint) &&
-                parameters[2].ParameterType == typeof(CancellationToken) &&
-                parameters[2].HasDefaultValue));
+            Assert.That(defaultTokenRooms, Is.Empty);
+            Assert.That(schemaRooms, Is.Empty);
+            Assert.CatchAsync<OperationCanceledException>(() =>
+                discovery.ScanAsync<RoomListMetadata>(TimeSpan.Zero, cancellation.Token));
+            Assert.CatchAsync<OperationCanceledException>(() =>
+                discovery.ScanAsync<RoomListMetadata>(
+                    schemaId,
+                    TimeSpan.Zero,
+                    cancellation.Token));
         });
     }
 

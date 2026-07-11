@@ -36,14 +36,14 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 
 ## Cross-Module Findings and Changes
 
-- Important API consistency: `NetDiscovery` already linked backend scans to caller/disposal cancellation internally, but both public one-shot `ScanAsync<TMetadata>` overloads forced `CancellationToken.None`. Both now expose one optional trailing token, matching every other cancellable Net API, and forward to the existing linked path. The internal implementation was named `ScanCoreAsync` and the trivial public forwarding methods no longer create unnecessary async state machines.
+- Important API consistency: `NetDiscovery` already linked backend scans to caller/disposal cancellation internally, but both public one-shot `ScanAsync<TMetadata>` overloads forced `CancellationToken.None`. The ordinary overload is now `(TimeSpan duration, CancellationToken token = default)` and the explicit-schema overload is `(uint metadataSchemaId, TimeSpan duration, CancellationToken token = default)`. Distinct first parameter types remove overload ambiguity while keeping cancellation optional and last; both forward to the existing linked path. The internal implementation was named `ScanCoreAsync` and the trivial public forwarding methods no longer create unnecessary async state machines.
 - Documentation: root README described removed Net types (`ITransport`, `ProtocolHandler`, `ConnectionModel`, and related APIs), attributed tag ownership to ECS entities, and documented a nonexistent Godot multiplayer transport. It now describes the current `GameNet`, ECS handle/World model, command buffer, and actual GDExt surface; the nullable Core example now uses `RequireModel`.
 - Documentation: `Patterns/README.md` was an implementation prompt rather than module documentation. It now documents all six current patterns and gives API-valid subscription and parent-blackboard examples. `docs/domain-lifecycle.md` now names the actual `InvalidOperationException` from `Require*`.
 - Public XML: completed the GDExt extension/channel/pool-clear contracts, discovery backend methods, discovery advertisement sentinel, metadata attribute constructor, versioned discovery packet, scan cancellation/return/exception contracts, and Net message-context positional parameters.
 - Equivalent syntax: `IniConfigTool` uses target-typed `new()` and ranges for section/key/value slicing; `FileUtil` uses correctly spaced target-typed construction. Broader collection-expression, primary-constructor, switch-expression, or expression-body churn was rejected where it would not be shorter and clearer.
 - Project files: target framework, nullable/implicit-using policy, references, conditional Godot dependencies, and test packaging were internally consistent; no project or dependency edit was justified.
 - Empty `Collections`, `Maths`, and `Utility` module README files make no stale API claims. ECS README/USAGE and Net README examples were checked against current signatures and remain valid.
-- Compatibility: optional trailing tokens preserve ordinary source calls, including calls that omit the token. Replacing the tokenless CLR signatures is not binary-compatible with already compiled consumers, and `ScanAsync<T>(duration, default)` is source-ambiguous between the `uint` and `CancellationToken` overloads; `default(uint)` or a named argument is unambiguous. The repository is unpublished, so no legacy binary shim or extra public overload was added.
+- API shape: a real compile-and-call regression proves ordinary, explicit-schema, cancellation-token, and `(duration, default)` calls are unambiguous. The explicit-schema overload intentionally moved `metadataSchemaId` first; this repository is unpublished and has no external consumers, so source/binary compatibility with the intermediate duration-first schema signature is not a constraint.
 
 ## Evidence Reproduction
 
@@ -60,6 +60,11 @@ Repair A was appended to tracked Task 6 before production editing.
 - Valid RED: `DiscoveryScan_PublicOverloadsExposeTrailingCancellationToken` failed 1/1. Reflection showed only `(TimeSpan)` and `(TimeSpan, uint)` public overloads, so both expected trailing-token signatures were absent.
 - Exact GREEN: the same filter passed 1/1 after the minimal public forwarding change.
 - Affected fixture: `NetDiscoveryStatsTests` passed 65/65, protecting existing disposal cancellation, scan timeout, backend serialization, and browser behavior.
+
+Repair B was appended after takeover identified the intermediate overload shape as an API concern.
+
+- Valid RED: `DiscoveryScan_PublicApiIsUnambiguousAndForwardsCancellation` failed compilation with CS1503 because the desired schema-first calls did not match the duration-first schema overload. The same compiler run showed `(duration, default)` already selected the exact two-parameter cancellation overload rather than producing CS0121.
+- GREEN: the exact filter passed 1/1 after the minimal schema parameter reorder and internal browser-call update. The test executes ordinary and explicit-schema zero-duration scans, then proves both overloads propagate a pre-cancelled token as `OperationCanceledException`.
 
 ## Test Simplification Review
 
@@ -87,10 +92,10 @@ No helper extraction made intent clearer than the local setup. Final test count 
 The same physical-line command was used for baseline and final comparison; test count comes from the VSTest summary, not textual `[Test]` counting.
 
 - Final production: 75 files and 17,373 physical lines, +82 lines. The increase is Chinese XML for previously undocumented public surfaces; the executable syntax/refactor changes are locally neutral or shorter.
-- Final tests: 40 files and 17,650 physical lines, +26 lines; 752 tests, +1 API regression. No test was deleted.
+- Final tests: 40 files and 17,649 physical lines, +25 lines; 752 tests, +1 API regression. No test was deleted.
 - `dotnet test .\SimpleFramework.sln --no-restore --configuration Debug`: 752 passed, 0 failed, 0 skipped.
 - `dotnet build .\SimpleFramework.sln --no-restore --configuration Release`: succeeded, 0 warnings, 0 errors, including GDExt.
 - `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSourceTextQuality"`: 1 passed, 0 failed.
 - `git diff --check`: exit 0; only line-ending conversion notices were emitted.
 
-Complete diff self-review confirmed the token remains optional and last, ordinary existing scan calls still bind, cancellation reaches the existing linked core, XML describes actual behavior, README examples use real constructors/methods, and no unrelated file entered scope. The binary/default-literal compatibility caveats are explicitly retained above rather than hidden. No independent reviewer was dispatched, as explicitly required.
+Complete diff self-review confirmed each token remains optional and last, ordinary and schema-first calls compile without ambiguity, cancellation reaches the existing linked core, XML describes actual behavior, README examples use real constructors/methods, and no unrelated file entered scope. No known API concern remains from the intermediate overload shape. No independent reviewer was dispatched, as explicitly required.

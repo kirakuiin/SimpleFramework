@@ -276,7 +276,7 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
         try
         {
             var now = _timeProvider.GetUtcNow();
-            var scanned = await _discovery.ScanAsync<TMetadata>(_scanDuration, _metadataSchemaId, token).ConfigureAwait(false);
+            var scanned = await _discovery.ScanAsync<TMetadata>(_metadataSchemaId, _scanDuration, token).ConfigureAwait(false);
             foreach (var room in scanned)
             {
                 if (_rooms.TryGetValue(room.RoomId, out var existing))
@@ -938,22 +938,22 @@ public sealed class NetDiscovery : IAsyncDisposable
     public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
         TimeSpan duration,
         CancellationToken token = default) =>
-        ScanAsync<TMetadata>(duration, GetRequiredMetadataSchemaId<TMetadata>(), token);
+        ScanAsync<TMetadata>(GetRequiredMetadataSchemaId<TMetadata>(), duration, token);
 
     /// <summary>
     /// 按指定 metadata schema 执行一次房间扫描。
     /// </summary>
     /// <typeparam name="TMetadata">房间公开元数据类型。</typeparam>
-    /// <param name="duration">后端扫描窗口；非正值返回空结果。</param>
     /// <param name="metadataSchemaId">预期的元数据 schema 标识。</param>
+    /// <param name="duration">后端扫描窗口；非正值返回空结果。</param>
     /// <param name="token">取消标记。</param>
     /// <returns>与当前应用和指定 schema 匹配的房间快照。</returns>
     /// <exception cref="InvalidOperationException">元数据类型已绑定到不同 schema。</exception>
     /// <exception cref="ObjectDisposedException">发现组件已释放。</exception>
     /// <exception cref="OperationCanceledException">调用方取消或发现组件开始释放。</exception>
     public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
-        TimeSpan duration,
         uint metadataSchemaId,
+        TimeSpan duration,
         CancellationToken token = default) =>
         ScanCoreAsync<TMetadata>(duration, metadataSchemaId, token);
 
