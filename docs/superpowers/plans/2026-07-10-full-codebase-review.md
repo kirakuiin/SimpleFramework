@@ -778,6 +778,22 @@ Retain the existing TCP partial-frame, multi-frame, large-frame, cancellation, a
 
 Add focused session tests with transports that throw from start, connect, send, stop, and disconnect operations. Verify `HostAsync`, `JoinAsync`, `StopAsync`, kick/leave, and session control-packet sends return their documented structured failure instead of propagating transport exceptions, and verify detached peer-directory broadcasts record diagnostics rather than faulting unobserved tasks. Introduce narrow GameNet transport-call helpers that preserve caller cancellation mapping, record the original exception, and keep lifecycle state retryable. Re-run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~NetSessionTests"`.
 
+- [x] **Repair 5.5: Preserve join and session-send cancellation identity**
+
+Add deterministic task-gated session tests whose transport throws `OperationCanceledException` only after the caller join token or Stop-owned join cancellation is requested during the handshake send. Verify caller cancellation returns `NetSessionStatus.Cancelled`, Stop produces the established session-stop result, pending join/session state is cleared, and a later host/join attempt remains possible. Update `SendTransportAsync` to map OCE only when its supplied operation/lifecycle token is actually cancelled, while treating unrelated OCE as an ordinary transport failure; update touched result/XML documentation and run the exact new filters followed by `NetSessionTests`.
+
+- [x] **Repair 5.6: Make TCP cancellation preserve frame-stream integrity**
+
+Add an internal lightweight frame-writer seam and deterministic transport tests for cancellation while waiting on `WriteLock`, failure after a partial prefix write, and failure after a prefix plus partial payload write. Verify waiting cancellation returns the cancellation failure without disconnecting, but once any frame byte may have been written every cancellation/write exception disconnects the connection before releasing it for another send; the next send must return `ConnectionUnavailable`, callback order remains stable, and the write lock never deadlocks. Re-run `NetTransportTests` including existing concurrent-send and partial-read cases.
+
+- [x] **Repair 5.7: Complete GameNet exception-boundary coverage**
+
+Add deterministic throwing/gated transport regressions for public GameNet typed send, server kick/disconnect, join accept/reject or disconnect-notice control sends, and detached peer-directory publication. Assert structured results, cleanup/retry state, and diagnostics observation without sleeps or unobserved tasks. Apply only the minimum helper/call-site behavior needed by each RED and rerun `NetMessagingTests` plus `NetSessionTests`.
+
+- [x] **Repair 5.8: Give each transport failure one diagnostic owner**
+
+Add a public GameNet typed-send regression whose transport throws once and assert exactly one `TransportSendFailed` event and one `ErrorCount` increment. Refactor `SendTransportAsync` or its callers so NetMessenger owns diagnostics for message sends while direct session-control sends retain one diagnostic owner. Re-run the exact regression, all messaging/session tests, and inspect every transport-send call site for duplicate recording.
+
 - [x] **Step 2: Review by data flow from transport to GameNet**
 
 Trace start/stop/dispose idempotence, cancellation ownership, connect/disconnect races, partial TCP reads/writes, transport callback ordering, packet validation, codec/registry mismatch, request correlation, duplicate/late responses, session handshake and reconnect, discovery expiry, flow limits, statistics snapshots, dispatcher exceptions, background task observation, thread-safe collections, lock ordering, buffer allocation/copying, repeated serialization, polling, public API usability, and Chinese XML docs. Exclude authentication, encryption, hostile-peer defense, and denial-of-service design.

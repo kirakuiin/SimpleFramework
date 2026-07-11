@@ -276,6 +276,7 @@ public sealed class GameNet : IAsyncDisposable
     /// </summary>
     /// <param name="options">加入选项。</param>
     /// <param name="token">取消标记。</param>
+    /// <returns>加入结果；调用方取消或停止正在进行的加入时返回 <see cref="NetSessionStatus.Cancelled"/>。</returns>
     public async Task<JoinResult> JoinAsync(JoinOptions options, CancellationToken token = default)
     {
         if (IsDisposed)
@@ -503,6 +504,7 @@ public sealed class GameNet : IAsyncDisposable
     /// </summary>
     /// <param name="peerId">要断开的远端对等体。</param>
     /// <param name="reason">断开原因，默认表示踢出。</param>
+    /// <returns>断开及通知结果；底层通知或断开失败时返回传输失败。</returns>
     public async Task<NetSessionResult> KickAsync(PeerId peerId, DisconnectReason reason = DisconnectReason.Kicked)
     {
         if (IsDisposed)
@@ -521,12 +523,14 @@ public sealed class GameNet : IAsyncDisposable
                 return new NetSessionResult(NetSessionStatus.InvalidState, "Peer is not connected.");
         }
 
-        await SendDisconnectNoticeAsync(connectionId, reason).ConfigureAwait(false);
+        var notice = await SendDisconnectNoticeAsync(connectionId, reason).ConfigureAwait(false);
         var disconnect = await DisconnectTransportAsync(connectionId, reason).ConfigureAwait(false);
         if (!disconnect.Succeeded)
             return new NetSessionResult(NetSessionStatus.TransportFailed, disconnect.Message);
         RemoveRemotePeer(peerId, reason);
-        return NetSessionResult.Ok();
+        return notice.Succeeded
+            ? NetSessionResult.Ok()
+            : new NetSessionResult(NetSessionStatus.TransportFailed, notice.Message);
     }
 
     /// <summary>
@@ -818,15 +822,24 @@ public sealed class GameNet : IAsyncDisposable
         TransportConnectionId connectionId,
         ReadOnlyMemory<byte> data,
         NetChannel channel,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        bool recordFailure = true)
     {
         try
         {
-            return await _transport!.SendAsync(connectionId, data, channel, token).ConfigureAwait(false);
+            var result = await _transport!.SendAsync(connectionId, data, channel, token).ConfigureAwait(false);
+            if (recordFailure && !result.Succeeded)
+                Diagnostics.RecordError(new NetError("TransportSendFailed", result.Message ?? result.Status.ToString()));
+            return result;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            Diagnostics.RecordError(new NetError("TransportSendFailed", ex.Message, ex));
+            if (recordFailure)
+                Diagnostics.RecordError(new NetError("TransportSendFailed", ex.Message, ex));
             return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
         }
     }
@@ -1505,10 +1518,12 @@ public sealed class GameNet : IAsyncDisposable
         await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
     }
 
-    private async Task SendDisconnectNoticeAsync(TransportConnectionId connectionId, DisconnectReason reason)
+    private async ValueTask<NetSendResult> SendDisconnectNoticeAsync(
+        TransportConnectionId connectionId,
+        DisconnectReason reason)
     {
         if (_transport is null)
-            return;
+            return new NetSendResult(NetSendStatus.SessionClosed);
 
         var notice = new SessionPacket(
             SessionPacket.DisconnectNotice,
@@ -1522,7 +1537,7 @@ public sealed class GameNet : IAsyncDisposable
             NetSessionStatus.Ok,
             null,
             reason);
-        await SendSessionPacketAsync(connectionId, notice).ConfigureAwait(false);
+        return await SendSessionPacketAsync(connectionId, notice).ConfigureAwait(false);
     }
 
     private async Task SendDisconnectNoticesToAllPeersAsync(DisconnectReason reason)
@@ -1624,9 +1639,7 @@ public sealed class GameNet : IAsyncDisposable
             if (target.Value == exceptConnectionId)
                 continue;
 
-            var send = await SendTransportAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
-            if (!send.Succeeded)
-                Diagnostics.RecordError(new NetError("SessionPacketSendFailed", send.Message ?? send.Status.ToString()));
+            await SendTransportAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
         }
     }
 
@@ -1830,10 +1843,7 @@ public sealed class GameNet : IAsyncDisposable
         if (!TrySerializeSessionPacket(packet, out var payload, out var error))
             return new NetSendResult(NetSendStatus.PacketTooLarge, error);
 
-        var send = await SendTransportAsync(connectionId, payload, NetChannel.System).ConfigureAwait(false);
-        if (!send.Succeeded)
-            Diagnostics.RecordError(new NetError("SessionPacketSendFailed", send.Message ?? send.Status.ToString()));
-        return send;
+        return await SendTransportAsync(connectionId, payload, NetChannel.System).ConfigureAwait(false);
     }
 
     private ValueTask<NetSendResult> SendToServerPacketAsync(byte[] packet, CancellationToken token)
@@ -1843,7 +1853,7 @@ public sealed class GameNet : IAsyncDisposable
         if (_transport is null || _serverConnectionId == TransportConnectionId.None)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
 
-        return SendTransportAsync(_serverConnectionId, packet, NetChannel.Reliable, token);
+        return SendTransportAsync(_serverConnectionId, packet, NetChannel.Reliable, token, recordFailure: false);
     }
 
     private ValueTask<NetSendResult> SendToPeerPacketAsync(PeerId peerId, byte[] packet, CancellationToken token)
@@ -1860,7 +1870,7 @@ public sealed class GameNet : IAsyncDisposable
                 return ValueTask.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable));
         }
 
-        return SendTransportAsync(connectionId, packet, NetChannel.Reliable, token);
+        return SendTransportAsync(connectionId, packet, NetChannel.Reliable, token, recordFailure: false);
     }
 
     private IReadOnlyCollection<PeerId> GetBroadcastTargets()

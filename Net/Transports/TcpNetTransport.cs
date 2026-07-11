@@ -5,6 +5,39 @@ using System.Net.Sockets;
 
 namespace SimpleFramework.Net;
 
+internal interface ITcpFrameWriter
+{
+    ValueTask WriteAsync(
+        NetworkStream stream,
+        Memory<byte> lengthBuffer,
+        ReadOnlyMemory<byte> data,
+        Action writeStarted,
+        CancellationToken token);
+}
+
+internal sealed class DefaultTcpFrameWriter : ITcpFrameWriter
+{
+    public static DefaultTcpFrameWriter Instance { get; } = new();
+
+    private DefaultTcpFrameWriter()
+    {
+    }
+
+    public async ValueTask WriteAsync(
+        NetworkStream stream,
+        Memory<byte> lengthBuffer,
+        ReadOnlyMemory<byte> data,
+        Action writeStarted,
+        CancellationToken token)
+    {
+        BinaryPrimitives.WriteInt32LittleEndian(lengthBuffer.Span, data.Length);
+        writeStarted();
+        await stream.WriteAsync(lengthBuffer, token).ConfigureAwait(false);
+        await stream.WriteAsync(data, token).ConfigureAwait(false);
+        await stream.FlushAsync(token).ConfigureAwait(false);
+    }
+}
+
 /// <summary>
 /// 基于 TCP 的传输实现，使用长度前缀帧拆分网络包。
 /// </summary>
@@ -16,6 +49,7 @@ public sealed class TcpNetTransport : INetTransport
     private readonly CancellationToken _disposeToken;
     private readonly SemaphoreSlim _serverLifecycleGate = new(1, 1);
     private readonly object _disposeGate = new();
+    private readonly ITcpFrameWriter _frameWriter;
     private long _nextConnectionId;
     private TcpListener? _listener;
     private CancellationTokenSource? _acceptCts;
@@ -27,12 +61,18 @@ public sealed class TcpNetTransport : INetTransport
     private Task? _disposeTask;
 
     public TcpNetTransport(int maxFrameSize = 64 * 1024, TimeProvider? timeProvider = null)
+        : this(maxFrameSize, timeProvider, DefaultTcpFrameWriter.Instance)
+    {
+    }
+
+    internal TcpNetTransport(int maxFrameSize, TimeProvider? timeProvider, ITcpFrameWriter frameWriter)
     {
         if (maxFrameSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxFrameSize), "Max frame size must be greater than zero.");
 
         MaxFrameSize = maxFrameSize;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _frameWriter = frameWriter ?? throw new ArgumentNullException(nameof(frameWriter));
         _disposeToken = _disposeCts.Token;
     }
 
@@ -238,30 +278,45 @@ public sealed class TcpNetTransport : INetTransport
             return new NetSendResult(NetSendStatus.PacketTooLarge, $"Packet length {data.Length} exceeds MaxFrameSize {MaxFrameSize}.");
         if (!_connections.TryGetValue(connectionId, out var connection))
             return new NetSendResult(NetSendStatus.ConnectionUnavailable);
+        if (!connection.TryEnterSend())
+            return new NetSendResult(NetSendStatus.ConnectionUnavailable);
 
+        var lockTaken = false;
+        var writeStarted = false;
         try
         {
             await connection.WriteLock.WaitAsync(token).ConfigureAwait(false);
-            try
-            {
-                await WriteFrameAsync(connection, data, token).ConfigureAwait(false);
-            }
-            finally
-            {
-                connection.WriteLock.Release();
-            }
+            lockTaken = true;
+            if (!_connections.TryGetValue(connectionId, out var current) || !ReferenceEquals(current, connection))
+                return new NetSendResult(NetSendStatus.ConnectionUnavailable);
+
+            await _frameWriter.WriteAsync(
+                connection.Stream,
+                connection.WriteLengthBuffer,
+                data,
+                () => writeStarted = true,
+                token).ConfigureAwait(false);
 
             return NetSendResult.Ok();
         }
         catch (OperationCanceledException)
         {
+            if (writeStarted)
+                await DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
             return new NetSendResult(NetSendStatus.TransportFailed, "Send was cancelled.");
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
             DispatchError(connectionId, ex.Message, ex);
-            await DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
+            if (writeStarted)
+                await DisconnectAsync(connectionId, DisconnectReason.TransportFailed).ConfigureAwait(false);
             return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
+        }
+        finally
+        {
+            if (lockTaken)
+                connection.WriteLock.Release();
+            connection.ExitSend();
         }
     }
 
@@ -460,14 +515,6 @@ public sealed class TcpNetTransport : INetTransport
         }
     }
 
-    private static async Task WriteFrameAsync(TcpConnection connection, ReadOnlyMemory<byte> data, CancellationToken token)
-    {
-        BinaryPrimitives.WriteInt32LittleEndian(connection.WriteLengthBuffer, data.Length);
-        await connection.Stream.WriteAsync(connection.WriteLengthBuffer, token).ConfigureAwait(false);
-        await connection.Stream.WriteAsync(data, token).ConfigureAwait(false);
-        await connection.Stream.FlushAsync(token).ConfigureAwait(false);
-    }
-
     private static async Task<byte[]?> ReadFrameAsync(TcpConnection connection, int maxFrameSize, CancellationToken token)
     {
         if (!await ReadExactlyOrNullAsync(connection.Stream, connection.ReadLengthBuffer, token).ConfigureAwait(false))
@@ -590,6 +637,9 @@ public sealed class TcpNetTransport : INetTransport
     {
         private readonly TcpClient _client;
         private readonly TaskCompletionSource<Task> _readTaskReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _sendGate = new();
+        private int _activeSends;
+        private bool _disposed;
 
         public TcpConnection(TcpClient client)
         {
@@ -608,11 +658,47 @@ public sealed class TcpNetTransport : INetTransport
             _readTaskReady.TrySetResult(readTask);
         }
 
+        public bool TryEnterSend()
+        {
+            lock (_sendGate)
+            {
+                if (_disposed)
+                    return false;
+
+                _activeSends++;
+                return true;
+            }
+        }
+
+        public void ExitSend()
+        {
+            var disposeWriteLock = false;
+            lock (_sendGate)
+            {
+                _activeSends--;
+                disposeWriteLock = _disposed && _activeSends == 0;
+            }
+
+            if (disposeWriteLock)
+                WriteLock.Dispose();
+        }
+
         public void Dispose()
         {
+            var disposeWriteLock = false;
+            lock (_sendGate)
+            {
+                if (_disposed)
+                    return;
+
+                _disposed = true;
+                disposeWriteLock = _activeSends == 0;
+            }
+
             Stream.Dispose();
             _client.Dispose();
-            WriteLock.Dispose();
+            if (disposeWriteLock)
+                WriteLock.Dispose();
         }
     }
 }

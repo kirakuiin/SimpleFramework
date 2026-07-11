@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -461,6 +462,63 @@ public class NetTransportTests
         Assert.That(packets[0], Is.EqualTo(new byte[] { 1 }));
         Assert.That(packets[1], Is.EqualTo(new byte[] { 2, 2 }));
         Assert.That(packets[2], Is.EqualTo(new byte[] { 3, 3, 3 }));
+    }
+
+    [Test]
+    public async Task TcpTransport_CancelledWhileWaitingForWriteLock_KeepsConnectionUsable()
+    {
+        await using var server = new TcpNetTransport();
+        var writer = new GatedTcpFrameWriter();
+        await using var client = new TcpNetTransport(64 * 1024, null, writer);
+        await server.StartServerAsync(new NetListenOptions { BindAddress = IPAddress.Loopback, Port = 0 });
+        var connect = await client.ConnectAsync(new NetConnectOptions
+        {
+            Host = "127.0.0.1",
+            Port = server.LocalEndPoint!.Port
+        });
+        using var cancellation = new CancellationTokenSource();
+
+        var first = client.SendAsync(connect.ConnectionId, new byte[] { 1 }, NetChannel.Reliable).AsTask();
+        await writer.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var waiting = client.SendAsync(
+            connect.ConnectionId,
+            new byte[] { 2 },
+            NetChannel.Reliable,
+            cancellation.Token).AsTask();
+        cancellation.Cancel();
+
+        Assert.That((await waiting.WaitAsync(TimeSpan.FromSeconds(1))).Status,
+            Is.EqualTo(NetSendStatus.TransportFailed));
+
+        writer.Release.TrySetResult();
+        Assert.That((await first.WaitAsync(TimeSpan.FromSeconds(1))).Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That((await client.SendAsync(connect.ConnectionId, new byte[] { 3 }, NetChannel.Reliable)).Status,
+            Is.EqualTo(NetSendStatus.Ok));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task TcpTransport_FrameWriteFailureAfterBytesBegin_DisconnectsBeforeNextSend(bool failInPayload)
+    {
+        await using var server = new TcpNetTransport();
+        var writer = new PartiallyFailingTcpFrameWriter(failInPayload);
+        await using var client = new TcpNetTransport(64 * 1024, null, writer);
+        var disconnected = new TaskCompletionSource<TransportPeerDisconnected>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.PeerDisconnected += value => disconnected.TrySetResult(value);
+        await server.StartServerAsync(new NetListenOptions { BindAddress = IPAddress.Loopback, Port = 0 });
+        var connect = await client.ConnectAsync(new NetConnectOptions
+        {
+            Host = "127.0.0.1",
+            Port = server.LocalEndPoint!.Port
+        });
+
+        var failed = await client.SendAsync(connect.ConnectionId, new byte[] { 1, 2, 3 }, NetChannel.Reliable);
+        var next = await client.SendAsync(connect.ConnectionId, new byte[] { 4 }, NetChannel.Reliable);
+
+        Assert.That(failed.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(next.Status, Is.EqualTo(NetSendStatus.ConnectionUnavailable));
+        Assert.That((await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(1))).Reason,
+            Is.EqualTo(DisconnectReason.TransportFailed));
     }
 
     [Test]
@@ -982,5 +1040,54 @@ public class NetTransportTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    private sealed class GatedTcpFrameWriter : ITcpFrameWriter
+    {
+        private readonly ITcpFrameWriter _inner = DefaultTcpFrameWriter.Instance;
+        private int _calls;
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask WriteAsync(
+            NetworkStream stream,
+            Memory<byte> lengthBuffer,
+            ReadOnlyMemory<byte> data,
+            Action writeStarted,
+            CancellationToken token)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                Started.TrySetResult();
+                await Release.Task.WaitAsync(token);
+            }
+
+            await _inner.WriteAsync(stream, lengthBuffer, data, writeStarted, token);
+        }
+    }
+
+    private sealed class PartiallyFailingTcpFrameWriter(bool failInPayload) : ITcpFrameWriter
+    {
+        public async ValueTask WriteAsync(
+            NetworkStream stream,
+            Memory<byte> lengthBuffer,
+            ReadOnlyMemory<byte> data,
+            Action writeStarted,
+            CancellationToken token)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(lengthBuffer.Span, data.Length);
+            writeStarted();
+            if (failInPayload)
+            {
+                await stream.WriteAsync(lengthBuffer, token);
+                await stream.WriteAsync(data[..1], token);
+            }
+            else
+            {
+                await stream.WriteAsync(lengthBuffer[..2], token);
+            }
+
+            throw new IOException("injected partial frame failure");
+        }
     }
 }
