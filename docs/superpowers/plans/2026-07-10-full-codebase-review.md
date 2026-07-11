@@ -753,24 +753,40 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - Consumes: transport, codec, registry, messaging, session, discovery, flow, stats, dispatcher, and `GameNet` public contracts.
 - Produces: verified asynchronous lifecycle, concurrency, packet/state behavior, practical hot-path performance, and one reviewable commit; network security remains out of scope.
 
-- [ ] **Step 1: Enumerate the exact Net review set and run its baseline**
+- [x] **Step 1: Enumerate the exact Net review set and run its baseline**
 
 ```powershell
 rg --files Net Test/Net -g '*.cs' -g '*.csproj' | Sort-Object
-dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Net"
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Net"
 ```
 
 Expected: the command lists every Net source/test file and all selected tests pass before repairs.
 
-- [ ] **Step 2: Review by data flow from transport to GameNet**
+- [x] **Repair 5.1: Contain transport send exceptions at the messaging boundary**
+
+Add focused `NetMessagingTests` cases whose send delegates throw synchronously and asynchronously. Verify each test fails because `SendAsync` propagates the transport exception, then update `NetMessenger.SendPacketWithLimitsAsync` to record a `TransportSendFailed` diagnostic and return `NetSendStatus.TransportFailed` while still releasing the per-peer in-flight reservation. Re-run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~NetMessagingTests"` and retain assertions for both the returned status and a subsequent successful send, proving queue accounting is restored.
+
+- [x] **Repair 5.2: Observe and await stats pong sends**
+
+Add a deterministic `NetDiscoveryStatsTests` regression with a task-gated transport that blocks the server pong send. Verify handling a ping does not complete before the pong send gate is released, then register `NetStats.HandlePing` as an asynchronous message handler and await `NetMessenger.SendAsync`. Re-run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~NetDiscoveryStatsTests"` and confirm no sleep-based timing is introduced.
+
+- [x] **Repair 5.3: Reuse TCP frame-prefix buffers**
+
+Retain the existing TCP partial-frame, multi-frame, large-frame, cancellation, and concurrent-send behavior tests. Move the 4-byte read and write prefix buffers into each `TcpConnection`, encode/decode lengths with `BinaryPrimitives`, and reuse those buffers under the existing single-reader/read-loop and `WriteLock` guarantees. This removes two fixed-size heap allocations per packet without changing payload ownership. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~NetTransportTests"`.
+
+- [x] **Repair 5.4: Keep GameNet result APIs and detached session broadcasts exception-contained**
+
+Add focused session tests with transports that throw from start, connect, send, stop, and disconnect operations. Verify `HostAsync`, `JoinAsync`, `StopAsync`, kick/leave, and session control-packet sends return their documented structured failure instead of propagating transport exceptions, and verify detached peer-directory broadcasts record diagnostics rather than faulting unobserved tasks. Introduce narrow GameNet transport-call helpers that preserve caller cancellation mapping, record the original exception, and keep lifecycle state retryable. Re-run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~NetSessionTests"`.
+
+- [x] **Step 2: Review by data flow from transport to GameNet**
 
 Trace start/stop/dispose idempotence, cancellation ownership, connect/disconnect races, partial TCP reads/writes, transport callback ordering, packet validation, codec/registry mismatch, request correlation, duplicate/late responses, session handshake and reconnect, discovery expiry, flow limits, statistics snapshots, dispatcher exceptions, background task observation, thread-safe collections, lock ordering, buffer allocation/copying, repeated serialization, polling, public API usability, and Chinese XML docs. Exclude authentication, encryption, hostile-peer defense, and denial-of-service design.
 
-- [ ] **Step 3: Repair findings using appended TDD subtasks**
+- [x] **Step 3: Repair findings using appended TDD subtasks**
 
 Use `Test/Net/TestDoubles/ManualTimeProvider.cs`, in-memory transports, explicit task gates, and cancellation tokens for deterministic tests. Any performance edit must identify the repeated allocation, copy, computation, or lock it removes and retain behavior tests; add a focused measurement only when code inspection is insufficient to establish the improvement.
 
-- [ ] **Step 4: Record, verify, commit, and review round 5**
+- [x] **Step 4: Record, verify, commit, and review round 5**
 
 ```powershell
 dotnet test .\Test\Test.csproj --no-restore

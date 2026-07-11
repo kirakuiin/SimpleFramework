@@ -349,6 +349,68 @@ public class NetSessionTests
     }
 
     [Test]
+    public async Task HostAsync_WhenTransportStartThrows_ReturnsStructuredFailure()
+    {
+        var transport = new FailingStopResultTransport { ThrowStart = true };
+        await using var server = new GameNet(transport, Options(Guid.NewGuid()));
+
+        var result = await server.HostAsync(new HostOptions { Port = 7777 });
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(result.Message, Is.EqualTo("start threw"));
+        Assert.That(server.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task JoinAsync_WhenTransportConnectThrows_ReturnsStructuredFailure()
+    {
+        var transport = new FailingStopResultTransport { ThrowConnect = true };
+        await using var client = new GameNet(transport, Options(Guid.NewGuid()));
+
+        var result = await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 });
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(result.Message, Is.EqualTo("connect threw"));
+        Assert.That(client.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task StopAsync_WhenTransportStopThrows_ReturnsFailureAndCanRetry()
+    {
+        var transport = new FailingStopResultTransport { ThrowStop = true };
+        await using var server = new GameNet(transport, Options(Guid.NewGuid()));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+
+        var failed = await server.StopAsync();
+
+        Assert.That(failed.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(server.Session.Role, Is.EqualTo(NetSessionRole.Host));
+        transport.ThrowStop = false;
+        transport.FailStop = false;
+        Assert.That((await server.StopAsync()).Status, Is.EqualTo(NetSessionStatus.Ok));
+    }
+
+    [Test]
+    public async Task LeaveAsync_WhenTransportDisconnectThrows_ReturnsFailureAfterClearingSession()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        var clientTransport = new ThrowingDisconnectTransport(network.CreateTransport("client"));
+        await using var client = new GameNet(clientTransport, Options(appId));
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        Assert.That((await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 })).Succeeded, Is.True);
+        clientTransport.ThrowDisconnect = true;
+
+        var result = await client.LeaveAsync();
+
+        Assert.That(result.Status, Is.EqualTo(NetSessionStatus.TransportFailed));
+        Assert.That(result.Message, Is.EqualTo("disconnect threw"));
+        Assert.That(client.Session.Role, Is.EqualTo(NetSessionRole.None));
+        Assert.That(client.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task Join_WithAcceptedPasswordAuthPayload_Succeeds()
     {
         var appId = Guid.NewGuid();
@@ -1930,18 +1992,27 @@ public class NetSessionTests
     private sealed class FailingStopResultTransport : INetTransport
     {
         public bool FailStop { get; set; } = true;
+        public bool ThrowStart { get; set; }
+        public bool ThrowConnect { get; set; }
+        public bool ThrowStop { get; set; }
         public event Action<TransportPeerConnected>? PeerConnected { add { } remove { } }
         public event Action<TransportPeerDisconnected>? PeerDisconnected { add { } remove { } }
         public event Action<TransportPacketReceived>? PacketReceived { add { } remove { } }
         public event Action<TransportError>? Error { add { } remove { } }
         public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
-            Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
+            ThrowStart
+                ? throw new IOException("start threw")
+                : Task.FromResult(new TransportStartResult(NetTransportStatus.Ok));
         public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
-            Task.FromResult(new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None));
+            ThrowConnect
+                ? throw new IOException("connect threw")
+                : Task.FromResult(new TransportConnectResult(NetTransportStatus.ConnectionRefused, TransportConnectionId.None));
         public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
-            Task.FromResult(FailStop
-                ? new TransportStartResult(NetTransportStatus.TransportFailed, "stop failed")
-                : new TransportStartResult(NetTransportStatus.Ok));
+            ThrowStop
+                ? throw new IOException("stop threw")
+                : Task.FromResult(FailStop
+                    ? new TransportStartResult(NetTransportStatus.TransportFailed, "stop failed")
+                    : new TransportStartResult(NetTransportStatus.Ok));
         public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) => Task.CompletedTask;
         public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
             ValueTask.FromResult(NetSendResult.Ok());
@@ -1984,6 +2055,37 @@ public class NetSessionTests
         public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
             _inner.SendAsync(connectionId, data, channel, token);
 
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private sealed class ThrowingDisconnectTransport : INetTransport
+    {
+        private readonly INetTransport _inner;
+
+        public ThrowingDisconnectTransport(INetTransport inner)
+        {
+            _inner = inner;
+            _inner.PeerConnected += connected => PeerConnected?.Invoke(connected);
+            _inner.PeerDisconnected += disconnected => PeerDisconnected?.Invoke(disconnected);
+            _inner.PacketReceived += received => PacketReceived?.Invoke(received);
+            _inner.Error += error => Error?.Invoke(error);
+        }
+
+        public bool ThrowDisconnect { get; set; }
+        public event Action<TransportPeerConnected>? PeerConnected;
+        public event Action<TransportPeerDisconnected>? PeerDisconnected;
+        public event Action<TransportPacketReceived>? PacketReceived;
+        public event Action<TransportError>? Error;
+        public Task<TransportStartResult> StartServerAsync(NetListenOptions options, CancellationToken token = default) =>
+            _inner.StartServerAsync(options, token);
+        public Task<TransportConnectResult> ConnectAsync(NetConnectOptions options, CancellationToken token = default) =>
+            _inner.ConnectAsync(options, token);
+        public Task<TransportStartResult> StopServerAsync(CancellationToken token = default) =>
+            _inner.StopServerAsync(token);
+        public Task DisconnectAsync(TransportConnectionId connectionId, DisconnectReason reason = DisconnectReason.LocalClosed) =>
+            ThrowDisconnect ? throw new IOException("disconnect threw") : _inner.DisconnectAsync(connectionId, reason);
+        public ValueTask<NetSendResult> SendAsync(TransportConnectionId connectionId, ReadOnlyMemory<byte> data, NetChannel channel, CancellationToken token = default) =>
+            _inner.SendAsync(connectionId, data, channel, token);
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 }

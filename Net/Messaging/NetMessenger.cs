@@ -1032,7 +1032,17 @@ public sealed class NetMessenger
 
         try
         {
-            var result = await send().ConfigureAwait(false);
+            NetSendResult result;
+            try
+            {
+                result = await send().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _diagnostics.RecordError(new NetError("TransportSendFailed", ex.Message, ex));
+                return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
+            }
+
             if (!result.Succeeded)
                 _diagnostics.RecordError(new NetError("TransportSendFailed", result.Message ?? result.Status.ToString()));
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 
@@ -243,7 +244,7 @@ public sealed class TcpNetTransport : INetTransport
             await connection.WriteLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                await WriteFrameAsync(connection.Stream, data, token).ConfigureAwait(false);
+                await WriteFrameAsync(connection, data, token).ConfigureAwait(false);
             }
             finally
             {
@@ -432,7 +433,7 @@ public sealed class TcpNetTransport : INetTransport
         {
             while (!token.IsCancellationRequested)
             {
-                var packet = await ReadFrameAsync(connection.Stream, MaxFrameSize, token).ConfigureAwait(false);
+                var packet = await ReadFrameAsync(connection, MaxFrameSize, token).ConfigureAwait(false);
                 if (packet is null)
                     break;
 
@@ -459,43 +460,44 @@ public sealed class TcpNetTransport : INetTransport
         }
     }
 
-    private static async Task WriteFrameAsync(NetworkStream stream, ReadOnlyMemory<byte> data, CancellationToken token)
+    private static async Task WriteFrameAsync(TcpConnection connection, ReadOnlyMemory<byte> data, CancellationToken token)
     {
-        var length = BitConverter.GetBytes(data.Length);
-        await stream.WriteAsync(length, token).ConfigureAwait(false);
-        await stream.WriteAsync(data, token).ConfigureAwait(false);
-        await stream.FlushAsync(token).ConfigureAwait(false);
+        BinaryPrimitives.WriteInt32LittleEndian(connection.WriteLengthBuffer, data.Length);
+        await connection.Stream.WriteAsync(connection.WriteLengthBuffer, token).ConfigureAwait(false);
+        await connection.Stream.WriteAsync(data, token).ConfigureAwait(false);
+        await connection.Stream.FlushAsync(token).ConfigureAwait(false);
     }
 
-    private static async Task<byte[]?> ReadFrameAsync(NetworkStream stream, int maxFrameSize, CancellationToken token)
+    private static async Task<byte[]?> ReadFrameAsync(TcpConnection connection, int maxFrameSize, CancellationToken token)
     {
-        var lengthBytes = await ReadExactlyOrNullAsync(stream, 4, token).ConfigureAwait(false);
-        if (lengthBytes is null)
+        if (!await ReadExactlyOrNullAsync(connection.Stream, connection.ReadLengthBuffer, token).ConfigureAwait(false))
             return null;
 
-        var length = BitConverter.ToInt32(lengthBytes, 0);
+        var length = BinaryPrimitives.ReadInt32LittleEndian(connection.ReadLengthBuffer);
         if (length < 0)
             throw new InvalidDataException("Frame length cannot be negative.");
         if (length > maxFrameSize)
             throw new InvalidDataException($"Frame length {length} exceeds MaxFrameSize {maxFrameSize}.");
 
-        return await ReadExactlyOrNullAsync(stream, length, token).ConfigureAwait(false);
+        var payload = new byte[length];
+        return await ReadExactlyOrNullAsync(connection.Stream, payload, token).ConfigureAwait(false)
+            ? payload
+            : null;
     }
 
-    private static async Task<byte[]?> ReadExactlyOrNullAsync(NetworkStream stream, int length, CancellationToken token)
+    private static async Task<bool> ReadExactlyOrNullAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken token)
     {
-        var buffer = new byte[length];
         var offset = 0;
-        while (offset < length)
+        while (offset < buffer.Length)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), token).ConfigureAwait(false);
+            var read = await stream.ReadAsync(buffer[offset..], token).ConfigureAwait(false);
             if (read == 0)
-                return offset == 0 ? null : throw new EndOfStreamException("TCP frame ended unexpectedly.");
+                return offset == 0 ? false : throw new EndOfStreamException("TCP frame ended unexpectedly.");
 
             offset += read;
         }
 
-        return buffer;
+        return true;
     }
 
     private TransportConnectionId NextConnectionId() => new((ulong)Interlocked.Increment(ref _nextConnectionId));
@@ -596,6 +598,8 @@ public sealed class TcpNetTransport : INetTransport
         }
 
         public NetworkStream Stream { get; }
+        public byte[] ReadLengthBuffer { get; } = new byte[sizeof(int)];
+        public byte[] WriteLengthBuffer { get; } = new byte[sizeof(int)];
         public SemaphoreSlim WriteLock { get; } = new(1, 1);
         public Task ReadTask => _readTaskReady.Task.Unwrap();
 

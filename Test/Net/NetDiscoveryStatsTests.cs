@@ -1002,6 +1002,45 @@ public class NetDiscoveryStatsTests
     }
 
     [Test]
+    public async Task Stats_PingHandler_AwaitsPongSendCompletion()
+    {
+        var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnostics = new NetDiagnostics();
+        var messenger = new NetMessenger(
+            (_, _) => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            async (_, _, _) =>
+            {
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            () => Array.Empty<PeerId>(),
+            diagnostics,
+            64 * 1024,
+            1024 * 1024,
+            1024,
+            int.MaxValue);
+        _ = new NetStats(messenger, TimeProvider.System);
+        var descriptor = messenger.Registry.Get<NetPing>();
+        var payload = new JsonNetCodec().Encode(new NetPing(1, DateTimeOffset.UtcNow));
+        var packet = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Message,
+            MessageId = descriptor.MessageId,
+            Payload = payload
+        });
+
+        var handling = messenger.TryHandlePacket(packet, new PeerId(2));
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(handling.IsCompleted, Is.False);
+
+        releaseSend.TrySetResult();
+        Assert.That(await handling.WaitAsync(TimeSpan.FromSeconds(1)), Is.True);
+    }
+
+    [Test]
     public async Task Stats_Timeout_ContributesToProbeLoss()
     {
         var clock = new ManualTimeProvider();

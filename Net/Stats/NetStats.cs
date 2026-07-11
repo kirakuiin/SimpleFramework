@@ -196,13 +196,15 @@ public sealed class NetStats
             return GetMutableStats(peerId).ToSnapshot();
     }
 
-    private void HandlePing(NetContext context, NetPing ping)
+    private async Task HandlePing(NetContext context, NetPing ping)
     {
         if (DropProbeResponses)
             return;
 
         var receivedAt = _timeProvider.GetUtcNow();
-        _ = _messenger.SendAsync(context.SenderId, new NetPong(ping.Sequence, ping.SentAt, receivedAt)).AsTask();
+        await _messenger.SendAsync(
+            context.SenderId,
+            new NetPong(ping.Sequence, ping.SentAt, receivedAt)).ConfigureAwait(false);
     }
 
     private void HandlePong(NetContext context, NetPong pong)

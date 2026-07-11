@@ -793,6 +793,58 @@ public class NetMessagingTests
     }
 
     [Test]
+    public async Task SendToServer_WhenTransportThrowsSynchronously_ReturnsTransportFailedAndReleasesReservation()
+    {
+        var calls = 0;
+        var diagnostics = new NetDiagnostics();
+        var messenger = CreateMessenger(diagnostics, _ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                throw new IOException("send failed");
+
+            return new ValueTask<NetSendResult>(NetSendResult.Ok());
+        }, maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var failed = await messenger.SendToServerAsync(new PlayerReady(true));
+        var succeeded = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        Assert.That(failed.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(failed.Message, Is.EqualTo("send failed"));
+        Assert.That(succeeded.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SendToServer_WhenTransportThrowsAsynchronously_ReturnsTransportFailedAndReleasesReservation()
+    {
+        var calls = 0;
+        var diagnostics = new NetDiagnostics();
+        var messenger = CreateMessenger(
+            diagnostics,
+            Send,
+            maxSendQueuePacketsPerPeer: 1);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var failed = await messenger.SendToServerAsync(new PlayerReady(true));
+        var succeeded = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        Assert.That(failed.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(failed.Message, Is.EqualTo("send failed"));
+        Assert.That(succeeded.Status, Is.EqualTo(NetSendStatus.Ok));
+        Assert.That(diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+
+        async ValueTask<NetSendResult> Send(byte[] _)
+        {
+            await Task.Yield();
+            if (Interlocked.Increment(ref calls) == 1)
+                throw new IOException("send failed");
+
+            return NetSendResult.Ok();
+        }
+    }
+
+    [Test]
     public async Task SendToServer_WhenCodecEncodeFails_ReturnsTransportFailedAndRecordsCodecError()
     {
         var diagnostics = new NetDiagnostics();

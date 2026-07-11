@@ -321,7 +321,7 @@ public sealed class GameNet : IAsyncDisposable
         TransportConnectionId connectionId = TransportConnectionId.None;
         try
         {
-            var connect = await _transport.ConnectAsync(new NetConnectOptions
+            var connect = await ConnectTransportAsync(new NetConnectOptions
             {
                 Host = options.Host,
                 Port = options.Port,
@@ -359,16 +359,16 @@ public sealed class GameNet : IAsyncDisposable
             if (!TrySerializeSessionPacket(request, out var requestPayload, out var requestError))
             {
                 ClearPendingJoin(pendingJoin);
-                await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, requestError);
             }
 
-            var send = await _transport.SendAsync(connectionId, requestPayload, NetChannel.System, operationToken).ConfigureAwait(false);
+            var send = await SendTransportAsync(connectionId, requestPayload, NetChannel.System, operationToken).ConfigureAwait(false);
             if (!send.Succeeded)
             {
                 ClearPendingJoin(pendingJoin);
-                await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, send.Message);
             }
@@ -381,14 +381,14 @@ public sealed class GameNet : IAsyncDisposable
             catch (TimeoutException)
             {
                 ClearPendingJoin(pendingJoin);
-                await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.TransportFailed, PeerId.None, "Join timed out.");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 ClearPendingJoin(pendingJoin);
-                await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                 await ResetConnectingStateAsync().ConfigureAwait(false);
                 return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
             }
@@ -406,12 +406,12 @@ public sealed class GameNet : IAsyncDisposable
             {
                 if (IsDisposed)
                 {
-                    await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                    await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                     return new JoinResult(NetSessionStatus.ObjectDisposed, PeerId.None);
                 }
                 if (_state != NetLifecycleState.Connecting || joinCancellation.IsCancellationRequested)
                 {
-                    await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                    await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                     return new JoinResult(NetSessionStatus.Cancelled, PeerId.None);
                 }
 
@@ -451,7 +451,7 @@ public sealed class GameNet : IAsyncDisposable
                 }
                 else
                 {
-                    await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                    await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
                     _state = NetLifecycleState.Stopped;
                 }
             }
@@ -522,7 +522,9 @@ public sealed class GameNet : IAsyncDisposable
         }
 
         await SendDisconnectNoticeAsync(connectionId, reason).ConfigureAwait(false);
-        await _transport.DisconnectAsync(connectionId, reason).ConfigureAwait(false);
+        var disconnect = await DisconnectTransportAsync(connectionId, reason).ConfigureAwait(false);
+        if (!disconnect.Succeeded)
+            return new NetSessionResult(NetSessionStatus.TransportFailed, disconnect.Message);
         RemoveRemotePeer(peerId, reason);
         return NetSessionResult.Ok();
     }
@@ -563,19 +565,22 @@ public sealed class GameNet : IAsyncDisposable
             ClearPendingJoin()?.TrySetResult(new JoinResult(NetSessionStatus.Cancelled, PeerId.None, "Session stopped."));
             if (_transport is not null && _state == NetLifecycleState.Client)
             {
+                var disconnect = NetSendResult.Ok();
                 if (_serverConnectionId != TransportConnectionId.None)
-                    await _transport.DisconnectAsync(_serverConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+                    disconnect = await DisconnectTransportAsync(_serverConnectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
 
                 ClearLocalSession(DisconnectReason.LocalClosed);
                 _lastJoinOptions = null;
                 _lastReconnectToken = null;
-                return NetSessionResult.Ok();
+                return disconnect.Succeeded
+                    ? NetSessionResult.Ok()
+                    : new NetSessionResult(NetSessionStatus.TransportFailed, disconnect.Message);
             }
 
             if (_transport is not null)
             {
                 await SendDisconnectNoticesToAllPeersAsync(DisconnectReason.ServerClosed).ConfigureAwait(false);
-                var stop = await _transport.StopServerAsync(CancellationToken.None).ConfigureAwait(false);
+                var stop = await StopTransportServerAsync().ConfigureAwait(false);
                 if (stop.Status != NetTransportStatus.Ok)
                     return new NetSessionResult(MapTransportStatus(stop.Status), stop.Message);
             }
@@ -738,7 +743,7 @@ public sealed class GameNet : IAsyncDisposable
             if (_state != NetLifecycleState.Stopped)
                 return new NetSessionResult(NetSessionStatus.InvalidState);
 
-            var start = await _transport.StartServerAsync(new NetListenOptions
+            var start = await StartTransportServerAsync(new NetListenOptions
             {
                 BindAddress = options.BindAddress,
                 Port = options.Port,
@@ -774,6 +779,86 @@ public sealed class GameNet : IAsyncDisposable
         NetTransportStatus.Cancelled => NetSessionStatus.Cancelled,
         _ => NetSessionStatus.TransportFailed
     };
+
+    private async Task<TransportStartResult> StartTransportServerAsync(NetListenOptions options, CancellationToken token)
+    {
+        try
+        {
+            return await _transport!.StartServerAsync(options, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return new TransportStartResult(NetTransportStatus.Cancelled);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("TransportStartFailed", ex.Message, ex));
+            return new TransportStartResult(NetTransportStatus.TransportFailed, ex.Message);
+        }
+    }
+
+    private async Task<TransportConnectResult> ConnectTransportAsync(NetConnectOptions options, CancellationToken token)
+    {
+        try
+        {
+            return await _transport!.ConnectAsync(options, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return new TransportConnectResult(NetTransportStatus.Cancelled, TransportConnectionId.None);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("TransportConnectFailed", ex.Message, ex));
+            return new TransportConnectResult(NetTransportStatus.TransportFailed, TransportConnectionId.None, ex.Message);
+        }
+    }
+
+    private async ValueTask<NetSendResult> SendTransportAsync(
+        TransportConnectionId connectionId,
+        ReadOnlyMemory<byte> data,
+        NetChannel channel,
+        CancellationToken token = default)
+    {
+        try
+        {
+            return await _transport!.SendAsync(connectionId, data, channel, token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("TransportSendFailed", ex.Message, ex));
+            return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
+        }
+    }
+
+    private async Task<NetSendResult> DisconnectTransportAsync(
+        TransportConnectionId connectionId,
+        DisconnectReason reason)
+    {
+        try
+        {
+            await _transport!.DisconnectAsync(connectionId, reason).ConfigureAwait(false);
+            return NetSendResult.Ok();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("TransportDisconnectFailed", ex.Message, ex));
+            return new NetSendResult(NetSendStatus.TransportFailed, ex.Message);
+        }
+    }
+
+    private async Task<TransportStartResult> StopTransportServerAsync()
+    {
+        try
+        {
+            return await _transport!.StopServerAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.RecordError(new NetError("TransportStopFailed", ex.Message, ex));
+            return new TransportStartResult(NetTransportStatus.TransportFailed, ex.Message);
+        }
+    }
 
     private async Task ResetConnectingStateAsync()
     {
@@ -1173,7 +1258,7 @@ public sealed class GameNet : IAsyncDisposable
                 _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer) ||
                 !ReferenceEquals(_hostOptions, hostOptions))
             {
-                await _transport.DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+                await DisconnectTransportAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
                 return;
             }
 
@@ -1231,7 +1316,7 @@ public sealed class GameNet : IAsyncDisposable
 
         if (!joinCommitted)
         {
-            await _transport.DisconnectAsync(
+            await DisconnectTransportAsync(
                 connectionId,
                 sessionStillActive ? DisconnectReason.TransportFailed : DisconnectReason.ServerClosed).ConfigureAwait(false);
             return;
@@ -1276,7 +1361,7 @@ public sealed class GameNet : IAsyncDisposable
                 _state is not (NetLifecycleState.Hosting or NetLifecycleState.DedicatedServer) ||
                 !ReferenceEquals(_hostOptions, hostOptions))
             {
-                await _transport.DisconnectAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
+                await DisconnectTransportAsync(connectionId, DisconnectReason.ServerClosed).ConfigureAwait(false);
                 return;
             }
 
@@ -1390,7 +1475,7 @@ public sealed class GameNet : IAsyncDisposable
 
         if (!reconnectCommitted)
         {
-            await _transport.DisconnectAsync(
+            await DisconnectTransportAsync(
                 connectionId,
                 sessionStillActive ? DisconnectReason.TransportFailed : DisconnectReason.ServerClosed).ConfigureAwait(false);
             return;
@@ -1417,7 +1502,7 @@ public sealed class GameNet : IAsyncDisposable
             status,
             message);
         await SendSessionPacketAsync(connectionId, rejected).ConfigureAwait(false);
-        await _transport.DisconnectAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
+        await DisconnectTransportAsync(connectionId, DisconnectReason.LocalClosed).ConfigureAwait(false);
     }
 
     private async Task SendDisconnectNoticeAsync(TransportConnectionId connectionId, DisconnectReason reason)
@@ -1539,7 +1624,7 @@ public sealed class GameNet : IAsyncDisposable
             if (target.Value == exceptConnectionId)
                 continue;
 
-            var send = await _transport.SendAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
+            var send = await SendTransportAsync(target.Value, payload, NetChannel.System).ConfigureAwait(false);
             if (!send.Succeeded)
                 Diagnostics.RecordError(new NetError("SessionPacketSendFailed", send.Message ?? send.Status.ToString()));
         }
@@ -1745,7 +1830,7 @@ public sealed class GameNet : IAsyncDisposable
         if (!TrySerializeSessionPacket(packet, out var payload, out var error))
             return new NetSendResult(NetSendStatus.PacketTooLarge, error);
 
-        var send = await _transport.SendAsync(connectionId, payload, NetChannel.System).ConfigureAwait(false);
+        var send = await SendTransportAsync(connectionId, payload, NetChannel.System).ConfigureAwait(false);
         if (!send.Succeeded)
             Diagnostics.RecordError(new NetError("SessionPacketSendFailed", send.Message ?? send.Status.ToString()));
         return send;
@@ -1758,7 +1843,7 @@ public sealed class GameNet : IAsyncDisposable
         if (_transport is null || _serverConnectionId == TransportConnectionId.None)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
 
-        return _transport.SendAsync(_serverConnectionId, packet, NetChannel.Reliable, token);
+        return SendTransportAsync(_serverConnectionId, packet, NetChannel.Reliable, token);
     }
 
     private ValueTask<NetSendResult> SendToPeerPacketAsync(PeerId peerId, byte[] packet, CancellationToken token)
@@ -1775,7 +1860,7 @@ public sealed class GameNet : IAsyncDisposable
                 return ValueTask.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable));
         }
 
-        return _transport.SendAsync(connectionId, packet, NetChannel.Reliable, token);
+        return SendTransportAsync(connectionId, packet, NetChannel.Reliable, token);
     }
 
     private IReadOnlyCollection<PeerId> GetBroadcastTargets()
