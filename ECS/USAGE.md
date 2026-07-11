@@ -174,7 +174,7 @@ var result = commands.Playback();
 var entity = result.Resolve(created);
 ```
 
-Playback follows recorded order and uses the same invalid-entity policy as `World`. It is not transactional: if a later command fails, earlier successful changes remain applied, playback stops, and the recorded commands are cleared only after a fully successful playback.
+Playback follows recorded order and uses the same invalid-entity policy as `World`. Each playback attempt is one-shot: its recorded commands and buffered handles are consumed whether it succeeds or fails. If a later command fails, earlier successful changes remain applied, later commands do not run, and the original exception propagates. Record a fresh batch after handling the failure; old buffered handles are rejected by the buffer, while a result from an earlier successful batch remains able to resolve that batch's handles.
 
 ## Prefabs
 

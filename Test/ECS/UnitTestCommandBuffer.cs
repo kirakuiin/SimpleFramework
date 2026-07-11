@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
 using SimpleFramework.ECS;
 
@@ -170,5 +171,69 @@ public class UnitTestCommandBuffer
 
         Assert.AreEqual(1, world.EntityCount);
         Assert.AreEqual("valid", world.Get<TestName>(entity).Value);
+    }
+
+    [Test]
+    public void FailedPlaybackConsumesBatchPreservesPrefixAndAllowsRecovery()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var prefix = buffer.CreateEntity(new TestPosition { X = 1 });
+        buffer.Add(new Entity(world.WorldId, int.MaxValue, 1), new TestVelocity());
+        var suffix = buffer.CreateEntity(new TestPosition { X = 2 });
+        var commandCount = GetRecordedCommandCount(buffer);
+        CommandBufferResult? firstResult = null;
+
+        var firstException = Assert.Throws<InvalidOperationException>(() => firstResult = buffer.Playback());
+
+        Assert.IsNull(firstResult);
+        Assert.IsNull(firstException!.InnerException);
+        StringAssert.Contains("Invalid entity handle", firstException.Message);
+        Assert.AreEqual(0, commandCount());
+        Assert.AreEqual(1, world.EntityCount);
+        CollectionAssert.AreEqual(new[] { 1f }, world.Query<TestPosition>().Select(entity => world.Get<TestPosition>(entity).X));
+        Assert.Throws<InvalidOperationException>(() => buffer.Add(prefix, new TestVelocity()));
+        Assert.Throws<InvalidOperationException>(() => buffer.Add(suffix, new TestVelocity()));
+
+        var emptyResult = buffer.Playback();
+        Assert.AreEqual(1, world.EntityCount);
+        Assert.IsFalse(emptyResult.TryResolve(prefix, out _));
+
+        var recovered = buffer.CreateEntity(new TestPosition { X = 3 });
+        Assert.AreEqual(0, recovered.Id);
+        Assert.AreNotEqual(prefix, recovered);
+        var recoveredResult = buffer.Playback();
+        var recoveredEntity = recoveredResult.Resolve(recovered);
+
+        Assert.AreEqual(3, world.Get<TestPosition>(recoveredEntity).X);
+        Assert.AreEqual(2, world.EntityCount);
+        Assert.AreEqual(0, commandCount());
+    }
+
+    [Test]
+    public void SuccessfulPlaybackInvalidatesOldHandlesButKeepsItsResultResolvable()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var first = buffer.CreateEntity(new TestPosition { X = 1 });
+
+        var firstResult = buffer.Playback();
+        var firstEntity = firstResult.Resolve(first);
+
+        Assert.AreEqual(1, world.Get<TestPosition>(firstEntity).X);
+        Assert.Throws<InvalidOperationException>(() => buffer.Add(first, new TestVelocity()));
+        Assert.AreEqual(firstEntity, firstResult.Resolve(first));
+
+        var second = buffer.CreateEntity(new TestPosition { X = 2 });
+        Assert.AreEqual(0, second.Id);
+        Assert.AreNotEqual(first, second);
+        var secondResult = buffer.Playback();
+        Assert.AreEqual(2, world.Get<TestPosition>(secondResult.Resolve(second)).X);
+    }
+
+    private static Func<int> GetRecordedCommandCount(CommandBuffer buffer)
+    {
+        var field = typeof(CommandBuffer).GetField("_commands", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return () => ((System.Collections.ICollection)field.GetValue(buffer)!).Count;
     }
 }

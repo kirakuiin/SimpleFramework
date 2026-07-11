@@ -18,7 +18,7 @@ public readonly struct Entity : IEquatable<Entity>
     public int WorldId { get; }
 
     /// <summary>
-    /// 实体槽位编号。
+    /// 全局分配的不透明实体标识；所属世界将其映射到世界内的存储槽位。
     /// </summary>
     public int Id { get; }
 

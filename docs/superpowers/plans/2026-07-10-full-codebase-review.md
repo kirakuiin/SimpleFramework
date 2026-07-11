@@ -707,6 +707,33 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [x] Add `SystemConstructorRejectsNullWorld`, constructing the fixture's concrete counting system with null and asserting `ArgumentNullException` names `world`. Run its exact fully-qualified filter; expect failure because `EcsSystem` currently publishes a null `World` reference.
 - [x] Guard the protected `EcsSystem` constructor before assigning `World` and document the exception in Chinese XML. Rerun the focused test and all ECS tests; expect deterministic construction failure and no regression.
 
+#### Task 4 Review Repair H: Make TypeSignature ordering consistent with runtime Type identity
+
+**Files:** `ECS/TypeSignature.cs`, `Test/ECS/UnitTestSignature.cs`
+
+- [x] Replace the earlier collision fixture with `TypeSignatureDistinguishesRuntimeTypesWithIdenticalAssemblyQualifiedNames`. Create two collectible dynamic assemblies with the same `AssemblyName` identity and the same component `FullName`; assert the resulting `Type` objects are unequal while their assembly-qualified names are equal, `Has` distinguishes them, one-type signatures are unequal, and combined signatures normalize equally in both input orders. Run its exact fully-qualified filter; expect failure because `CompareTypes` still returns zero for the distinct runtime types.
+- [x] Keep the useful full-name and assembly-qualified-name comparisons, then break remaining collisions with a thread-safe `ConditionalWeakTable<Type, TypeIdentity>` whose values contain `Interlocked`-allocated monotonic IDs and do not reference their collectible keys. Ensure `CompareTypes` returns zero only for reference-equal runtime types and document the runtime-identity membership contract in Chinese XML. Rerun the exact test and all signature tests; expect identity-safe, transitive, order-independent behavior.
+
+#### Task 4 Review Repair I: Key prefab components by runtime identity
+
+**Files:** `ECS/EntityPrefab.cs`, `Test/ECS/UnitTestEntityPrefab.cs`
+
+- [x] Add `PrefabRejectsWidenedDuplicateRuntimeTypeWithoutMutation` and `PrefabKeepsDistinctWidenedRuntimeTypesWithIdenticalNames`. The first adds a position normally and again through `With<IComponent>`, expecting immediate `ArgumentException` and successful instantiation of only the original value. The second passes instances of the two colliding runtime component types through `With<IComponent>`, then asserts both exact runtime types remain in the instantiated entity's signature/columns. Run their exact filter; expect failure because `With` keys by `typeof(T)` rather than `component.GetType()`.
+- [x] After the null guard, key `EntityPrefab` storage by `component.GetType()` so duplicate detection and `World.Instantiate` use the same runtime identity. Update the Chinese XML type/duplicate contract. Rerun the focused tests and all prefab/world/signature tests; expect widened duplicates to fail before mutation and distinct runtime types to instantiate correctly.
+
+#### Task 4 Review Repair J: Consume every CommandBuffer playback generation
+
+**Files:** `ECS/CommandBuffer.cs`, `Test/ECS/UnitTestCommandBuffer.cs`, `ECS/USAGE.md`
+
+- [x] Add `FailedPlaybackConsumesBatchPreservesPrefixAndAllowsRecovery` and `SuccessfulPlaybackInvalidatesOldHandlesButKeepsItsResultResolvable`. The failed case queues create/failing-add/create, asserts the original direct exception is unwrapped, the prefix world effect remains, the suffix is absent, command count becomes zero, an empty second playback does not repeat effects, both old handles are rejected at record time, and a fresh batch reuses local ID zero with a new identity and succeeds. The successful case asserts its result still resolves the completed generation while recording with its old handle is rejected and the next generation also starts at local ID zero. Run their exact filter; expect failure because commands/owner/local IDs currently reset only after successful playback and the owner never rotates.
+- [x] In `Playback`, snapshot the current command list and generation, execute in order, and in `finally` clear the recorded batch, reset the local handle counter, and advance to a fresh unique owner generation on both success and failure. A successful result retains the completed generation's dictionary; failure returns no partial result, preserves earlier world effects, skips the suffix, and propagates the original exception without wrapping. Update Chinese XML and usage docs to state one-shot consumption. Rerun the focused tests and all command-buffer tests.
+
+#### Task 4 Review Documentation K: Correct Entity.Id terminology
+
+**Files:** `ECS/Entity.cs`
+
+- [x] Replace the `Entity.Id` XML description with an opaque, globally allocated entity identifier that the owning world maps to a world-local slot; explicitly avoid describing it as the slot number. Verify with source quality and Release build.
+
 ### Task 5: Net
 
 **Files:**

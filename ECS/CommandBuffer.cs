@@ -10,13 +10,13 @@ public readonly struct BufferedEntity : IEquatable<BufferedEntity>
     {
     }
 
-    internal BufferedEntity(int ownerId, int id)
+    internal BufferedEntity(long ownerId, int id)
     {
         OwnerId = ownerId;
         Id = id;
     }
 
-    internal int OwnerId { get; }
+    internal long OwnerId { get; }
 
     /// <summary>
     /// 占位实体在创建它的命令缓冲内的编号。
@@ -101,10 +101,10 @@ public sealed class CommandBufferResult
 /// </summary>
 public sealed class CommandBuffer
 {
-    private static int _nextBufferId;
+    private static long _nextBufferId;
 
     private readonly List<ICommand> _commands = new();
-    private readonly int _bufferId;
+    private long _bufferId;
     private readonly World _world;
     private int _nextBufferedEntityId;
 
@@ -258,19 +258,29 @@ public sealed class CommandBuffer
     }
 
     /// <summary>
-    /// 按记录顺序播放全部命令。播放成功后会清空已记录的命令。
+    /// 按记录顺序播放当前批次，并在本次尝试结束后消费全部命令和占位句柄。
     /// </summary>
-    /// <returns>播放结果。</returns>
+    /// <returns>成功播放的结果；结果仍可解析刚消费批次的占位句柄。</returns>
+    /// <exception cref="Exception">命令异常会直接传播；此前已完成的世界变更不会回滚。</exception>
     public CommandBufferResult Playback()
     {
+        var commands = _commands.ToArray();
         var context = new PlaybackContext(_world);
-        foreach (var command in _commands)
+        try
         {
-            command.Playback(context);
-        }
+            foreach (var command in commands)
+            {
+                command.Playback(context);
+            }
 
-        _commands.Clear();
-        return new CommandBufferResult(context.CreatedEntities);
+            return new CommandBufferResult(context.CreatedEntities);
+        }
+        finally
+        {
+            _commands.Clear();
+            _nextBufferedEntityId = 0;
+            _bufferId = Interlocked.Increment(ref _nextBufferId);
+        }
     }
 
     private BufferedEntity CreateEntity(IReadOnlyCollection<IComponent> components)

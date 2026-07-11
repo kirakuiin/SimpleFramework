@@ -67,4 +67,42 @@ public class UnitTestEntityPrefab
         var entity = world.Instantiate(prefab);
         Assert.AreEqual("valid", world.Get<TestName>(entity).Value);
     }
+
+    [Test]
+    public void PrefabRejectsWidenedDuplicateRuntimeTypeWithoutMutation()
+    {
+        var prefab = EntityPrefab.Create().With(new TestPosition { X = 1 });
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            prefab.With<IComponent>(new TestPosition { X = 2 }));
+
+        Assert.AreEqual("component", exception!.ParamName);
+        var world = new World();
+        var entity = world.Instantiate(prefab);
+        Assert.AreEqual(1, world.GetArchetype(entity).Signature.Count);
+        Assert.AreEqual(1, world.Get<TestPosition>(entity).X);
+    }
+
+    [Test]
+    public void PrefabKeepsDistinctWidenedRuntimeTypesWithIdenticalNames()
+    {
+        var firstType = TestTypeSignature.CreateDynamicComponentType("PrefabModuleA");
+        var secondType = TestTypeSignature.CreateDynamicComponentType("PrefabModuleB");
+        var first = (IComponent)Activator.CreateInstance(firstType)!;
+        var second = (IComponent)Activator.CreateInstance(secondType)!;
+        var prefab = EntityPrefab.Create()
+            .With<IComponent>(first)
+            .With<IComponent>(second);
+
+        var world = new World();
+        var entity = world.Instantiate(prefab);
+        var archetype = world.GetArchetype(entity);
+
+        Assert.AreNotEqual(firstType, secondType);
+        Assert.AreEqual(firstType.AssemblyQualifiedName, secondType.AssemblyQualifiedName);
+        Assert.IsTrue(archetype.Has(firstType));
+        Assert.IsTrue(archetype.Has(secondType));
+        Assert.AreSame(first, archetype.GetBoxed(0, firstType));
+        Assert.AreSame(second, archetype.GetBoxed(0, secondType));
+    }
 }

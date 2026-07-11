@@ -71,14 +71,16 @@ public class TestTypeSignature
     }
 
     [Test]
-    public void TypeSignatureDoesNotConfuseSameNamedTypesFromDifferentAssemblies()
+    public void TypeSignatureDistinguishesRuntimeTypesWithIdenticalAssemblyQualifiedNames()
     {
-        var firstType = CreateDynamicComponentType("SignatureCollisionA");
-        var secondType = CreateDynamicComponentType("SignatureCollisionB");
+        var firstType = CreateDynamicComponentType("CollisionModuleA");
+        var secondType = CreateDynamicComponentType("CollisionModuleB");
         var first = new TypeSignature(firstType);
         var second = new TypeSignature(secondType);
 
+        Assert.AreNotEqual(firstType, secondType);
         Assert.AreEqual(firstType.FullName, secondType.FullName);
+        Assert.AreEqual(firstType.AssemblyQualifiedName, secondType.AssemblyQualifiedName);
         Assert.IsTrue(first.Has(firstType));
         Assert.IsFalse(first.Has(secondType));
         Assert.AreNotEqual(first, second);
@@ -86,14 +88,19 @@ public class TestTypeSignature
 
         var combined = new TypeSignature(firstType, secondType);
         var reversed = new TypeSignature(secondType, firstType);
+        Assert.AreEqual(2, combined.Count);
+        Assert.IsTrue(combined.Has(firstType));
+        Assert.IsTrue(combined.Has(secondType));
         Assert.AreEqual(combined, reversed);
         Assert.AreEqual(combined.GetHashCode(), reversed.GetHashCode());
     }
 
-    private static Type CreateDynamicComponentType(string assemblyName)
+    internal static Type CreateDynamicComponentType(string moduleName)
     {
-        var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run);
-        var module = assembly.DefineDynamicModule(assemblyName);
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("SignatureCollision"),
+            AssemblyBuilderAccess.RunAndCollect);
+        var module = assembly.DefineDynamicModule(moduleName);
         var builder = module.DefineType("Collision.SameComponent", TypeAttributes.Public | TypeAttributes.Class);
         builder.AddInterfaceImplementation(typeof(IComponent));
         return builder.CreateType()!;

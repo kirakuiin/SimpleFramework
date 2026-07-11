@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Runtime.CompilerServices;
 
 namespace SimpleFramework.ECS;
 
@@ -8,6 +9,8 @@ namespace SimpleFramework.ECS;
 public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyCollection<Type>
 {
     private static readonly IComparer<Type> TypeComparer = Comparer<Type>.Create(CompareTypes);
+    private static readonly ConditionalWeakTable<Type, TypeIdentity> TypeIdentities = new();
+    private static long _nextTypeIdentity;
     private readonly int _hashCode;
     private readonly Type[] _types;
 
@@ -53,7 +56,7 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyCollecti
     /// 判断签名是否包含指定组件类型。
     /// </summary>
     /// <typeparam name="T">组件类型。</typeparam>
-    /// <returns>如果包含该组件类型则为 true。</returns>
+    /// <returns>如果包含相同运行时类型标识的组件类型则为 true。</returns>
     public bool Has<T>() where T : IComponent
     {
         return Has(typeof(T));
@@ -63,7 +66,7 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyCollecti
     /// 判断签名是否包含指定组件类型。
     /// </summary>
     /// <param name="type">组件类型。</param>
-    /// <returns>如果包含该组件类型则为 true。</returns>
+    /// <returns>如果包含相同运行时类型标识的组件类型则为 true。</returns>
     public bool Has(Type type)
     {
         return Array.BinarySearch(_types, ValidateType(type), TypeComparer) >= 0;
@@ -170,6 +173,27 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyCollecti
             return nameComparison;
         }
 
-        return string.Compare(left.AssemblyQualifiedName, right.AssemblyQualifiedName, StringComparison.Ordinal);
+        var assemblyNameComparison = string.Compare(
+            left.AssemblyQualifiedName,
+            right.AssemblyQualifiedName,
+            StringComparison.Ordinal);
+        if (assemblyNameComparison != 0)
+        {
+            return assemblyNameComparison;
+        }
+
+        return GetTypeIdentity(left).CompareTo(GetTypeIdentity(right));
+    }
+
+    private static long GetTypeIdentity(Type type)
+    {
+        return TypeIdentities.GetValue(
+            type,
+            static _ => new TypeIdentity(Interlocked.Increment(ref _nextTypeIdentity))).Value;
+    }
+
+    private sealed class TypeIdentity(long value)
+    {
+        public long Value { get; } = value;
     }
 }
