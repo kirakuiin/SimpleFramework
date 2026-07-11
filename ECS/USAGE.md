@@ -163,7 +163,7 @@ foreach (var entity in world.Query<Position>())
 commands.Playback();
 ```
 
-A `BufferedEntity` returned by `CreateEntity` belongs only to that buffer. It can be targeted by later commands in the same buffer and resolved through that buffer's successful playback result:
+A `BufferedEntity` returned by `CreateEntity` belongs only to the current command batch. It can be targeted by later commands in that batch and resolved through that batch's successful playback result:
 
 ```csharp
 var commands = new CommandBuffer(world);
@@ -174,7 +174,7 @@ var result = commands.Playback();
 var entity = result.Resolve(created);
 ```
 
-Playback follows recorded order and uses the same invalid-entity policy as `World`. Each playback attempt is one-shot: its recorded commands and buffered handles are consumed whether it succeeds or fails. If a later command fails, earlier successful changes remain applied, later commands do not run, and the original exception propagates. Record a fresh batch after handling the failure; old buffered handles are rejected by the buffer, while a result from an earlier successful batch remains able to resolve that batch's handles.
+Playback follows recorded order and uses the same invalid-entity policy as `World`. Each playback attempt is one-shot and starts a fresh command batch afterward: its recorded commands and buffered handles are consumed whether it succeeds or fails. If a later command fails, earlier successful changes remain applied, later commands do not run, and the original exception propagates. Record into the fresh batch after handling the failure; expired handles and handles from other buffers or batches are rejected, while a result from an earlier successful batch remains able to resolve that batch's handles.
 
 ## Prefabs
 

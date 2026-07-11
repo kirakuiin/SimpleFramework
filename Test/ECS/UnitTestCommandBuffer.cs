@@ -231,6 +231,20 @@ public class UnitTestCommandBuffer
         Assert.AreEqual(2, world.Get<TestPosition>(secondResult.Resolve(second)).X);
     }
 
+    [Test]
+    public void StaleHandleDiagnosticIdentifiesExpiredOrForeignBatch()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var stale = buffer.CreateEntity(new TestPosition());
+        buffer.Playback();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => buffer.Add(stale, new TestVelocity()));
+
+        StringAssert.Contains("expired or foreign command batch", exception!.Message);
+        StringAssert.DoesNotContain("another command buffer", exception.Message);
+    }
+
     private static Func<int> GetRecordedCommandCount(CommandBuffer buffer)
     {
         var field = typeof(CommandBuffer).GetField("_commands", BindingFlags.Instance | BindingFlags.NonPublic)!;

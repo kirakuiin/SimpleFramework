@@ -734,6 +734,13 @@ Request review for the round range, resolve Critical and Important feedback, rer
 
 - [x] Replace the `Entity.Id` XML description with an opaque, globally allocated entity identifier that the owning world maps to a world-local slot; explicitly avoid describing it as the slot number. Verify with source quality and Release build.
 
+#### Task 4 Review Repair L: Describe buffered handles by command generation
+
+**Files:** `ECS/CommandBuffer.cs`, `ECS/README.md`, `ECS/USAGE.md`, `Test/ECS/UnitTestCommandBuffer.cs`, `docs/superpowers/reviews/2026-07-10-round-4-ecs.md`
+
+- [x] Add `StaleHandleDiagnosticIdentifiesExpiredOrForeignBatch`, creating a buffered entity, successfully playing its batch, then attempting to record with the consumed handle. Assert `InvalidOperationException` contains `expired or foreign command batch` and does not contain the false legacy claim `another command buffer`. Run its exact fully-qualified filter; expect failure because `ValidateOwner` currently diagnoses every generation mismatch as another command buffer.
+- [x] Rename the internal validation concept from buffer ownership to current-batch validity and change its English diagnostic to cover expired same-buffer and foreign-buffer generations. Audit all public `BufferedEntity`, `CommandBuffer`, and buffered-overload Chinese XML summaries, IDs, equality/returns/exceptions/remarks so validity is defined by the originating command batch and each `Playback` attempt starts a fresh batch. Align README/USAGE wording, rerun the focused test and all command-buffer tests, and record the reviewer disposition.
+
 ### Task 5: Net
 
 **Files:**

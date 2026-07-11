@@ -1,7 +1,7 @@
 namespace SimpleFramework.ECS;
 
 /// <summary>
-/// 延迟实体命令中的占位实体句柄。
+/// 延迟实体命令中的占位实体句柄，仅在创建它的命令批次中有效。
 /// </summary>
 public readonly struct BufferedEntity : IEquatable<BufferedEntity>
 {
@@ -19,15 +19,15 @@ public readonly struct BufferedEntity : IEquatable<BufferedEntity>
     internal long OwnerId { get; }
 
     /// <summary>
-    /// 占位实体在创建它的命令缓冲内的编号。
+    /// 占位实体在来源命令批次内的局部编号。
     /// </summary>
     public int Id { get; }
 
     /// <summary>
-    /// 判断两个占位句柄是否来自同一命令缓冲且编号相同。
+    /// 判断两个占位句柄是否来自同一命令批次且局部编号相同。
     /// </summary>
     /// <param name="other">要比较的占位句柄。</param>
-    /// <returns>如果两个句柄标识同一缓冲内的占位实体则为 <c>true</c>。</returns>
+    /// <returns>如果两个句柄标识同一来源批次内的占位实体则为 <c>true</c>。</returns>
     public bool Equals(BufferedEntity other)
     {
         return OwnerId == other.OwnerId && Id == other.Id;
@@ -57,7 +57,7 @@ public readonly struct BufferedEntity : IEquatable<BufferedEntity>
 }
 
 /// <summary>
-/// 命令缓冲播放结果，用于解析延迟创建的实体。
+/// 命令批次播放结果，用于解析该次成功播放所创建的实体。
 /// </summary>
 public sealed class CommandBufferResult
 {
@@ -97,7 +97,7 @@ public sealed class CommandBufferResult
 }
 
 /// <summary>
-/// 延迟播放 ECS 结构变更的命令缓冲。
+/// 延迟播放 ECS 结构变更的命令缓冲；每次播放尝试后开始新的命令批次。
 /// </summary>
 public sealed class CommandBuffer
 {
@@ -122,7 +122,7 @@ public sealed class CommandBuffer
     /// <summary>
     /// 延迟创建空实体。
     /// </summary>
-    /// <returns>可在本缓冲中继续使用的占位实体。</returns>
+    /// <returns>可在当前命令批次中继续使用的占位实体。</returns>
     public BufferedEntity CreateEntity()
     {
         return CreateEntity(Array.Empty<IComponent>());
@@ -133,7 +133,7 @@ public sealed class CommandBuffer
     /// </summary>
     /// <typeparam name="T1">组件类型。</typeparam>
     /// <param name="c1">组件值。</param>
-    /// <returns>可在本缓冲中继续使用的占位实体。</returns>
+    /// <returns>可在当前命令批次中继续使用的占位实体。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="c1"/> 为 null。</exception>
     public BufferedEntity CreateEntity<T1>(T1 c1) where T1 : IComponent
     {
@@ -148,7 +148,7 @@ public sealed class CommandBuffer
     /// <typeparam name="T2">第二个组件类型。</typeparam>
     /// <param name="c1">第一个组件值。</param>
     /// <param name="c2">第二个组件值。</param>
-    /// <returns>可在本缓冲中继续使用的占位实体。</returns>
+    /// <returns>可在当前命令批次中继续使用的占位实体。</returns>
     /// <exception cref="ArgumentNullException">任一组件值为 null。</exception>
     public BufferedEntity CreateEntity<T1, T2>(T1 c1, T2 c2)
         where T1 : IComponent
@@ -172,10 +172,10 @@ public sealed class CommandBuffer
     /// 延迟销毁占位实体。
     /// </summary>
     /// <param name="entity">占位实体。</param>
-    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 已过期或来自其他命令批次。</exception>
     public void DestroyEntity(BufferedEntity entity)
     {
-        ValidateOwner(entity);
+        ValidateCurrentBatch(entity);
         _commands.Add(new DestroyEntityCommand(new EntityTarget(entity)));
     }
 
@@ -199,10 +199,10 @@ public sealed class CommandBuffer
     /// <param name="entity">占位实体。</param>
     /// <param name="component">组件值。</param>
     /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
-    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 已过期或来自其他命令批次。</exception>
     public void Add<T>(BufferedEntity entity, T component) where T : IComponent
     {
-        ValidateOwner(entity);
+        ValidateCurrentBatch(entity);
         ThrowIfNull(component, nameof(component));
         _commands.Add(new AddCommand<T>(new EntityTarget(entity), component));
     }
@@ -227,10 +227,10 @@ public sealed class CommandBuffer
     /// <param name="entity">占位实体。</param>
     /// <param name="component">组件值。</param>
     /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
-    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 已过期或来自其他命令批次。</exception>
     public void Set<T>(BufferedEntity entity, T component) where T : IComponent
     {
-        ValidateOwner(entity);
+        ValidateCurrentBatch(entity);
         ThrowIfNull(component, nameof(component));
         _commands.Add(new SetCommand<T>(new EntityTarget(entity), component));
     }
@@ -250,10 +250,10 @@ public sealed class CommandBuffer
     /// </summary>
     /// <typeparam name="T">组件类型。</typeparam>
     /// <param name="entity">占位实体。</param>
-    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 已过期或来自其他命令批次。</exception>
     public void Remove<T>(BufferedEntity entity) where T : IComponent
     {
-        ValidateOwner(entity);
+        ValidateCurrentBatch(entity);
         _commands.Add(new RemoveCommand<T>(new EntityTarget(entity)));
     }
 
@@ -262,6 +262,7 @@ public sealed class CommandBuffer
     /// </summary>
     /// <returns>成功播放的结果；结果仍可解析刚消费批次的占位句柄。</returns>
     /// <exception cref="Exception">命令异常会直接传播；此前已完成的世界变更不会回滚。</exception>
+    /// <remarks>无论成功或失败，本次尝试都会消费当前批次；后续记录属于新的批次，旧句柄不能再用于记录命令。</remarks>
     public CommandBufferResult Playback()
     {
         var commands = _commands.ToArray();
@@ -290,11 +291,12 @@ public sealed class CommandBuffer
         return bufferedEntity;
     }
 
-    private void ValidateOwner(BufferedEntity entity)
+    private void ValidateCurrentBatch(BufferedEntity entity)
     {
         if (entity.OwnerId != _bufferId)
         {
-            throw new InvalidOperationException($"Buffered entity {entity.Id} belongs to another command buffer.");
+            throw new InvalidOperationException(
+                $"Buffered entity {entity.Id} belongs to an expired or foreign command batch.");
         }
     }
 

@@ -53,4 +53,4 @@ public sealed class MovementSystem : EcsSystem
 
 `RunBefore` and `RunAfter` targets must inherit from `EcsSystem`. Dependencies are applied only between systems that share the same manual `order` value in `SystemGroup`.
 
-Buffered entity handles belong to the `CommandBuffer` that created them and cannot be used with another buffer or playback result, even when their local `Id` values match.
+Buffered entity handles belong to the command batch that created them. Every `Playback` attempt starts a fresh batch, so consumed handles cannot record later commands; handles from different buffers or batches remain distinct even when their local `Id` values match. A successful playback result can still resolve handles from its completed batch.
