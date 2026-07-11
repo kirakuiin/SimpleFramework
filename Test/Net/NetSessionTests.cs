@@ -468,6 +468,8 @@ public class NetSessionTests
         await using var client = new GameNet(clientTransport, Options(appId));
         server.Messages.RegisterMessage<PlayerReady>();
         client.Messages.RegisterMessage<PlayerReady>();
+        var recordedErrors = new List<NetError>();
+        client.Diagnostics.ErrorRecorded += recordedErrors.Add;
         await server.HostAsync(new HostOptions { Port = 7777 });
         Assert.That((await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 })).Succeeded, Is.True);
         clientTransport.ThrowSend = (_, channel) => channel == NetChannel.Reliable;
@@ -477,6 +479,8 @@ public class NetSessionTests
         Assert.That(result.Status, Is.EqualTo(NetSendStatus.TransportFailed));
         Assert.That(result.Message, Is.EqualTo("send threw"));
         Assert.That(client.Diagnostics.GetSnapshot().ErrorCount, Is.EqualTo(1));
+        Assert.That(recordedErrors, Has.Count.EqualTo(1));
+        Assert.That(recordedErrors.Single().Code, Is.EqualTo("TransportSendFailed"));
     }
 
     [Test]
