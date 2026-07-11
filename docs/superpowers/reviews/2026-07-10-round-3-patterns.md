@@ -151,3 +151,26 @@ The failure-state follow-up from base `9aae063465f7dd1cb0f285fd2cc1ade8f4819968`
 - Source-quality fixture: 1 passed, 0 failed, 0 skipped.
 - `git diff --check`: exit 0; only Git line-ending conversion notices were emitted.
 - Recursive restore was self-reviewed for pre-existing and newly-created descendants, lifecycle/configuration fields, successful-setup retention, exception identity, guard reset, and explicit recovery. No additional reviewer was dispatched, as explicitly required.
+
+## Setup Transaction Closure Follow-up
+
+### Findings and Repairs
+
+- Failed ancestor setup removed a newly-added state's direct owner and parent but left its child and deeper descendant registered in their child machines. Removed states and `DetachAllStates` now clean descendants first, clear every detached machine's membership, transitions, handlers, and lifecycle fields, and then clear direct ownership/parent links; recursive snapshot restoration re-establishes the exact owner and parent topology for pre-existing hierarchy objects.
+- Public `Update` omitted the ancestor-aware setup guard used by `SetActive` and `Dispatch`, allowing root and already-active descendant callbacks to run during setup. `Update` now rejects setup-hierarchy calls before reading active/current lifecycle state or invoking callbacks, while ordinary cascading update behavior is unchanged.
+- Setup snapshots covered machine-owned handlers but omitted state-owned mutable configuration. Each direct and recursively captured state now snapshots and restores its name, cloned event-handler map, and setup/enter/update/exit callbacks. Failed setup configuration is removed exactly; successful setup configuration remains published.
+
+### TDD Evidence
+
+- Exact setup-transaction RED: 3 failed, 0 passed. A deeper descendant retained ownership, root/descendant updates returned without exceptions, and the failed state name/handler/callback configuration remained installed.
+- Exact setup-transaction GREEN: 3 passed, 0 failed, 0 skipped.
+- StateMachine fixture: 47 passed, 0 failed, 0 skipped.
+- Full Patterns fixture (actual `Test.Patterns` namespace): 123 passed, 0 failed, 0 skipped.
+
+### Verification
+
+- Full `Test/Test.csproj`: 718 passed, 0 failed, 0 skipped.
+- Release solution build: 0 warnings, 0 errors.
+- Source-quality fixture: 1 passed, 0 failed, 0 skipped.
+- `git diff --check`: exit 0; only Git line-ending conversion notices were emitted by subsequent diff inspection.
+- Self-review confirmed descendant-first detach at every depth, pre-existing owner/parent restoration, setup-time update rejection before callback side effects, complete state-owned configuration coverage, successful setup handler retention, direct exception identity, reset setup guards, and clean retry behavior. No additional reviewer was dispatched, as explicitly required.

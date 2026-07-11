@@ -573,6 +573,191 @@ public class TestStateMachine
         Assert.That(grandchild.StateMachine, Is.SameAs(grandchildMachine));
     }
 
+    [Test]
+    public void TestSetupFailureRecursivelyDetachesNewSubtree()
+    {
+        var rootMachine = new StateMachine();
+        var root = new State().Named("root");
+        var temporary = new State().Named("temporary");
+        var child = new State().Named("child");
+        var leaf = new State().Named("leaf");
+        var expected = new InvalidOperationException("Ancestor setup failed.");
+        var shouldFail = true;
+        var childSetupCount = 0;
+        var leafSetupCount = 0;
+        StateMachine? temporaryMachine = null;
+        StateMachine? childMachine = null;
+
+        leaf.CallOnSetup(() => leafSetupCount++);
+        child.CallOnSetup(() =>
+        {
+            childSetupCount++;
+            child.AddState(leaf, true);
+            childMachine = child.ChildrenStateMachine;
+            childMachine!.AddTransition(leaf, leaf, "leaf-loop");
+        });
+        temporary.CallOnSetup(() =>
+        {
+            temporary.AddState(child, true);
+            temporaryMachine = temporary.ChildrenStateMachine;
+            temporaryMachine!.AddTransition(child, child, "child-loop");
+        });
+        root.CallOnSetup(() =>
+        {
+            root.AddState(temporary, true);
+            if (shouldFail) throw expected;
+        });
+
+        var actual = Assert.Throws<InvalidOperationException>(() => rootMachine.AddState(root));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(root.StateMachine, Is.Null);
+        Assert.That(temporary.StateMachine, Is.Null);
+        Assert.That(child.StateMachine, Is.Null);
+        Assert.That(leaf.StateMachine, Is.Null);
+        Assert.That(temporary.Depth, Is.EqualTo(1));
+        Assert.That(child.Depth, Is.EqualTo(1));
+        Assert.That(leaf.Depth, Is.EqualTo(1));
+        Assert.That(temporaryMachine!.IsActive, Is.False);
+        Assert.That(temporaryMachine.CurrentState, Is.Null);
+        Assert.That(childMachine!.IsActive, Is.False);
+        Assert.That(childMachine.CurrentState, Is.Null);
+        Assert.That(temporaryMachine.Dispatch("child-loop"), Is.False);
+        Assert.That(childMachine.Dispatch("leaf-loop"), Is.False);
+
+        shouldFail = false;
+        Assert.DoesNotThrow(() => rootMachine.AddState(root));
+        Assert.That(childSetupCount, Is.EqualTo(2));
+        Assert.That(leafSetupCount, Is.EqualTo(2));
+        Assert.That(temporary.StateMachine, Is.SameAs(root.ChildrenStateMachine));
+        Assert.That(child.StateMachine, Is.SameAs(temporaryMachine));
+        Assert.That(leaf.StateMachine, Is.SameAs(childMachine));
+        rootMachine.InitialState = root;
+        Assert.DoesNotThrow(() => rootMachine.SetActive(true));
+        Assert.That(temporaryMachine.Dispatch("child-loop"), Is.True);
+        Assert.That(childMachine.Dispatch("leaf-loop"), Is.True);
+    }
+
+    [Test]
+    public void TestSetupCannotUpdateRootOrActiveDescendant()
+    {
+        var rootMachine = new StateMachine();
+        var activeRoot = new TestState("active root");
+        var activeChild = new TestState("active child");
+        var configuring = new State().Named("configuring");
+        var expected = new InvalidOperationException("Setup update failed.");
+        var shouldFail = true;
+        var updateErrors = new List<Exception?>();
+
+        activeRoot.AddState(activeChild, true);
+        rootMachine.AddState(activeRoot);
+        rootMachine.InitialState = activeRoot;
+        rootMachine.SetActive(true);
+        configuring.CallOnSetup(() =>
+        {
+            updateErrors.Add(CaptureException(() => rootMachine.Update(0.1f)));
+            updateErrors.Add(CaptureException(() => activeRoot.ChildrenStateMachine!.Update(0.1f)));
+            if (shouldFail) throw expected;
+        });
+
+        var actual = Assert.Throws<InvalidOperationException>(() => rootMachine.AddState(configuring));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(updateErrors, Has.Count.EqualTo(2).And.All.TypeOf<InvalidOperationException>());
+        Assert.That(activeRoot.UpdateCount, Is.Zero);
+        Assert.That(activeChild.UpdateCount, Is.Zero);
+
+        shouldFail = false;
+        Assert.DoesNotThrow(() => rootMachine.AddState(configuring));
+        Assert.That(updateErrors, Has.Count.EqualTo(4).And.All.TypeOf<InvalidOperationException>());
+        Assert.That(activeRoot.UpdateCount, Is.Zero);
+        Assert.That(activeChild.UpdateCount, Is.Zero);
+        Assert.DoesNotThrow(() => rootMachine.Update(0.1f));
+        Assert.That(activeRoot.UpdateCount, Is.EqualTo(1));
+        Assert.That(activeChild.UpdateCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TestSetupFailureRestoresStateOwnedConfiguration()
+    {
+        var stateMachine = new StateMachine();
+        var state = new State().Named("original");
+        var expected = new InvalidOperationException("Configuration failed.");
+        var shouldFail = true;
+        var setupCount = 0;
+        var failedSetupCount = 0;
+        var originalHandlerCount = 0;
+        var failedHandlerCount = 0;
+        var successfulHandlerCount = 0;
+        var originalEnterCount = 0;
+        var originalUpdateCount = 0;
+        var originalExitCount = 0;
+        var failedCallbackCount = 0;
+
+        state.AddEventHandler("existing", _ =>
+        {
+            originalHandlerCount++;
+            return true;
+        });
+        state.CallOnEnter(() => originalEnterCount++);
+        state.CallOnUpdate(_ => originalUpdateCount++);
+        state.CallOnExit(() => originalExitCount++);
+        state.CallOnSetup(() =>
+        {
+            setupCount++;
+            if (!shouldFail)
+            {
+                state.AddEventHandler("successful", _ =>
+                {
+                    successfulHandlerCount++;
+                    return true;
+                });
+                return;
+            }
+
+            state.Named("failed")
+                .CallOnSetup(() => failedSetupCount++)
+                .CallOnEnter(() => failedCallbackCount++)
+                .CallOnUpdate(_ => failedCallbackCount++)
+                .CallOnExit(() => failedCallbackCount++);
+            state.AddEventHandler("existing", _ =>
+            {
+                failedHandlerCount++;
+                return true;
+            });
+            state.AddEventHandler("failed", _ =>
+            {
+                failedHandlerCount++;
+                return true;
+            });
+            throw expected;
+        });
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.AddState(state));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(state.Name, Is.EqualTo("original"));
+        Assert.That(state.HandleEvent("existing"), Is.True);
+        Assert.That(state.HandleEvent("failed"), Is.False);
+        Assert.That(originalHandlerCount, Is.EqualTo(1));
+        Assert.That(failedHandlerCount, Is.Zero);
+
+        shouldFail = false;
+        Assert.DoesNotThrow(() => stateMachine.AddState(state));
+        Assert.That(setupCount, Is.EqualTo(2));
+        Assert.That(failedSetupCount, Is.Zero);
+        Assert.That(state.HandleEvent("successful"), Is.True);
+        Assert.That(successfulHandlerCount, Is.EqualTo(1));
+        stateMachine.InitialState = state;
+        stateMachine.SetActive(true);
+        stateMachine.Update(0.1f);
+        stateMachine.SetActive(false);
+        Assert.That(originalEnterCount, Is.EqualTo(1));
+        Assert.That(originalUpdateCount, Is.EqualTo(1));
+        Assert.That(originalExitCount, Is.EqualTo(1));
+        Assert.That(failedCallbackCount, Is.Zero);
+    }
+
     private static Exception? CaptureException(TestDelegate action)
     {
         try

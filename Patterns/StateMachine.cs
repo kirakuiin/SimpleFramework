@@ -26,6 +26,14 @@ public delegate bool StateEventHandler(object? args = null);
 /// </summary>
 public class State
 {
+    internal sealed record SetupConfigurationSnapshot(
+        string Name,
+        KeyValuePair<string, StateEventHandler>[] EventHandlers,
+        Action? OnSetupCallback,
+        Action? OnEnterCallback,
+        Action<float>? OnUpdateCallback,
+        Action? OnExitCallback);
+
     private string _name = "";
     private readonly Dictionary<string, StateEventHandler> _eventHandlers = new();
     private WeakReference<State>? _parentStateRef;
@@ -260,6 +268,34 @@ public class State
         _parentStateRef = null;
     }
 
+    internal void SetParentState(State? parentState)
+    {
+        _parentStateRef = parentState is null ? null : new WeakReference<State>(parentState);
+    }
+
+    internal SetupConfigurationSnapshot CaptureSetupConfiguration() => new(
+        _name,
+        [.. _eventHandlers],
+        _onSetupCallback,
+        _onEnterCallback,
+        _onUpdateCallback,
+        _onExitCallback);
+
+    internal void RestoreSetupConfiguration(SetupConfigurationSnapshot snapshot)
+    {
+        _name = snapshot.Name;
+        _eventHandlers.Clear();
+        foreach (var (eventName, handler) in snapshot.EventHandlers)
+        {
+            _eventHandlers.Add(eventName, handler);
+        }
+
+        _onSetupCallback = snapshot.OnSetupCallback;
+        _onEnterCallback = snapshot.OnEnterCallback;
+        _onUpdateCallback = snapshot.OnUpdateCallback;
+        _onExitCallback = snapshot.OnExitCallback;
+    }
+
     internal void RestoreSetupHierarchy(
         StateMachine? originalChildrenStateMachine,
         StateMachine.SetupSnapshot? originalChildrenSnapshot)
@@ -294,6 +330,7 @@ public class StateMachine
 {
     internal sealed record StateHierarchySnapshot(
         State State,
+        State.SetupConfigurationSnapshot Configuration,
         StateMachine? ChildrenStateMachine,
         SetupSnapshot? ChildrenSnapshot);
 
@@ -380,6 +417,7 @@ public class StateMachine
         }
 
         var machineSnapshot = CaptureSetupSnapshot();
+        var stateConfigurationSnapshot = state.CaptureSetupConfiguration();
         var originalChildrenStateMachine = state.ChildrenStateMachine;
         var originalChildrenSnapshot = originalChildrenStateMachine?.CaptureSetupSnapshot();
         _states.Add(state);
@@ -394,6 +432,7 @@ public class StateMachine
             _setupDepth--;
             RestoreSetupSnapshot(machineSnapshot);
             state.RestoreSetupHierarchy(originalChildrenStateMachine, originalChildrenSnapshot);
+            state.RestoreSetupConfiguration(stateConfigurationSnapshot);
             throw;
         }
         _setupDepth--;
@@ -555,8 +594,14 @@ public class StateMachine
     /// 更新状态机
     /// </summary>
     /// <param name="delta">帧间隔时间</param>
+    /// <exception cref="InvalidOperationException">当前状态机或祖先状态机正在初始化状态。</exception>
     public void Update(float delta)
     {
+        if (IsSetupInHierarchy())
+        {
+            throw new InvalidOperationException("状态初始化期间不能更新状态机。");
+        }
+
         try
         {
             if (_isActive && _currentState != null)
@@ -611,6 +656,7 @@ public class StateMachine
         TriggerUpdateWhenStateChange,
         [.. _states.Select(state => new StateHierarchySnapshot(
             state,
+            state.CaptureSetupConfiguration(),
             state.ChildrenStateMachine,
             state.ChildrenStateMachine?.CaptureSetupSnapshot()))]);
 
@@ -620,6 +666,7 @@ public class StateMachine
         {
             if (Array.IndexOf(snapshot.States, state) < 0)
             {
+                state.ChildrenStateMachine?.DetachAllStates();
                 state.SetStateMachine(null);
                 state.ClearParentState();
             }
@@ -627,6 +674,11 @@ public class StateMachine
 
         _states.Clear();
         _states.AddRange(snapshot.States);
+        foreach (var state in _states)
+        {
+            state.SetStateMachine(this);
+            state.SetParentState(_ownerState);
+        }
         _transitions.Clear();
         _transitions.AddRange(snapshot.Transitions);
         _eventHandlers.Clear();
@@ -642,6 +694,7 @@ public class StateMachine
         TriggerUpdateWhenStateChange = snapshot.TriggerUpdateWhenStateChange;
         foreach (var stateHierarchy in snapshot.StateHierarchies)
         {
+            stateHierarchy.State.RestoreSetupConfiguration(stateHierarchy.Configuration);
             stateHierarchy.State.RestoreSetupHierarchy(
                 stateHierarchy.ChildrenStateMachine,
                 stateHierarchy.ChildrenSnapshot);
@@ -666,6 +719,7 @@ public class StateMachine
     {
         foreach (var state in _states)
         {
+            state.ChildrenStateMachine?.DetachAllStates();
             state.SetStateMachine(null);
             state.ClearParentState();
         }
@@ -674,5 +728,10 @@ public class StateMachine
         _transitions.Clear();
         _eventHandlers.Clear();
         _initialState = null;
+        _currentState = null;
+        _isActive = false;
+        _isChangingState = false;
+        _setupDepth = 0;
+        TriggerUpdateWhenStateChange = false;
     }
 }

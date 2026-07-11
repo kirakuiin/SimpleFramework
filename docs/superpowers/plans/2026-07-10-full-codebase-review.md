@@ -584,6 +584,27 @@ Request review for the round range, resolve Critical and Important feedback, rer
 
 - [ ] Update base and buffered `Subscribe` XML so the return contract explicitly states an already-effective duplicate subscription may return a non-owning no-op handle. Run the Release build and source-quality fixture.
 
+#### Task 3 Setup Transaction Repair AA: Recursively detach removed setup subtrees
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestSetupFailureRecursivelyDetachesNewSubtree`, whose ancestor setup adds a temporary state whose own setup successfully adds a child and deeper descendant before the ancestor throws one retained exception. Assert exact exception identity; null ownership for all three new states; depth one and no event propagation for every detached node; inactive/null child machines; no leaked transitions or membership; and a clean successful retry. Run its exact fully-qualified filter and expect failure because setup rollback clears only the removed temporary state's direct ownership and parent link.
+- [ ] Before clearing any removed state's direct owner/parent, recursively detach every state in its `ChildrenStateMachine`; make `DetachAllStates` apply the same descendant-first cleanup. Define failed setup cleanup as removal of all newly-added subtree membership, transitions, lifecycle state, ownership, and parent propagation links while leaving pre-existing hierarchy objects reusable. Rerun the focused test and all state-machine tests.
+
+#### Task 3 Setup Transaction Repair AB: Reject updates throughout an active setup hierarchy
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestSetupCannotUpdateRootOrActiveDescendant`, keeping a root and pre-existing descendant active while another root state is being set up. Invoke both machines' public `Update` methods from setup, capture `InvalidOperationException`, and assert neither update callback ran; then fail and retry setup and prove normal root/descendant update cascading is preserved after the guard resets. Run its exact fully-qualified filter and expect failure because `Update` currently reaches active state callbacks without consulting setup state.
+- [ ] Check `IsSetupInHierarchy()` at the first line of public `Update`, before active/current-state access or callback execution, and document the setup exception contract in Chinese. Rerun the focused test and all state-machine tests.
+
+#### Task 3 Setup Transaction Repair AC: Snapshot all state-owned setup configuration
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestSetupFailureRestoresStateOwnedConfiguration`, starting with a named state, an existing state event handler, and configured setup/enter/update/exit callbacks. During failed setup replace/add handlers, rename the state, replace all callbacks, and throw one retained exception; assert the original name, handlers, and callbacks are restored exactly, failed handlers/callbacks are absent, retry invokes the original setup callback, and successful retry handler configuration remains. Run its exact fully-qualified filter and expect failure because setup snapshots omit every state-owned mutable configuration field.
+- [ ] Add a state configuration snapshot containing `_name`, a clone of `_eventHandlers`, `_onSetupCallback`, `_onEnterCallback`, `_onUpdateCallback`, and `_onExitCallback`; capture/restore it for the directly added state and every recursively snapshotted pre-existing state. Keep ownership, parent, and child-machine topology in the existing hierarchy snapshot path. Rerun the focused test and all state-machine tests.
+
 ### Task 4: ECS
 
 **Files:**
