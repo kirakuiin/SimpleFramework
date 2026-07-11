@@ -14,7 +14,7 @@
 
 ## 查找语义
 
-`Get*` 未找到时返回 `null`。`TryGet*` 用布尔值表达是否找到。`Require*` 未找到时抛出异常。
+`Get*` 未找到时返回 `null`。`TryGet*` 用布尔值表达是否找到。`Require*` 未找到时抛出 `InvalidOperationException`。
 
 ## 事件边界
 

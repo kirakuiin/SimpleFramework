@@ -860,6 +860,13 @@ git commit -m "review: align public apis and simplify code"
 
 Expected: the complete suite and source-quality test pass, Release has zero warnings/errors, and no whitespace errors exist. Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
 
+#### Repair A: expose caller cancellation on one-shot discovery scans
+
+- Files: `Net/Discovery/NetDiscovery.cs`, `Test/Net/NetDiscoveryStatsTests.cs`.
+- Contract: both public `ScanAsync<TMetadata>` overloads accept an optional trailing `CancellationToken` and forward it to the existing linked-cancellation scan path; cancellation remains distinguishable as `OperationCanceledException` and disposal cancellation remains effective.
+- RED: `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~DiscoveryScan_PublicOverloadsExposeTrailingCancellationToken"` must fail because neither public scan overload currently exposes the token.
+- GREEN: rerun the exact filter, then the complete Net discovery/stats fixture.
+
 ### Task 7: Independent Final Audit and Release Verification
 
 **Files:**

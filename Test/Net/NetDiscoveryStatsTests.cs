@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -806,6 +807,31 @@ public class NetDiscoveryStatsTests
 
         var rooms = await scan.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.That(rooms, Is.Empty);
+    }
+
+    [Test]
+    public void DiscoveryScan_PublicOverloadsExposeTrailingCancellationToken()
+    {
+        var scanOverloads = typeof(NetDiscovery).GetMethods()
+            .Where(method => method is { Name: nameof(NetDiscovery.ScanAsync), IsPublic: true, IsGenericMethodDefinition: true })
+            .Select(method => method.GetParameters())
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scanOverloads, Has.Length.EqualTo(2));
+            Assert.That(scanOverloads, Has.Some.Matches<ParameterInfo[]>(parameters =>
+                parameters.Length == 2 &&
+                parameters[0].ParameterType == typeof(TimeSpan) &&
+                parameters[1].ParameterType == typeof(CancellationToken) &&
+                parameters[1].HasDefaultValue));
+            Assert.That(scanOverloads, Has.Some.Matches<ParameterInfo[]>(parameters =>
+                parameters.Length == 3 &&
+                parameters[0].ParameterType == typeof(TimeSpan) &&
+                parameters[1].ParameterType == typeof(uint) &&
+                parameters[2].ParameterType == typeof(CancellationToken) &&
+                parameters[2].HasDefaultValue));
+        });
     }
 
     [Test]

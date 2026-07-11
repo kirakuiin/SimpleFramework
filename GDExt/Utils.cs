@@ -28,6 +28,9 @@ public class NodeObjectPool : Singleton<NodeObjectPool>
         return pool.Get();
     }
 
+    /// <summary>
+    /// 清空所有场景对象池，并释放池中仍被缓存的节点。
+    /// </summary>
     public override void Clear()
     {
         foreach (var pool in _pooledObjects.Values)

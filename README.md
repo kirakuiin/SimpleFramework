@@ -50,10 +50,11 @@ var hp = new BindableProperty<int>(100)
 `SimpleFramework.ECS` 是一个强调可读性的轻量 ECS 实现：
 
 - `World` 管理实体、原型和查询。
-- `Entity` 持有组件和标签，支持添加、移除、查询组件。
+- `Entity` 是由 `WorldId`、全局递增 `Id` 和 `Version` 组成的值句柄；组件读写与结构变更由所属 `World` 完成。
 - `Archetype` 与 `TypeSignature` 根据组件集合组织实体。
-- `Query` 支持按组件包含/排除和标签包含/排除过滤实体。
+- `Query` 支持按组件包含/排除过滤实体，并在枚举期间拒绝直接结构变更。
 - `EcsSystem` 提供可复用的 ECS 系统基类。
+- `CommandBuffer` 用于在查询枚举后按记录顺序回放结构变更。
 
 ### Collections
 
@@ -75,13 +76,13 @@ var hp = new BindableProperty<int>(100)
 
 ### Net
 
-`SimpleFramework.Net` 提供网络抽象和协议处理工具：
+`SimpleFramework.Net` 以 `GameNet` 为入口组合多人网络能力：
 
-- `ITransport`、`ITransfer`、`INetStatus` 定义连接、数据传输和延迟查询接口。
-- `ConnectionModel` 维护连接状态。
-- `ClientInfoSystem<TInfo>` 同步客户端信息。
-- `ProtocolHandler` 通过 `[Protocol]` 标记注册协议，负责协议打包、解包、处理器分发和调试信息。
-- UDP 广播工具支持发送、接收、定时广播和持续监听泛型结构体消息。
+- `INetTransport` 提供传输抽象，内置确定性的 `MemoryNetTransport` 与 TCP 实现。
+- `NetSession`、`PeerDirectory` 和 `GameNet` 管理主机、专用服务器、加入、离开、重连与对等体目录。
+- `NetMessageRegistry` 与 `NetMessenger` 提供稳定协议键、类型化消息、请求/响应、中继和程序集处理器注册。
+- `NetDiscovery` 提供可替换后端的 LAN 广告、一次性扫描和连续浏览器。
+- `NetStats`、`NetFlow` 与 `NetDiagnostics` 提供延迟统计、多方提案流程和可观察诊断。
 
 ### Maths
 
@@ -111,11 +112,7 @@ var hp = new BindableProperty<int>(100)
 
 ### GDExt
 
-`SimpleFramework.GDExt` 是 Godot 集成项目：
-
-- `MultiplayerTransport` 基于 Godot `ENetMultiplayerPeer` 实现 `ITransport`、`ITransfer`、`INetStatus`。
-- 提供 Godot RPC 数据发送、连接管理、踢出、延迟测量等能力。
-- 包含 Godot 节点对象池和取消注册扩展。
+`SimpleFramework.GDExt` 是 Godot 集成项目，当前包含 `Node2D` 场景对象池、节点退出时自动取消注册的扩展和逻辑信道常量。
 
 ## 项目结构
 
@@ -178,7 +175,7 @@ public class PlayerModel : AbstractModel
 
 public class ReadHpQuery : AbstractQuery<int>
 {
-    protected override int OnExecute() => this.GetModel<PlayerModel>().Hp.Value;
+    protected override int OnExecute() => this.RequireModel<PlayerModel>().Hp.Value;
 }
 
 var hp = GameDomain.Instance.SendQuery(new ReadHpQuery());

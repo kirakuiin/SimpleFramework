@@ -7,14 +7,14 @@ namespace SimpleFramework.Toolkit;
 /// 用来读写ini配置文件的工具类
 /// </summary>
 /// <param name="isAutoFlush">写入配置时是否立即写到文件</param>
-public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
+public sealed class IniConfigTool(bool isAutoFlush = false) : Disposable, IUtility
 {
     private string _configPath = "";  // 配置文件路径
 
     /// <summary>
     /// 存储读取的数据
     /// </summary>
-    private readonly Dictionary<string, Dictionary<string, string>> _config = new ();
+    private readonly Dictionary<string, Dictionary<string, string>> _config = new();
 
     /// <summary>
     /// 从指定 UTF-8 INI 文件加载配置；文件不存在时清空内存配置并保留该路径供后续保存。
@@ -60,7 +60,7 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
                 // 处理section行
                 if (trimmedLine.StartsWith('[') && trimmedLine.EndsWith(']'))
                 {
-                    currentSection = trimmedLine.Substring(1, trimmedLine.Length - 2).Trim();
+                    currentSection = trimmedLine[1..^1].Trim();
                     if (!_config.ContainsKey(currentSection))
                     {
                         _config[currentSection] = new Dictionary<string, string>();
@@ -72,8 +72,8 @@ public sealed class IniConfigTool(bool isAutoFlush=false) : Disposable, IUtility
                 int equalIndex = trimmedLine.IndexOf('=');
                 if (equalIndex > 0)
                 {
-                    string key = trimmedLine.Substring(0, equalIndex).Trim();
-                    string value = trimmedLine.Substring(equalIndex + 1).Trim();
+                    string key = trimmedLine[..equalIndex].Trim();
+                    string value = trimmedLine[(equalIndex + 1)..].Trim();
 
                     if (string.IsNullOrEmpty(currentSection))
                         currentSection = "DEFAULT";

@@ -7,7 +7,7 @@ namespace SimpleFramework.Utility;
 /// </summary>
 public static class FileUtil
 {
-    private static readonly JsonSerializerOptions DefaultOptions = new () { WriteIndented = true, IncludeFields = true };
+    private static readonly JsonSerializerOptions DefaultOptions = new() { WriteIndented = true, IncludeFields = true };
     
     /// <summary>
     /// 将对象以格式化 JSON 写入文件，覆盖已有内容。

@@ -23,9 +23,12 @@ internal sealed record NetPacket
 /// <summary>
 /// 消息处理器收到消息时的上下文。
 /// </summary>
+/// <param name="SenderId">发送消息的对等体。</param>
 public sealed record NetContext(PeerId SenderId);
 
 /// <summary>
 /// 服务器校验中继消息时使用的上下文。
 /// </summary>
+/// <param name="SenderId">发起中继的对等体。</param>
+/// <param name="TargetPeerId">中继目标对等体。</param>
 public sealed record NetRelayContext(PeerId SenderId, PeerId TargetPeerId);

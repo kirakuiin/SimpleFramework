@@ -43,6 +43,9 @@ public sealed class DiscoveryOptions
 /// </summary>
 public readonly record struct DiscoveryAdvertisementId(Guid Value)
 {
+    /// <summary>
+    /// 表示没有有效发现广告。
+    /// </summary>
     public static readonly DiscoveryAdvertisementId None = new(Guid.Empty);
 }
 
@@ -51,9 +54,32 @@ public readonly record struct DiscoveryAdvertisementId(Guid Value)
 /// </summary>
 public interface IDiscoveryBackend : IAsyncDisposable
 {
+    /// <summary>启动持续广告并返回其句柄。</summary>
+    /// <param name="packet">要广播的发现数据包。</param>
+    /// <param name="options">发现配置。</param>
+    /// <param name="token">取消标记。</param>
+    /// <returns>已启动广告的句柄。</returns>
     Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default);
+
+    /// <summary>更新已有广告的数据包。</summary>
+    /// <param name="id">广告句柄。</param>
+    /// <param name="packet">新的发现数据包。</param>
+    /// <param name="options">发现配置。</param>
+    /// <param name="token">取消标记。</param>
+    /// <returns>表示异步操作的任务。</returns>
     Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default);
+
+    /// <summary>停止指定广告。</summary>
+    /// <param name="id">广告句柄。</param>
+    /// <param name="token">取消标记。</param>
+    /// <returns>表示异步操作的任务。</returns>
     Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default);
+
+    /// <summary>在指定时间窗口内扫描发现数据包。</summary>
+    /// <param name="duration">扫描窗口。</param>
+    /// <param name="options">发现配置。</param>
+    /// <param name="token">取消标记。</param>
+    /// <returns>本次扫描得到的数据包快照。</returns>
     Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToken token = default);
 }
 
@@ -63,6 +89,11 @@ public interface IDiscoveryBackend : IAsyncDisposable
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
 public sealed class DiscoveryMetadataAttribute : Attribute
 {
+    /// <summary>
+    /// 创建发现元数据标记。
+    /// </summary>
+    /// <param name="schemaKey">跨版本保持稳定且非空的 schema 键。</param>
+    /// <exception cref="ArgumentException"><paramref name="schemaKey"/> 为空或仅包含空白。</exception>
     public DiscoveryMetadataAttribute(string schemaKey)
     {
         if (string.IsNullOrWhiteSpace(schemaKey))
@@ -897,20 +928,36 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// <summary>
     /// 执行一次房间扫描。
     /// </summary>
-    public async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration)
-    {
-        return await ScanAsync<TMetadata>(duration, GetRequiredMetadataSchemaId<TMetadata>()).ConfigureAwait(false);
-    }
+    /// <typeparam name="TMetadata">房间公开元数据类型。</typeparam>
+    /// <param name="duration">后端扫描窗口；非正值返回空结果。</param>
+    /// <param name="token">取消标记。</param>
+    /// <returns>与当前应用和元数据 schema 匹配的房间快照。</returns>
+    /// <exception cref="InvalidOperationException"><typeparamref name="TMetadata"/> 未声明发现元数据 schema。</exception>
+    /// <exception cref="ObjectDisposedException">发现组件已释放。</exception>
+    /// <exception cref="OperationCanceledException">调用方取消或发现组件开始释放。</exception>
+    public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
+        TimeSpan duration,
+        CancellationToken token = default) =>
+        ScanAsync<TMetadata>(duration, GetRequiredMetadataSchemaId<TMetadata>(), token);
 
     /// <summary>
     /// 按指定 metadata schema 执行一次房间扫描。
     /// </summary>
-    public async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(TimeSpan duration, uint metadataSchemaId)
-    {
-        return await ScanAsync<TMetadata>(duration, metadataSchemaId, CancellationToken.None).ConfigureAwait(false);
-    }
+    /// <typeparam name="TMetadata">房间公开元数据类型。</typeparam>
+    /// <param name="duration">后端扫描窗口；非正值返回空结果。</param>
+    /// <param name="metadataSchemaId">预期的元数据 schema 标识。</param>
+    /// <param name="token">取消标记。</param>
+    /// <returns>与当前应用和指定 schema 匹配的房间快照。</returns>
+    /// <exception cref="InvalidOperationException">元数据类型已绑定到不同 schema。</exception>
+    /// <exception cref="ObjectDisposedException">发现组件已释放。</exception>
+    /// <exception cref="OperationCanceledException">调用方取消或发现组件开始释放。</exception>
+    public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
+        TimeSpan duration,
+        uint metadataSchemaId,
+        CancellationToken token = default) =>
+        ScanCoreAsync<TMetadata>(duration, metadataSchemaId, token);
 
-    internal async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
+    internal async Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanCoreAsync<TMetadata>(
         TimeSpan duration,
         uint metadataSchemaId,
         CancellationToken token)
@@ -1288,6 +1335,18 @@ public sealed class NetDiscovery : IAsyncDisposable
     }
 }
 
+/// <summary>
+/// 发现后端交换的版本化房间广告数据包。
+/// </summary>
+/// <param name="Magic">协议魔数。</param>
+/// <param name="PacketVersion">数据包格式版本。</param>
+/// <param name="ApplicationId">应用标识。</param>
+/// <param name="ProtocolVersion">应用协议版本。</param>
+/// <param name="RoomId">房间标识。</param>
+/// <param name="GamePort">游戏服务端口。</param>
+/// <param name="MetadataSchemaId">元数据 schema 标识。</param>
+/// <param name="PayloadLength">声明的元数据字节数。</param>
+/// <param name="MetadataPayload">UTF-8 JSON 元数据。</param>
 public sealed record DiscoveryPacket(
     uint Magic,
     ushort PacketVersion,
@@ -1299,12 +1358,17 @@ public sealed record DiscoveryPacket(
     int PayloadLength,
     byte[] MetadataPayload)
 {
+    /// <summary>发现协议魔数。</summary>
     public const uint ExpectedMagic = 0x53464E44;
+
+    /// <summary>当前数据包格式版本。</summary>
     public const ushort CurrentPacketVersion = 1;
 
+    /// <summary>后端观察到的远端地址；内存后端可为空。</summary>
     [JsonIgnore]
     public IPEndPoint? RemoteEndPoint { get; init; }
 
+    /// <summary>后端估算的往返延迟；无法估算时为空。</summary>
     [JsonIgnore]
     public TimeSpan? EstimatedLatency { get; init; }
 }
