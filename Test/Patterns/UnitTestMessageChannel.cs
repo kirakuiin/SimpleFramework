@@ -137,4 +137,65 @@ public class TestMessageChannel
         Assert.That(subscriber1Messages[0], Is.EqualTo("First Message"));
         Assert.That(subscriber2Messages[0], Is.EqualTo("First Message"));
     }
+
+    [Test]
+    public void TestHandlerCanUnsubscribeBeforeReentrantPublish()
+    {
+        var removedMessages = new List<string>();
+        var remainingMessages = new List<string>();
+        IDisposable? subscription = null;
+        subscription = _channel.Subscribe(message =>
+        {
+            removedMessages.Add(message);
+            subscription!.Dispose();
+            _channel.Publish("inner");
+        });
+        _channel.Subscribe(remainingMessages.Add);
+
+        Assert.DoesNotThrow(() => _channel.Publish("outer"));
+
+        Assert.That(removedMessages, Is.EqualTo(new[] { "outer" }));
+        Assert.That(remainingMessages, Is.EqualTo(new[] { "inner", "outer" }));
+    }
+
+    [Test]
+    public void TestSubscriptionMutationIsAppliedWhenHandlerThrows()
+    {
+        var survivorCount = 0;
+        IDisposable? subscription = null;
+        subscription = _channel.Subscribe(_ =>
+        {
+            subscription!.Dispose();
+            throw new InvalidOperationException("handler failed");
+        });
+        _channel.Subscribe(_ => survivorCount++);
+
+        Assert.Throws<InvalidOperationException>(() => _channel.Publish("first"));
+        _channel.Publish("second");
+
+        Assert.That(survivorCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer()
+    {
+        _bufferedChannel.Publish("first");
+        _bufferedChannel.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => _bufferedChannel.Publish("second"));
+        Assert.That(_bufferedChannel.BufferedMessage, Is.EqualTo("first"));
+    }
+
+    [Test]
+    public void TestHandlerCanDisposeChannelDuringPublish()
+    {
+        var laterHandlerCalled = false;
+        _channel.Subscribe(_ => _channel.Dispose());
+        _channel.Subscribe(_ => laterHandlerCalled = true);
+
+        Assert.DoesNotThrow(() => _channel.Publish("message"));
+
+        Assert.That(_channel.IsDisposed, Is.True);
+        Assert.That(laterHandlerCalled, Is.False);
+    }
 } 

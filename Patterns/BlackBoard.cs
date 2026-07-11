@@ -341,8 +341,11 @@ public class BlackBoard
 /// </summary>
 public enum BlackBoardEventType
 {
+    /// <summary>首次在本地写入键。</summary>
     Set,
+    /// <summary>修改已有的本地键。</summary>
     Modify,
+    /// <summary>移除本地键。</summary>
     Remove,
 }
 
@@ -376,7 +379,7 @@ public class BlackBoardEventArgs : EventArgs
     /// 初始化黑板数据变更事件参数的新实例。
     /// </summary>
     /// <param name="key">变更的键</param>
-    /// <param name="type"></param>
+    /// <param name="type">变更类型。</param>
     /// <param name="oldValue">旧值</param>
     /// <param name="newValue">新值</param>
     public BlackBoardEventArgs(string key, BlackBoardEventType type, object? oldValue, object? newValue)

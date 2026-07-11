@@ -38,7 +38,7 @@ public enum SingletonInitializationStatus
 /// <summary>
 /// 为一般c#类型使用的单例模式
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">具体的单例类型。</typeparam>
 public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
 {
     private static T? _instance;
@@ -46,7 +46,7 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
     private SingletonInitializationStatus _status;
 
     // ReSharper disable once StaticMemberInGenericType
-    private static readonly object LockObj = new object();
+    private static readonly object LockObj = new();
 
     /// <summary>
     /// 返回单例模式实例
@@ -62,8 +62,9 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
             {
                 if (_instance == null)
                 {
-                    _instance = new T();
-                    _instance.Initialize();
+                    var candidate = new T();
+                    candidate.Initialize();
+                    _instance = candidate;
                 }
             }
             return _instance;
@@ -76,14 +77,25 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
     /// <returns>如果初始化完毕的话返回<c>true</c></returns>
     public virtual bool IsInitialized() => _status == SingletonInitializationStatus.Initialized;
 
+    /// <summary>
+    /// 初始化当前实例；重复调用不会再次执行初始化回调，失败后允许重试。
+    /// </summary>
     public virtual void Initialize()
     {
         if (_status != SingletonInitializationStatus.Uninitialize) return;
 
         _status = SingletonInitializationStatus.Initializing;
-        OnInitializing();
-        _status = SingletonInitializationStatus.Initialized;
-        OnInitialized();
+        try
+        {
+            OnInitializing();
+            OnInitialized();
+            _status = SingletonInitializationStatus.Initialized;
+        }
+        catch
+        {
+            _status = SingletonInitializationStatus.Uninitialize;
+            throw;
+        }
     }
 
     /// <summary>
@@ -101,16 +113,16 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
     }
 
     /// <summary>
-    /// 创建一个新的单例
+    /// 销毁已有实例并创建一个完成初始化的新实例。
     /// </summary>
     public static void Create()
     {
         Destroy();
-        _instance = Instance;
+        _ = Instance;
     }
 
     /// <summary>
-    /// 摧毁已经存在的单例
+    /// 清理并移除已经存在的单例；实例不存在时不执行操作。
     /// </summary>
     public static void Destroy()
     {
@@ -120,6 +132,9 @@ public abstract class Singleton<T> : ISingleton where T : Singleton<T>, new()
         _instance = null;
     }
 
+    /// <summary>
+    /// 清理当前实例持有的状态。
+    /// </summary>
     public virtual void Clear()
     {
     }

@@ -3,19 +3,21 @@
 /// <summary>
 /// 对象池接口
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">池中对象的类型。</typeparam>
 public interface IObjectPool<T> : IDisposable
 {
     /// <summary>
     /// 获取对象
     /// </summary>
-    /// <returns></returns>
+    /// <returns>从池中复用或新建的对象。</returns>
     T Get();
     
     /// <summary>
     /// 归还对象
     /// </summary>
-    /// <param name="obj"></param>
+    /// <param name="obj">要归还的对象。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="obj"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="InvalidOperationException">同一对象已经位于池中。</exception>
     void Return(T obj);
 }
 
@@ -39,20 +41,32 @@ public interface IPoolCallbackListener
 /// <summary>
 /// 对象池抽象类
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">池中对象的引用类型。</typeparam>
 public abstract class AbstractObjectPool<T> : IObjectPool<T>
     where T : class
 {
     protected readonly Stack<T> Stack = new(32);
+    private readonly HashSet<T> _pooledInstances = new(ReferenceEqualityComparer.Instance);
 
     private bool _isDisposed;
 
+    /// <summary>创建一个新对象。</summary>
+    /// <returns>新创建的对象。</returns>
     protected abstract T CreateInstance();
+
+    /// <summary>销毁一个仍位于池中的对象。</summary>
+    /// <param name="instance">要销毁的对象。</param>
     protected virtual void OnDestroy(T instance) { }
 
+    /// <summary>对象借出前调用。</summary>
+    /// <param name="instance">即将借出的对象。</param>
     protected virtual void OnGet(T instance) { }
+
+    /// <summary>对象入池前调用。</summary>
+    /// <param name="instance">即将归还的对象。</param>
     protected virtual void OnReturn(T instance) { }
 
+    /// <inheritdoc />
     public T Get()
     {
         ThrowIfDisposed();
@@ -60,30 +74,48 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
         {
             obj = CreateInstance();
         }
+        else
+        {
+            _pooledInstances.Remove(obj);
+        }
 
         OnGet(obj);
         if (obj is IPoolCallbackListener receiver) receiver.OnGet();
         return obj;
     }
 
+    /// <inheritdoc />
     public void Return(T obj)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(obj);
+        if (!_pooledInstances.Add(obj))
+        {
+            throw new InvalidOperationException("同一对象不能重复归还到对象池。");
+        }
 
-        OnReturn(obj);
-        if (obj is IPoolCallbackListener receiver) receiver.OnReturn();
-        Stack.Push(obj);
+        try
+        {
+            OnReturn(obj);
+            if (obj is IPoolCallbackListener receiver) receiver.OnReturn();
+            Stack.Push(obj);
+        }
+        catch
+        {
+            _pooledInstances.Remove(obj);
+            throw;
+        }
     }
 
     /// <summary>
-    /// 清理对象池
+    /// 销毁并移除池中当前闲置的所有对象。
     /// </summary>
     public void Clear()
     {
         ThrowIfDisposed();
         while (Stack.TryPop(out var obj))
         {
+            _pooledInstances.Remove(obj);
             OnDestroy(obj);
         }
     }
@@ -91,7 +123,7 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
     /// <summary>
     /// 预先创建对象
     /// </summary>
-    /// <param name="count"></param>
+    /// <param name="count">要预创建的对象数量；负数等同于零。</param>
     public void Prewarm(int count)
     {
         ThrowIfDisposed();
@@ -103,10 +135,13 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
     }
 
     /// <summary>
-    /// 对象池数量
+    /// 获取当前位于池中、可供复用的对象数量。
     /// </summary>
     public int Count => Stack.Count;
 
+    /// <summary>
+    /// 释放对象池并销毁池中当前闲置的对象。
+    /// </summary>
     public void Dispose()
     {
         Dispose(true);
@@ -151,7 +186,7 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
 /// <param name="onGet">创建或从池中取出对象时调用的函数</param>
 /// <param name="onReturn">将对象归还到池子触发的函数</param>
 /// <param name="onDestroy">销毁对象触发的函数</param>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">池中对象的引用类型。</typeparam>
 public sealed class ObjectPool<T>(
     Func<T> createFunc,
     Action<T>? onGet = null,

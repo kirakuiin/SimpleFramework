@@ -204,4 +204,18 @@ public class TestObjectPool
         Assert.Contains(reusedObj2, new[] { obj1, obj2 });
         Assert.AreNotSame(reusedObj1, reusedObj2);
     }
+
+    [Test]
+    public void TestDuplicateReturnIsRejectedWithoutDuplicatingObject()
+    {
+        using var pool = new ObjectPool<TestObject>(() => new TestObject());
+        var obj = pool.Get();
+
+        pool.Return(obj);
+
+        Assert.Throws<InvalidOperationException>(() => pool.Return(obj));
+        Assert.That(pool.Count, Is.EqualTo(1));
+        Assert.That(pool.Get(), Is.SameAs(obj));
+        Assert.That(pool.Count, Is.Zero);
+    }
 }

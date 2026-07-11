@@ -403,6 +403,76 @@ git commit -m "review: harden reusable patterns"
 
 Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
 
+#### Task 3 Repair A: Do not cache a singleton whose initialization fails
+
+**Files:** `Patterns/Singleton.cs`, `Test/Patterns/UnitTestSingleton.cs`
+
+- [ ] Add `TestInitializationFailureDoesNotPublishInstance`, using a singleton whose first `Initialize` call throws and whose second succeeds; assert the first access throws, the second returns an initialized instance, and two instances were constructed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestSingleton.TestInitializationFailureDoesNotPublishInstance"`; expect failure because the first, uninitialized instance remains cached.
+- [ ] Initialize a local candidate before publishing it under the singleton lock, leaving `_instance` null when initialization throws. Rerun the focused command; expect the retry to construct and publish one initialized instance.
+
+#### Task 3 Repair B: Reject duplicate object-pool returns
+
+**Files:** `Patterns/ObjectPool.cs`, `Test/Patterns/UnitTestObjectPool.cs`
+
+- [ ] Add `TestDuplicateReturnIsRejectedWithoutDuplicatingObject`, returning one object twice, expecting `InvalidOperationException`, then asserting the pool contains and lends that object only once. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestObjectPool.TestDuplicateReturnIsRejectedWithoutDuplicatingObject"`; expect failure because the duplicate return succeeds and increments the count to two.
+- [ ] Track pooled references with a reference-identity `HashSet<T>`, reject an already-pooled reference before callbacks, roll membership back if return callbacks fail, and remove membership on get/clear. Rerun the focused command; expect one rejected duplicate and one reusable object.
+
+#### Task 3 Repair C: Make message mutation safe across reentrant publication and exceptions
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestHandlerCanUnsubscribeBeforeReentrantPublish`, where the first handler disposes itself and publishes recursively while a second handler records both messages; assert no exception, the removed handler sees only the outer message, and the remaining handler sees inner then outer. Add `TestSubscriptionMutationIsAppliedWhenHandlerThrows`, where a handler disposes itself then throws and is absent on the next publish. Run both through `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestHandlerCanUnsubscribeBeforeReentrantPublish|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscriptionMutationIsAppliedWhenHandlerThrows"`; expect the reentrant test to fail from active-list mutation, while the exception-path characterization already passes because the next publication flushes pending removal.
+- [ ] Track publication depth, never apply pending mutations while any publication frame is iterating, skip handlers pending removal, and apply pending changes in the outermost `finally`. Rerun the focused command; expect deterministic ordering and exception-safe cleanup.
+
+#### Task 3 Repair D: Preserve buffered-channel state after disposal
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer`, publish an initial value, dispose, attempt a second publish, and assert `ObjectDisposedException` plus the original buffered value. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer"`; expect failure because the buffer changes before the base disposed guard runs.
+- [ ] Expose the disposed guard to derived channels and invoke it before updating buffered state. Rerun the focused command; expect the exception without mutation.
+
+#### Task 3 Repair E: Reject states and transitions owned by another machine
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Change `TestAddNullState` to expect `ArgumentNullException`; add `TestInitialStateMustBelongToMachine` and `TestTransitionStatesMustBelongToMachine`, asserting assignments/transitions involving unregistered or foreign-owned states throw `InvalidOperationException`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddNullState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestInitialStateMustBelongToMachine|FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionStatesMustBelongToMachine"`; expect failures because null is dereferenced and ownership is unchecked.
+- [ ] Guard null state input, prevent a state from joining multiple machines, validate non-null initial/source states and target states belong to the receiving machine, and document each exception contract. Rerun the focused command; expect all invalid operations to be rejected before state changes.
+
+#### Task 3 Repair F: Exit hierarchical states from leaf to root
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestNestedStatesExitChildBeforeParent`, recording callbacks while deactivating a two-level active hierarchy and asserting `child-exit` precedes `parent-exit`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestNestedStatesExitChildBeforeParent"`; expect the current parent-first order.
+- [ ] Deactivate the child state machine before invoking the parent state's exit callback, while retaining parent-first entry. Rerun the focused command; expect leaf-to-root exit order.
+
+#### Task 3 Repair G: Remove per-dispatch transition-list allocation
+
+**Files:** `Patterns/StateMachine.cs`
+
+- [ ] After Repairs E and F are green, replace the `Where(...).ToList()` transition search with a direct ordered loop that selects the same first matching transition. This is behavior-neutral and is protected by the existing transition, AnyState, duplicate-transition, and workflow tests.
+- [ ] Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine"`; expect all state-machine tests to pass with unchanged first-match semantics.
+
+#### Task 3 Repair H: Reject null service registrations at the public boundary
+
+**Files:** `Patterns/ServiceLocator.cs`, `Test/Patterns/UnitTestServiceLocator.cs`
+
+- [ ] Add `TestRegisterRejectsNullService`, passing `null!` to `Register<TestService>` and expecting `ArgumentNullException` naming `service`; then assert lookup still reports the service as missing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestServiceLocator.TestRegisterRejectsNullService"`; expect failure because the null value is stored and returned as though it were a service.
+- [ ] Add a release-safe null guard before mutating the service dictionary and document the exception contract. Rerun the focused command; expect immediate rejection and unchanged locator state.
+
+#### Task 3 Repair I: Allow a message handler to dispose its channel safely
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestHandlerCanDisposeChannelDuringPublish`, with a first handler that disposes the channel and a second handler that records delivery; assert publication does not throw, the second handler is not called, and the channel is disposed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestHandlerCanDisposeChannelDuringPublish"`; expect failure because disposal clears the list currently being enumerated.
+- [ ] Mark the channel disposed immediately but defer clearing the active handler list until the outermost publication frame exits; stop delivery once disposal is observed. Rerun the focused command; expect safe termination with no later handler invoked.
+
+#### Task 3 Repair J: Reject transitions reentered from state lifecycle callbacks
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestExitCallbackCannotReenterTransition`, where an exit callback catches the exception from dispatching a second transition and records it; assert the outer transition reaches its intended target and the nested target is never entered. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestExitCallbackCannotReenterTransition"`; expect failure because the nested transition succeeds before being silently overwritten.
+- [ ] Track the state-change lifecycle scope and make `Dispatch` throw `InvalidOperationException` while entry or exit callbacks are running, resetting the guard in `finally`; document the reentrancy contract. Rerun the focused command; expect the nested transition to be rejected without corrupting the outer transition.
+
 ### Task 4: ECS
 
 **Files:**

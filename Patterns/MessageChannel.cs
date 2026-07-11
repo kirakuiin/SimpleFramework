@@ -3,27 +3,27 @@
 /// <summary>
 /// 发布者接口，实现此接口具有发布消息功能
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public interface IPublisher<in T> : IGameService
 {
     /// <summary>
     /// 发布消息
     /// </summary>
-    /// <param name="message"></param>
+    /// <param name="message">要发布的消息。</param>
     public void Publish(T message);
 }
 
 /// <summary>
 /// 订阅者接口，实现此接口具有订阅功能
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public interface ISubscriber<out T> : IGameService
 {
     /// <summary>
     /// 使用处理函数订阅此接口
     /// </summary>
     /// <param name="handler">处理函数</param>
-    /// <returns></returns>
+    /// <returns>用于取消本次订阅的一次性句柄。</returns>
     public IDisposable Subscribe(Action<T> handler);
 
     /// <summary>
@@ -36,7 +36,7 @@ public interface ISubscriber<out T> : IGameService
 /// <summary>
 /// 信息通道，同时支持订阅和发布功能。
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public interface IMessageChannel<T> : IPublisher<T>, ISubscriber<T>, IDisposable
 {
     /// <summary>
@@ -48,7 +48,7 @@ public interface IMessageChannel<T> : IPublisher<T>, ISubscriber<T>, IDisposable
 /// <summary>
 /// 支持缓存功能的信息通道。
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public interface IBufferedMessageChannel<T> : IMessageChannel<T>
 {
     /// <summary>
@@ -65,28 +65,36 @@ public interface IBufferedMessageChannel<T> : IMessageChannel<T>
 /// <summary>
 /// 基础版本的信道
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public class MessageChannel<T> : IMessageChannel<T>
 {
     private readonly List<Action<T>> _messageHandlers = new();
 
     private readonly Dictionary<Action<T>, bool> _pendingHandlers = new();
+    private int _publishDepth;
     
+    /// <inheritdoc />
     public bool IsDisposed { get; private set; }
 
+    /// <summary>释放通道并移除所有订阅。</summary>
     public void Dispose()
     {
         Dispose(true);
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>执行释放逻辑。</summary>
+    /// <param name="isDisposing">是否由显式释放调用。</param>
     protected virtual void Dispose(bool isDisposing)
     {
         if (IsDisposed) return;
 
         IsDisposed = true;
-        _messageHandlers.Clear();
         _pendingHandlers.Clear();
+        if (_publishDepth == 0)
+        {
+            _messageHandlers.Clear();
+        }
     }
 
     ~MessageChannel()
@@ -94,11 +102,36 @@ public class MessageChannel<T> : IMessageChannel<T>
         Dispose(false);
     }
 
+    /// <inheritdoc />
     public virtual void Publish(T message)
     {
         ThrowIfDisposed();
-        ClearPendingHandlers();
-        PublishMessage(message);
+        if (_publishDepth == 0)
+        {
+            ClearPendingHandlers();
+        }
+
+        _publishDepth++;
+        try
+        {
+            PublishMessage(message);
+        }
+        finally
+        {
+            _publishDepth--;
+            if (_publishDepth == 0)
+            {
+                if (IsDisposed)
+                {
+                    _messageHandlers.Clear();
+                    _pendingHandlers.Clear();
+                }
+                else
+                {
+                    ClearPendingHandlers();
+                }
+            }
+        }
     }
 
     private void ClearPendingHandlers()
@@ -122,10 +155,15 @@ public class MessageChannel<T> : IMessageChannel<T>
     {
         foreach (var handler in _messageHandlers)
         {
-            handler?.Invoke(message);
+            if (IsDisposed) break;
+            if (IsSubscribed(handler))
+            {
+                handler(message);
+            }
         }
     }
 
+    /// <inheritdoc />
     public virtual IDisposable Subscribe(Action<T> handler)
     {
         ThrowIfDisposed();
@@ -148,6 +186,7 @@ public class MessageChannel<T> : IMessageChannel<T>
         return (_messageHandlers.Contains(handler) && !isPendingRemoval) || isPendingAdding;
     }
 
+    /// <inheritdoc />
     public void Unsubscribe(Action<T> handler)
     {
         ThrowIfDisposed();
@@ -163,7 +202,7 @@ public class MessageChannel<T> : IMessageChannel<T>
         }
     }
 
-    private void ThrowIfDisposed()
+    protected void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
     }
@@ -172,13 +211,16 @@ public class MessageChannel<T> : IMessageChannel<T>
 /// <summary>
 /// 处理激活的信道订阅和取消订阅相关问题
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public sealed class DisposableSubscription<T> : IDisposable
 {
     private Action<T>? _handler;
     private IMessageChannel<T>? _channel;
     private bool _isDisposed;
 
+    /// <summary>创建一个绑定到指定订阅的取消句柄。</summary>
+    /// <param name="messageChannel">订阅所属的通道。</param>
+    /// <param name="handler">要在释放时取消的处理器。</param>
     public DisposableSubscription(IMessageChannel<T> messageChannel, Action<T> handler)
     {
         _channel = messageChannel;
@@ -190,6 +232,7 @@ public sealed class DisposableSubscription<T> : IDisposable
         Dispose(false);
     }
 
+    /// <summary>取消绑定的订阅；重复调用不执行操作。</summary>
     public void Dispose()
     {
         Dispose(true);
@@ -216,16 +259,19 @@ public sealed class DisposableSubscription<T> : IDisposable
 /// <summary>
 /// 缓存上次发布的消息，有新的订阅时会自动向新订阅发送之前的消息。
 /// </summary>
-/// <typeparam name="T"></typeparam>
+/// <typeparam name="T">消息类型。</typeparam>
 public class BufferedMessageChannel<T> : MessageChannel<T>, IBufferedMessageChannel<T>
 {
+    /// <inheritdoc />
     public override void Publish(T message)
     {
+        ThrowIfDisposed();
         HasBufferedMessage = true;
         BufferedMessage = message;
         base.Publish(message);
     }
 
+    /// <inheritdoc />
     public override IDisposable Subscribe(Action<T> handler)
     {
         var subscription = base.Subscribe(handler);
@@ -238,7 +284,9 @@ public class BufferedMessageChannel<T> : MessageChannel<T>, IBufferedMessageChan
         return subscription;
     }
 
+    /// <inheritdoc />
     public bool HasBufferedMessage { get; private set; } = false;
 
+    /// <inheritdoc />
     public T BufferedMessage { get; private set; } = default!;
 }

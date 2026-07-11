@@ -110,4 +110,13 @@ public class TestServiceLocator
         // 确保不会抛出异常
         Assert.DoesNotThrow(() => _serviceLocator.UnRegister<TestService>());
     }
+
+    [Test]
+    public void TestRegisterRejectsNullService()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(() => _serviceLocator.Register<TestService>(null!));
+
+        Assert.That(exception!.ParamName, Is.EqualTo("service"));
+        Assert.Throws<KeyNotFoundException>(() => _serviceLocator.Get<TestService>());
+    }
 }

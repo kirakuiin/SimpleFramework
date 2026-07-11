@@ -5,6 +5,7 @@
 /// </summary>
 public static class StateEvents
 {
+    /// <summary>表示当前状态已完成的常用事件名。</summary>
     public const string EventFinished = "finished";
 
     /// <summary>
@@ -91,8 +92,8 @@ public class State
 
     internal void ExitState()
     {
-        Exit();
         ChildrenStateMachine?.SetActive(false);
+        Exit();
     }
 
     internal void UpdateState(float delta)
@@ -256,6 +257,7 @@ public class StateMachine
     private State? _currentState;
     private State? _initialState;
     private bool _isActive;
+    private bool _isChangingState;
 
     /// <summary>
     /// 当前活动状态
@@ -268,16 +270,25 @@ public class StateMachine
     public bool IsActive => _isActive;
 
     /// <summary>
-    /// 初始状态
+    /// 获取或设置激活时进入的初始状态；非空状态必须已属于当前状态机。
     /// </summary>
+    /// <exception cref="InvalidOperationException">设置的状态不属于当前状态机。</exception>
     public State? InitialState
     {
         get => _initialState;
-        set => _initialState = value;
+        set
+        {
+            if (value is not null && value.StateMachine != this)
+            {
+                throw new InvalidOperationException("初始状态必须先添加到当前状态机。");
+            }
+
+            _initialState = value;
+        }
     }
 
     /// <summary>
-    /// 当切换状态时是否立即触发一次Update
+    /// 获取或设置切换状态后是否立即以零间隔更新一次新状态。
     /// </summary>
     public bool TriggerUpdateWhenStateChange { set; get; } = false;
 
@@ -285,10 +296,17 @@ public class StateMachine
     /// 添加状态
     /// </summary>
     /// <param name="state">状态</param>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="InvalidOperationException">状态已经属于另一个状态机。</exception>
     public void AddState(State state)
     {
+        ArgumentNullException.ThrowIfNull(state);
         if (_states.Contains(state))
             return; // 防止重复添加同一个状态
+        if (state.StateMachine is not null)
+        {
+            throw new InvalidOperationException("状态已经属于另一个状态机。");
+        }
 
         _states.Add(state);
         state.SetStateMachine(this);
@@ -308,6 +326,16 @@ public class StateMachine
         if (string.IsNullOrEmpty(eventName))
             throw new ArgumentException("Event name cannot be null or empty");
 
+        if (fromState is not null && fromState.StateMachine != this)
+        {
+            throw new InvalidOperationException("源状态必须属于当前状态机。");
+        }
+
+        if (toState.StateMachine != this)
+        {
+            throw new InvalidOperationException("目标状态必须属于当前状态机。");
+        }
+
         _transitions.Add(new Transition(fromState, toState, eventName));
     }
 
@@ -315,6 +343,9 @@ public class StateMachine
     /// 添加状态机级别的事件处理器，无论当前状态是什么都会生效。
     /// </summary>
     /// <param name="eventName">事件名称</param>
+    /// <exception cref="ArgumentNullException"><paramref name="toState"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="ArgumentException"><paramref name="eventName"/> 为空。</exception>
+    /// <exception cref="InvalidOperationException">源状态或目标状态不属于当前状态机。</exception>
     /// <param name="handler">事件处理器</param>
     public void AddEventHandler(string eventName, StateEventHandler handler)
     {
@@ -361,8 +392,14 @@ public class StateMachine
     /// <param name="eventName">事件名称</param>
     /// <param name="args">事件参数</param>
     /// <returns>事件是否被消耗</returns>
+    /// <exception cref="InvalidOperationException">状态正在执行进入或退出回调，不能重入转换。</exception>
     public bool Dispatch(string eventName, object? args = null)
     {
+        if (_isChangingState)
+        {
+            throw new InvalidOperationException("状态进入或退出期间不能分发新的转换事件。");
+        }
+
         PatternLogger.Info($"状态事件: {eventName}");
         if (!_isActive || _currentState == null) return false;
 
@@ -377,14 +414,19 @@ public class StateMachine
         }
 
         // 检查转换
-        var matchingTransitions = _transitions
-            .Where(t => t.EventName == eventName &&
-                        (t.FromState == StateEvents.AnyState || t.FromState == _currentState))
-            .ToList();
+        foreach (var transition in _transitions)
+        {
+            if (transition.EventName != eventName ||
+                (transition.FromState != StateEvents.AnyState && transition.FromState != _currentState))
+            {
+                continue;
+            }
 
-        if (matchingTransitions.Count <= 0) return false;
-        ChangeToState(matchingTransitions[0].ToState);
-        return true;
+            ChangeToState(transition.ToState);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -401,17 +443,24 @@ public class StateMachine
 
     private void ChangeToState(State newState)
     {
-        var previousState = _currentState;
-        _currentState?.ExitState();
-        _currentState = newState;
-        _currentState.EnterState();
-        
-        PatternLogger.Info($"状态转移: [{previousState?.Name}]=>[{_currentState.Name}]");
-        
-        if (TriggerUpdateWhenStateChange)
+        _isChangingState = true;
+        try
         {
-            _currentState.UpdateState(0);
+            var previousState = _currentState;
+            _currentState?.ExitState();
+            _currentState = newState;
+            _currentState.EnterState();
+
+            PatternLogger.Info($"状态转移: [{previousState?.Name}]=>[{_currentState.Name}]");
+
+            if (TriggerUpdateWhenStateChange)
+            {
+                _currentState.UpdateState(0);
+            }
         }
-        
+        finally
+        {
+            _isChangingState = false;
+        }
     }
 }

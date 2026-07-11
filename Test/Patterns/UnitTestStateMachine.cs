@@ -71,7 +71,32 @@ public class TestStateMachine
     {
         var stateMachine = new StateMachine();
 
-        Assert.Throws<NullReferenceException>(() => stateMachine.AddState(null!));
+        Assert.Throws<ArgumentNullException>(() => stateMachine.AddState(null!));
+    }
+
+    [Test]
+    public void TestInitialStateMustBelongToMachine()
+    {
+        var stateMachine = new StateMachine();
+        var foreignMachine = new StateMachine();
+        var unregistered = new TestState("Unregistered");
+        var foreign = new TestState("Foreign");
+        foreignMachine.AddState(foreign);
+
+        Assert.Throws<InvalidOperationException>(() => stateMachine.InitialState = unregistered);
+        Assert.Throws<InvalidOperationException>(() => stateMachine.InitialState = foreign);
+    }
+
+    [Test]
+    public void TestTransitionStatesMustBelongToMachine()
+    {
+        var stateMachine = new StateMachine();
+        var owned = new TestState("Owned");
+        var unregistered = new TestState("Unregistered");
+        stateMachine.AddState(owned);
+
+        Assert.Throws<InvalidOperationException>(() => stateMachine.AddTransition(unregistered, owned, "from"));
+        Assert.Throws<InvalidOperationException>(() => stateMachine.AddTransition(owned, unregistered, "to"));
     }
 
     [Test]
@@ -187,6 +212,36 @@ public class TestStateMachine
         Assert.AreEqual(1, state1.ExitCount);
         Assert.AreEqual(1, state2.EnterCount);
         Assert.AreEqual(0, state2.ExitCount);
+    }
+
+    [Test]
+    public void TestExitCallbackCannotReenterTransition()
+    {
+        var stateMachine = new StateMachine();
+        var source = new TestState("Source");
+        var outerTarget = new TestState("OuterTarget");
+        var nestedTarget = new TestState("NestedTarget");
+        InvalidOperationException? reentrancyException = null;
+        var attempted = false;
+        source.CallOnExit(() =>
+        {
+            if (attempted) return;
+            attempted = true;
+            reentrancyException = Assert.Throws<InvalidOperationException>(() => stateMachine.Dispatch("nested"));
+        });
+        stateMachine.AddState(source);
+        stateMachine.AddState(outerTarget);
+        stateMachine.AddState(nestedTarget);
+        stateMachine.AddTransition(source, outerTarget, "outer");
+        stateMachine.AddTransition(source, nestedTarget, "nested");
+        stateMachine.InitialState = source;
+        stateMachine.SetActive(true);
+
+        stateMachine.Dispatch("outer");
+
+        Assert.That(reentrancyException, Is.Not.Null);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(outerTarget));
+        Assert.That(nestedTarget.EnterCount, Is.Zero);
     }
 
     [Test]
@@ -586,6 +641,23 @@ public class TestStateMachine
         // 验证Enter/Exit时的子状态机激活
         parentStateMachine.SetActive(false);
         Assert.IsFalse(parentState.ChildrenStateMachine.IsActive); // 父状态停用时子状态机也停用
+    }
+
+    [Test]
+    public void TestNestedStatesExitChildBeforeParent()
+    {
+        var order = new List<string>();
+        var stateMachine = new StateMachine();
+        var parent = new State().Named("parent").CallOnExit(() => order.Add("parent-exit"));
+        var child = new State().Named("child").CallOnExit(() => order.Add("child-exit"));
+        parent.AddState(child, true);
+        stateMachine.AddState(parent);
+        stateMachine.InitialState = parent;
+        stateMachine.SetActive(true);
+
+        stateMachine.SetActive(false);
+
+        Assert.That(order, Is.EqualTo(new[] { "child-exit", "parent-exit" }));
     }
 
     [Test]

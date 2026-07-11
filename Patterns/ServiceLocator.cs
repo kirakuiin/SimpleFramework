@@ -19,8 +19,8 @@ public class ServiceLocator : Singleton<ServiceLocator>
     /// 获得注册过的某个服务。
     /// </summary>
     /// <typeparam name="T">实现了<c>IGameService</c>的类型</typeparam>
-    /// <returns></returns>
-    /// <exception cref="InvalidOperationException"></exception>
+    /// <returns>与请求类型完全匹配或可赋值给请求类型的已注册服务。</returns>
+    /// <exception cref="KeyNotFoundException">找不到兼容的服务。</exception>
     public T Get<T>() where T : IGameService
     {
         if (_services.TryGetValue(typeof(T), out var service)) return (T)service;
@@ -44,8 +44,10 @@ public class ServiceLocator : Singleton<ServiceLocator>
     /// </summary>
     /// <param name="service">服务对象</param>
     /// <typeparam name="T">实现了<c>IGameService</c>的类型</typeparam>
+    /// <exception cref="ArgumentNullException"><paramref name="service"/> 为 <see langword="null"/>。</exception>
     public void Register<T>(T service) where T : IGameService
     {
+        ArgumentNullException.ThrowIfNull(service);
         _services[typeof(T)] = service;
     }
 
