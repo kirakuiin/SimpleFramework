@@ -127,3 +127,27 @@ The failure-state follow-up from base `9aae063465f7dd1cb0f285fd2cc1ade8f4819968`
 - Release solution build: 0 warnings, 0 errors.
 - Source-quality fixture: 1 passed, 0 failed, 0 skipped.
 - No additional reviewer was dispatched, as explicitly required for this closure.
+
+## Hierarchy Closure Follow-up
+
+### Findings and Repairs
+
+- Setup isolation was local to the machine running `Setup`, so a root setup callback could activate a pre-existing child machine. Child machines now retain an owner-state link and reject lifecycle mutation whenever any ancestor machine is in setup.
+- Setup snapshots stopped at the immediate hierarchy and omitted lifecycle/configuration fields. Snapshots now recurse through every pre-existing descendant and restore state lists, ownership/parent links, initial/current state, transitions, handlers, active/change/setup fields, and `TriggerUpdateWhenStateChange`; newly-created descendant hierarchy is detached on failure while successful setup configuration is retained.
+- Lifecycle failure catches only failed closed the machine handling the exception. A callback-free recursive helper now closes the complete reachable hierarchy after activation, transition, or update exceptions without invoking additional lifecycle callbacks, while preserving the original exception identity and explicit recovery path.
+- Base and buffered subscription XML now state that duplicate effective subscriptions may return a non-owning no-op handle.
+
+### TDD Evidence
+
+- Exact hierarchy RED: 2 failed, 0 passed. Descendant activation during ancestor setup returned no guard exception, and target-update failure left both entered descendant machines active.
+- Exact hierarchy GREEN: 2 passed, 0 failed, 0 skipped.
+- StateMachine fixture: 44 passed, 0 failed, 0 skipped.
+- Full Patterns: 120 passed, 0 failed, 0 skipped.
+
+### Verification
+
+- Full `Test/Test.csproj`: 715 passed, 0 failed, 0 skipped.
+- Release solution build: 0 warnings, 0 errors.
+- Source-quality fixture: 1 passed, 0 failed, 0 skipped.
+- `git diff --check`: exit 0; only Git line-ending conversion notices were emitted.
+- Recursive restore was self-reviewed for pre-existing and newly-created descendants, lifecycle/configuration fields, successful-setup retention, exception identity, guard reset, and explicit recovery. No additional reviewer was dispatched, as explicitly required.

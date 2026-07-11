@@ -499,6 +499,80 @@ public class TestStateMachine
         Assert.That(stateMachine.Dispatch("handled"), Is.True);
     }
 
+    [Test]
+    public void TestSetupFailureRecursivelyRestoresExistingHierarchy()
+    {
+        var rootMachine = new StateMachine();
+        var root = new State().Named("root");
+        var existingChild = new State().Named("existing child");
+        var sibling = new State().Named("sibling");
+        var existingLeaf = new State().Named("existing leaf");
+        var grandchild = new State().Named("temporary grandchild");
+        var expected = new InvalidOperationException("Recursive setup failed.");
+        var shouldFail = true;
+        var propagated = false;
+        Exception? descendantGuard = null;
+
+        existingChild.AddEventHandler("propagate", _ => propagated = true);
+        existingChild.AddState(existingLeaf, true);
+        root.AddState(existingChild, true);
+        root.AddState(sibling);
+        var childMachine = root.ChildrenStateMachine!;
+        var grandchildMachine = existingChild.ChildrenStateMachine!;
+
+        root.CallOnSetup(() =>
+        {
+            if (!shouldFail) return;
+
+            descendantGuard = CaptureException(() => childMachine.SetActive(true));
+            childMachine.TriggerUpdateWhenStateChange = true;
+            childMachine.InitialState = sibling;
+            childMachine.AddTransition(existingChild, sibling, "leaked-child-transition");
+            childMachine.AddEventHandler("leaked-child-handler", _ => true);
+
+            existingChild.AddState(grandchild, true);
+            grandchildMachine.TriggerUpdateWhenStateChange = true;
+            grandchildMachine.AddTransition(existingLeaf, grandchild, "leaked-grand-transition");
+            grandchildMachine.AddEventHandler("leaked-grand-handler", _ => true);
+            throw expected;
+        });
+
+        var actual = Assert.Throws<InvalidOperationException>(() => rootMachine.AddState(root));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(descendantGuard, Is.TypeOf<InvalidOperationException>());
+        Assert.That(rootMachine.IsActive, Is.False);
+        Assert.That(rootMachine.CurrentState, Is.Null);
+        Assert.That(childMachine.IsActive, Is.False);
+        Assert.That(childMachine.CurrentState, Is.Null);
+        Assert.That(grandchildMachine.IsActive, Is.False);
+        Assert.That(grandchildMachine.CurrentState, Is.Null);
+        Assert.That(root.StateMachine, Is.Null);
+        Assert.That(root.ChildrenStateMachine, Is.SameAs(childMachine));
+        Assert.That(childMachine.InitialState, Is.SameAs(existingChild));
+        Assert.That(childMachine.TriggerUpdateWhenStateChange, Is.False);
+        Assert.That(grandchildMachine.InitialState, Is.SameAs(existingLeaf));
+        Assert.That(grandchildMachine.TriggerUpdateWhenStateChange, Is.False);
+        Assert.That(grandchild.StateMachine, Is.Null);
+        Assert.That(grandchild.ChildrenStateMachine, Is.Null);
+        Assert.That(grandchild.Depth, Is.EqualTo(1));
+        grandchild.Dispatch("propagate");
+        Assert.That(propagated, Is.False);
+
+        shouldFail = false;
+        Assert.DoesNotThrow(() => rootMachine.AddState(root));
+        rootMachine.InitialState = root;
+        Assert.DoesNotThrow(() => rootMachine.SetActive(true));
+        Assert.That(childMachine.Dispatch("leaked-child-handler"), Is.False);
+        Assert.That(childMachine.Dispatch("leaked-child-transition"), Is.False);
+        Assert.That(childMachine.CurrentState, Is.SameAs(existingChild));
+        Assert.That(grandchildMachine.Dispatch("leaked-grand-handler"), Is.False);
+        Assert.That(grandchildMachine.Dispatch("leaked-grand-transition"), Is.False);
+        Assert.That(grandchildMachine.CurrentState, Is.SameAs(existingLeaf));
+        Assert.DoesNotThrow(() => grandchildMachine.AddState(grandchild));
+        Assert.That(grandchild.StateMachine, Is.SameAs(grandchildMachine));
+    }
+
     private static Exception? CaptureException(TestDelegate action)
     {
         try
@@ -996,6 +1070,48 @@ public class TestStateMachine
         Assert.That(stateMachine.CurrentState, Is.SameAs(target));
         Assert.That(target.ChildrenStateMachine.IsActive, Is.True);
         Assert.That(target.ChildrenStateMachine.CurrentState, Is.SameAs(child));
+    }
+
+    [Test]
+    public void TestTransitionTargetUpdateFailureRecursivelyClosesHierarchy()
+    {
+        var stateMachine = new StateMachine { TriggerUpdateWhenStateChange = true };
+        var source = new TestState("source");
+        var target = new TestState("target");
+        var child = new TestState("child");
+        var grandchild = new TestState("grandchild");
+        var expected = new InvalidOperationException("Target update failed.");
+        var shouldThrow = true;
+        target.CallOnUpdate(_ =>
+        {
+            if (shouldThrow) throw expected;
+        });
+        child.AddState(grandchild, true);
+        target.AddState(child, true);
+        stateMachine.AddState(source);
+        stateMachine.AddState(target);
+        stateMachine.AddTransition(source, target, "go");
+        stateMachine.InitialState = source;
+        stateMachine.SetActive(true);
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.Dispatch("go"));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(target.ChildrenStateMachine!.IsActive, Is.False);
+        Assert.That(target.ChildrenStateMachine.CurrentState, Is.Null);
+        Assert.That(child.ChildrenStateMachine!.IsActive, Is.False);
+        Assert.That(child.ChildrenStateMachine.CurrentState, Is.Null);
+
+        shouldThrow = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.Dispatch("go"), Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(target));
+        Assert.That(target.ChildrenStateMachine.IsActive, Is.True);
+        Assert.That(target.ChildrenStateMachine.CurrentState, Is.SameAs(child));
+        Assert.That(child.ChildrenStateMachine.IsActive, Is.True);
+        Assert.That(child.ChildrenStateMachine.CurrentState, Is.SameAs(grandchild));
     }
 
     [Test]

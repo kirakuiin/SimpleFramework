@@ -564,6 +564,26 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [ ] Add `TestUnsubscribeRejectsNullHandler` and `TestCreateFuncCannotBeNull`, asserting `ArgumentNullException` with parameters `handler` and `createFunc`. Run their exact filters and expect failure because dictionary validation currently reports `key` and the pool constructor throws `ArgumentException`.
 - [ ] Validate both public boundaries explicitly and add accurate Chinese XML exception contracts. Rerun the focused tests.
 
+#### Task 3 Hierarchy Closure Repair X: Make setup isolation and rollback recursive
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestSetupFailureRecursivelyRestoresExistingHierarchy`, starting with a pre-existing child machine and state. During root setup, catch the expected descendant activation guard, add a grandchild below the existing child, mutate child-machine initial state, transition, handler, and `TriggerUpdateWhenStateChange`, then throw one original exception. Assert exact exception identity; inactive/null lifecycle state throughout the hierarchy; detached grandchild ownership, parent, depth, and propagation; exact pre-existing configuration restoration; no leaked transition/handler/list entry; reset guards; and successful retry. Run its exact fully-qualified filter and expect failure because setup guards and snapshots currently stop at the current machine and immediate hierarchy.
+- [ ] Give child machines an owner-state link and consult ancestor setup scopes before lifecycle mutation. Replace shallow setup rollback with focused recursive machine/state snapshots that restore pre-existing and newly-created descendant hierarchy, lifecycle fields, initial state, transitions, handlers, and `TriggerUpdateWhenStateChange`, while preserving successful setup configuration. Rerun the focused test and all state-machine tests.
+
+#### Task 3 Hierarchy Closure Repair Y: Fail closed recursively after update and lifecycle errors
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestTransitionTargetUpdateFailureRecursivelyClosesHierarchy`, transitioning to a target with an active child/grandchild hierarchy and `TriggerUpdateWhenStateChange == true`, whose immediate target update throws a retained exception. Assert exact exception identity, inactive/null fields for every entered machine, reset guards, and explicit recovery when throwing is disabled. Run its exact fully-qualified filter and expect failure because only the root catch is currently failed closed.
+- [ ] Add a callback-free recursive fail-close helper and use it consistently from activation, transition, and update exception catches. It must clear active/current lifecycle fields and guards for every reachable descendant without invoking more enter/exit/update callbacks, then rethrow the original exception unchanged. Rerun the focused test and all state-machine tests.
+
+#### Task 3 Hierarchy Closure Repair Z: Clarify duplicate subscription handle ownership
+
+**Files:** `Patterns/MessageChannel.cs`
+
+- [ ] Update base and buffered `Subscribe` XML so the return contract explicitly states an already-effective duplicate subscription may return a non-owning no-op handle. Run the Release build and source-quality fixture.
+
 ### Task 4: ECS
 
 **Files:**

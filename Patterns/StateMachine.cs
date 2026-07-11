@@ -163,7 +163,7 @@ public class State
             throw new InvalidOperationException("子状态已经属于另一个状态机。");
         }
 
-        var childrenStateMachine = ChildrenStateMachine ?? new StateMachine();
+        var childrenStateMachine = ChildrenStateMachine ?? new StateMachine(this);
         childrenStateMachine.AddState(subState);
         subState._parentStateRef = new WeakReference<State>(this);
         ChildrenStateMachine = childrenStateMachine;
@@ -292,11 +292,22 @@ public class Transition(State? fromState, State toState, string eventName)
 /// </summary>
 public class StateMachine
 {
+    internal sealed record StateHierarchySnapshot(
+        State State,
+        StateMachine? ChildrenStateMachine,
+        SetupSnapshot? ChildrenSnapshot);
+
     internal sealed record SetupSnapshot(
         State[] States,
         Transition[] Transitions,
         KeyValuePair<string, StateEventHandler>[] EventHandlers,
-        State? InitialState);
+        State? InitialState,
+        State? CurrentState,
+        bool IsActive,
+        bool IsChangingState,
+        int SetupDepth,
+        bool TriggerUpdateWhenStateChange,
+        StateHierarchySnapshot[] StateHierarchies);
 
     private readonly List<State> _states = new();
     private readonly List<Transition> _transitions = new();
@@ -306,6 +317,17 @@ public class StateMachine
     private bool _isActive;
     private bool _isChangingState;
     private int _setupDepth;
+    private readonly State? _ownerState;
+
+    /// <summary>创建根状态机。</summary>
+    public StateMachine()
+    {
+    }
+
+    internal StateMachine(State ownerState)
+    {
+        _ownerState = ownerState;
+    }
 
     /// <summary>
     /// 当前活动状态
@@ -369,14 +391,12 @@ public class StateMachine
         }
         catch
         {
+            _setupDepth--;
             RestoreSetupSnapshot(machineSnapshot);
             state.RestoreSetupHierarchy(originalChildrenStateMachine, originalChildrenSnapshot);
             throw;
         }
-        finally
-        {
-            _setupDepth--;
-        }
+        _setupDepth--;
     }
 
     /// <summary>
@@ -442,7 +462,7 @@ public class StateMachine
     /// </remarks>
     public void SetActive(bool active)
     {
-        if (_setupDepth > 0)
+        if (IsSetupInHierarchy())
         {
             throw new InvalidOperationException("状态初始化期间不能更改状态机的激活状态。");
         }
@@ -474,8 +494,7 @@ public class StateMachine
         }
         catch
         {
-            _isActive = false;
-            _currentState = null;
+            FailCloseHierarchy();
             throw;
         }
         finally
@@ -493,7 +512,7 @@ public class StateMachine
     /// <exception cref="InvalidOperationException">正在初始化状态或执行状态进入/退出回调，不能分发事件。</exception>
     public bool Dispatch(string eventName, object? args = null)
     {
-        if (_setupDepth > 0)
+        if (IsSetupInHierarchy())
         {
             throw new InvalidOperationException("状态初始化期间不能分发事件。");
         }
@@ -538,9 +557,17 @@ public class StateMachine
     /// <param name="delta">帧间隔时间</param>
     public void Update(float delta)
     {
-        if (_isActive && _currentState != null)
+        try
         {
-            _currentState.UpdateState(delta);
+            if (_isActive && _currentState != null)
+            {
+                _currentState.UpdateState(delta);
+            }
+        }
+        catch
+        {
+            FailCloseHierarchy();
+            throw;
         }
     }
 
@@ -563,8 +590,7 @@ public class StateMachine
         }
         catch
         {
-            _isActive = false;
-            _currentState = null;
+            FailCloseHierarchy();
             throw;
         }
         finally
@@ -577,7 +603,16 @@ public class StateMachine
         _states.ToArray(),
         _transitions.ToArray(),
         [.. _eventHandlers],
-        _initialState);
+        _initialState,
+        _currentState,
+        _isActive,
+        _isChangingState,
+        _setupDepth,
+        TriggerUpdateWhenStateChange,
+        [.. _states.Select(state => new StateHierarchySnapshot(
+            state,
+            state.ChildrenStateMachine,
+            state.ChildrenStateMachine?.CaptureSetupSnapshot()))]);
 
     internal void RestoreSetupSnapshot(SetupSnapshot snapshot)
     {
@@ -600,6 +635,31 @@ public class StateMachine
             _eventHandlers.Add(eventName, handler);
         }
         _initialState = snapshot.InitialState;
+        _currentState = snapshot.CurrentState;
+        _isActive = snapshot.IsActive;
+        _isChangingState = snapshot.IsChangingState;
+        _setupDepth = snapshot.SetupDepth;
+        TriggerUpdateWhenStateChange = snapshot.TriggerUpdateWhenStateChange;
+        foreach (var stateHierarchy in snapshot.StateHierarchies)
+        {
+            stateHierarchy.State.RestoreSetupHierarchy(
+                stateHierarchy.ChildrenStateMachine,
+                stateHierarchy.ChildrenSnapshot);
+        }
+    }
+
+    private bool IsSetupInHierarchy() =>
+        _setupDepth > 0 || _ownerState?.StateMachine?.IsSetupInHierarchy() == true;
+
+    private void FailCloseHierarchy()
+    {
+        _isActive = false;
+        _currentState = null;
+        _isChangingState = false;
+        foreach (var state in _states)
+        {
+            state.ChildrenStateMachine?.FailCloseHierarchy();
+        }
     }
 
     internal void DetachAllStates()

@@ -23,7 +23,7 @@ public interface ISubscriber<out T> : IGameService
     /// 使用处理函数订阅此接口
     /// </summary>
     /// <param name="handler">处理函数</param>
-    /// <returns>用于取消本次订阅的一次性句柄。</returns>
+    /// <returns>用于取消本次订阅的一次性句柄；重复的有效订阅可返回无所有权的无操作句柄。</returns>
     public IDisposable Subscribe(Action<T> handler);
 
     /// <summary>
@@ -188,7 +188,7 @@ public class MessageChannel<T> : IMessageChannel<T>
 
     /// <summary>订阅消息处理器；同一处理器重复订阅不会创建新的注册。</summary>
     /// <param name="handler">消息处理器。</param>
-    /// <returns>新注册的显式取消句柄；处理器已订阅时返回无操作句柄。</returns>
+    /// <returns>新注册的显式取消句柄；处理器已有效订阅时返回无所有权的无操作句柄。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
     /// <remarks>只有显式释放返回的句柄才会取消本次注册；句柄被垃圾回收不会改变订阅。</remarks>
     public virtual IDisposable Subscribe(Action<T> handler)
@@ -261,7 +261,7 @@ public class BufferedMessageChannel<T> : MessageChannel<T>, IBufferedMessageChan
     /// 订阅消息；已有缓存时立即向新处理器重放最后一条消息。
     /// </summary>
     /// <param name="handler">消息处理器。</param>
-    /// <returns>用于取消订阅的一次性句柄。</returns>
+    /// <returns>用于取消本次订阅的一次性句柄；重复的有效订阅可返回无所有权的无操作句柄。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
     /// <remarks>重放处理器抛出异常时会取消本次订阅，并原样传播该异常。</remarks>
     public override IDisposable Subscribe(Action<T> handler)
