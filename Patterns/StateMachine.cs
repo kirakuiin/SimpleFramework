@@ -144,6 +144,7 @@ public class State
     /// <param name="isInitState">是否为初始状态</param>
     /// <exception cref="ArgumentNullException"><paramref name="subState"/> 为 <see langword="null"/>。</exception>
     /// <exception cref="InvalidOperationException"><paramref name="subState"/> 已属于其他状态机。</exception>
+    /// <remarks>子状态初始化失败时原样传播异常，且不会发布父子关系或状态机所有权。</remarks>
     public void AddState(State subState, bool isInitState=false)
     {
         ArgumentNullException.ThrowIfNull(subState);
@@ -249,7 +250,7 @@ public class State
     /// <summary>
     /// 内部设置状态机
     /// </summary>
-    internal void SetStateMachine(StateMachine stateMachine)
+    internal void SetStateMachine(StateMachine? stateMachine)
     {
         StateMachine = stateMachine;
     }
@@ -317,6 +318,7 @@ public class StateMachine
     /// <param name="state">状态</param>
     /// <exception cref="ArgumentNullException"><paramref name="state"/> 为 <see langword="null"/>。</exception>
     /// <exception cref="InvalidOperationException">状态已经属于另一个状态机。</exception>
+    /// <remarks>状态初始化失败时原样传播异常，并移除其所有权、初始状态和关联转换。</remarks>
     public void AddState(State state)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -329,7 +331,22 @@ public class StateMachine
 
         _states.Add(state);
         state.SetStateMachine(this);
-        state.Setup();
+        try
+        {
+            state.Setup();
+        }
+        catch
+        {
+            _states.Remove(state);
+            _transitions.RemoveAll(transition =>
+                ReferenceEquals(transition.FromState, state) || ReferenceEquals(transition.ToState, state));
+            if (ReferenceEquals(_initialState, state))
+            {
+                _initialState = null;
+            }
+            state.SetStateMachine(null);
+            throw;
+        }
     }
 
     /// <summary>
@@ -389,8 +406,9 @@ public class StateMachine
     /// <param name="active">是否活跃</param>
     /// <exception cref="InvalidOperationException">正在执行状态进入或退出回调，不能重入生命周期变更。</exception>
     /// <remarks>
-    /// 进入或退出回调抛出的异常会原样传播。回调失败时，<see cref="IsActive"/> 和
-    /// <see cref="CurrentState"/> 保持调用前的值。
+    /// 进入或退出回调抛出的异常会原样传播。回调失败时状态机采用失败关闭策略，
+    /// <see cref="IsActive"/> 为 <see langword="false"/>，<see cref="CurrentState"/> 为
+    /// <see langword="null"/>；调用者可在修复回调条件后显式重新激活。
     /// </remarks>
     public void SetActive(bool active)
     {
@@ -402,8 +420,6 @@ public class StateMachine
         if (active == _isActive) return;
 
         _isChangingState = true;
-        var previousActive = _isActive;
-        var previousState = _currentState;
         try
         {
             if (active)
@@ -423,8 +439,8 @@ public class StateMachine
         }
         catch
         {
-            _isActive = previousActive;
-            _currentState = previousState;
+            _isActive = false;
+            _currentState = null;
             throw;
         }
         finally
@@ -504,6 +520,12 @@ public class StateMachine
             {
                 _currentState.UpdateState(0);
             }
+        }
+        catch
+        {
+            _isActive = false;
+            _currentState = null;
+            throw;
         }
         finally
         {

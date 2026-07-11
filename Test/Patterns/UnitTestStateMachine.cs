@@ -297,7 +297,7 @@ public class TestStateMachine
     }
 
     [Test]
-    public void TestDeactivationExitExceptionPreservesActiveState()
+    public void TestDeactivationExitExceptionFailsClosed()
     {
         var stateMachine = new StateMachine();
         var state = new TestState("State");
@@ -314,19 +314,19 @@ public class TestStateMachine
         var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(false));
 
         Assert.That(actual, Is.SameAs(expected));
-        Assert.That(stateMachine.IsActive, Is.True);
-        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
         Assert.That(state.ExitCount, Is.EqualTo(1));
 
         shouldThrow = false;
-        Assert.DoesNotThrow(() => stateMachine.SetActive(false));
-        Assert.That(stateMachine.IsActive, Is.False);
-        Assert.That(stateMachine.CurrentState, Is.Null);
-        Assert.That(state.ExitCount, Is.EqualTo(2));
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(state.EnterCount, Is.EqualTo(2));
     }
 
     [Test]
-    public void TestUncaughtReentrantActivationPreservesActiveState()
+    public void TestUncaughtReentrantActivationFailsClosed()
     {
         var stateMachine = new StateMachine();
         var state = new TestState("State");
@@ -341,15 +341,15 @@ public class TestStateMachine
 
         Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(false));
 
-        Assert.That(stateMachine.IsActive, Is.True);
-        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
         Assert.That(state.ExitCount, Is.EqualTo(1));
 
         shouldReenter = false;
-        Assert.DoesNotThrow(() => stateMachine.SetActive(false));
-        Assert.That(stateMachine.IsActive, Is.False);
-        Assert.That(stateMachine.CurrentState, Is.Null);
-        Assert.That(state.ExitCount, Is.EqualTo(2));
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.IsActive, Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(state));
+        Assert.That(state.EnterCount, Is.EqualTo(2));
     }
 
     [Test]
@@ -378,6 +378,74 @@ public class TestStateMachine
         Assert.That(stateMachine.IsActive, Is.True);
         Assert.That(stateMachine.CurrentState, Is.SameAs(state));
         Assert.That(state.EnterCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void TestRootSetupFailureDoesNotPublishOwnership()
+    {
+        var stateMachine = new StateMachine();
+        var owned = new State().Named("owned");
+        var failed = new State().Named("failed");
+        var expected = new InvalidOperationException("Setup failed.");
+        var shouldThrow = true;
+        failed.CallOnSetup(() =>
+        {
+            if (shouldThrow)
+            {
+                stateMachine.AddTransition(owned, failed, "leaked");
+                throw expected;
+            }
+        });
+        stateMachine.AddState(owned);
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.AddState(failed));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(failed.StateMachine, Is.Null);
+        Assert.Throws<InvalidOperationException>(() => stateMachine.AddTransition(owned, failed, "invalid"));
+        stateMachine.InitialState = owned;
+        stateMachine.SetActive(true);
+        Assert.That(stateMachine.Dispatch("leaked"), Is.False);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(owned));
+
+        shouldThrow = false;
+        Assert.DoesNotThrow(() => stateMachine.AddState(failed));
+        Assert.That(failed.StateMachine, Is.SameAs(stateMachine));
+        Assert.DoesNotThrow(() => stateMachine.AddTransition(owned, failed, "valid"));
+    }
+
+    [Test]
+    public void TestChildSetupFailureDoesNotMutateHierarchy()
+    {
+        var rootMachine = new StateMachine();
+        var parent = new State().Named("parent");
+        var child = new State().Named("child");
+        var expected = new InvalidOperationException("Child setup failed.");
+        var shouldThrow = true;
+        var propagated = false;
+        parent.AddEventHandler("propagate", _ => propagated = true);
+        child.CallOnSetup(() =>
+        {
+            if (shouldThrow) throw expected;
+        });
+
+        var actual = Assert.Throws<InvalidOperationException>(() => parent.AddState(child, true));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(parent.ChildrenStateMachine, Is.Null);
+        Assert.That(child.StateMachine, Is.Null);
+        Assert.That(child.Depth, Is.EqualTo(1));
+        child.Dispatch("propagate");
+        Assert.That(propagated, Is.False);
+
+        shouldThrow = false;
+        Assert.DoesNotThrow(() => parent.AddState(child, true));
+        rootMachine.AddState(parent);
+        rootMachine.InitialState = parent;
+        rootMachine.SetActive(true);
+        child.Dispatch("propagate");
+        Assert.That(child.Depth, Is.EqualTo(2));
+        Assert.That(propagated, Is.True);
     }
 
     [Test]
@@ -794,6 +862,76 @@ public class TestStateMachine
         stateMachine.SetActive(false);
 
         Assert.That(order, Is.EqualTo(new[] { "child-exit", "parent-exit" }));
+    }
+
+    [Test]
+    public void TestHierarchicalDeactivationFailureClosesParentAndChild()
+    {
+        var stateMachine = new StateMachine();
+        var parent = new TestState("parent");
+        var child = new TestState("child");
+        var expected = new InvalidOperationException("Parent exit failed.");
+        var shouldThrow = true;
+        parent.CallOnExit(() =>
+        {
+            if (shouldThrow) throw expected;
+        });
+        parent.AddState(child, true);
+        stateMachine.AddState(parent);
+        stateMachine.InitialState = parent;
+        stateMachine.SetActive(true);
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.SetActive(false));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(parent.ChildrenStateMachine!.IsActive, Is.False);
+        Assert.That(parent.ChildrenStateMachine.CurrentState, Is.Null);
+        Assert.That(parent.ExitCount, Is.EqualTo(1));
+        Assert.That(child.ExitCount, Is.EqualTo(1));
+
+        shouldThrow = false;
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.CurrentState, Is.SameAs(parent));
+        Assert.That(parent.ChildrenStateMachine.IsActive, Is.True);
+        Assert.That(parent.ChildrenStateMachine.CurrentState, Is.SameAs(child));
+    }
+
+    [Test]
+    public void TestTransitionTargetChildEnterFailureClosesHierarchy()
+    {
+        var stateMachine = new StateMachine();
+        var source = new TestState("source");
+        var target = new TestState("target");
+        var child = new TestState("child");
+        var expected = new InvalidOperationException("Child enter failed.");
+        var shouldThrow = true;
+        child.CallOnEnter(() =>
+        {
+            if (shouldThrow) throw expected;
+        });
+        target.AddState(child, true);
+        stateMachine.AddState(source);
+        stateMachine.AddState(target);
+        stateMachine.AddTransition(source, target, "go");
+        stateMachine.InitialState = source;
+        stateMachine.SetActive(true);
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.Dispatch("go"));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(target.ChildrenStateMachine!.IsActive, Is.False);
+        Assert.That(target.ChildrenStateMachine.CurrentState, Is.Null);
+
+        shouldThrow = false;
+        stateMachine.SetActive(true);
+        Assert.That(stateMachine.Dispatch("go"), Is.True);
+        Assert.That(stateMachine.CurrentState, Is.SameAs(target));
+        Assert.That(target.ChildrenStateMachine.IsActive, Is.True);
+        Assert.That(target.ChildrenStateMachine.CurrentState, Is.SameAs(child));
     }
 
     [Test]

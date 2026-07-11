@@ -240,4 +240,34 @@ public class TestMessageChannel
 
         Assert.That(failedHandlerCount, Is.EqualTo(1));
     }
+
+    [Test]
+    public void TestFailedDuplicateBufferedReplayKeepsOriginalSubscription()
+    {
+        var expected = new InvalidOperationException("Duplicate replay failed.");
+        var invocationCount = 0;
+        _bufferedChannel.Publish("buffered");
+        void Handler(string _)
+        {
+            invocationCount++;
+            if (invocationCount == 2) throw expected;
+        }
+
+        _bufferedChannel.Subscribe(Handler);
+        var actual = Assert.Throws<InvalidOperationException>(() => _bufferedChannel.Subscribe(Handler));
+        Assert.That(actual, Is.SameAs(expected));
+
+        Assert.DoesNotThrow(() => _bufferedChannel.Publish("later"));
+        Assert.That(invocationCount, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void TestSubscribeRejectsNullHandler()
+    {
+        var baseException = Assert.Throws<ArgumentNullException>(() => _channel.Subscribe(null!));
+        var bufferedException = Assert.Throws<ArgumentNullException>(() => _bufferedChannel.Subscribe(null!));
+
+        Assert.That(baseException!.ParamName, Is.EqualTo("handler"));
+        Assert.That(bufferedException!.ParamName, Is.EqualTo("handler"));
+    }
 } 

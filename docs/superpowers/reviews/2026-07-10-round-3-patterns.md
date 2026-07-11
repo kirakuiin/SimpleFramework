@@ -40,6 +40,10 @@
 - **Independent review — Documentation, fixed:** transition ownership exceptions were attached to `AddEventHandler`, including a nonexistent `toState` parameter reference.
 - **Final review — Important, fixed:** `SetActive` changed lifecycle fields before callbacks succeeded, so uncaught exit/enter exceptions left inconsistent active/current-state pairs.
 - **Final review — Important, fixed:** a buffered replay exception leaked the new subscription into pending delivery.
+- **Failure-state review — Important, fixed:** restoring only root lifecycle fields after callback failure could not undo child exit/entry side effects; all lifecycle callback failures now close the affected machine to inactive/null.
+- **Failure-state review — Important, fixed:** setup exceptions leaked temporary state ownership, list entries, initial-state selection, or transitions created while setup context was visible.
+- **Failure-state review — Important, fixed:** a duplicate buffered subscription received an owning token, so replay rollback could cancel the earlier successful registration.
+- **Failure-state review — Normal, fixed:** null handlers relied on a dictionary exception naming `key` instead of the public `handler` boundary.
 
 ## Changes
 
@@ -57,6 +61,10 @@
 - Added 5 final-wave tests, increasing the Patterns fixture count from 101 to 106.
 - Made `SetActive` transactional across callback exceptions: deactivation commits fields after exit succeeds, activation restores prior fields when entry fails, and the original exception propagates.
 - Roll back buffered subscriptions when immediate replay fails, including subscriptions created during an active publication frame.
+- Added 6 failure-state tests, increasing the Patterns fixture count from 106 to 112.
+- Replaced compensating lifecycle rollback with coherent fail-closed inactive/null semantics for activation, deactivation, transition exit, target entry, and nested child failure; explicit later activation provides recovery.
+- Roll back failed setup ownership, state-list membership, initial selection, and transitions referencing the failed state while preserving setup-time owner access.
+- Return no-op tokens for duplicate effective subscriptions and owning tokens only when a call creates or restores registration; reject null handlers as `handler`.
 
 ## Verification
 
@@ -82,9 +90,18 @@
 - Final-wave Release solution build: succeeded with 0 warnings and 0 errors.
 - Final-wave source-quality fixture: 1 passed, 0 failed, 0 skipped.
 - Final-wave `git diff --check`: exit 0; only Git line-ending conversion notices were emitted.
+- Failure-state RED: exact filter failed 8/8; the setup transition-leak strengthening then failed independently before rollback cleanup was completed.
+- Failure-state affected GREEN: 8 passed, plus 2 setup rollback tests passed after transition cleanup.
+- Failure-state Patterns: 112 passed, 0 failed, 0 skipped.
+- Failure-state full `Test/Test.csproj`: 707 passed, 0 failed, 0 skipped.
+- Failure-state Release solution build: succeeded with 0 warnings and 0 errors.
+- Failure-state source-quality fixture: 1 passed, 0 failed, 0 skipped.
+- Failure-state `git diff --check`: exit 0; only Git line-ending conversion notices were emitted.
 
 ## Independent Review
 
 Independent review of commit `4c9033a9499fb83160fb515dceaee88d68404396` reported four findings. All were resolved: lifecycle reentrancy and pre-mutation child validation received failing regression tests and production fixes; pool rollback received isolated fail/pass regression proof; XML ownership contracts were moved to the correct method. No further reviewer was dispatched, as explicitly required.
 
 The final follow-up from base `9ee91aa422b9367a18914ed34a725000d645a66c` identified exception atomicity and buffered replay rollback. Both received failing regression tests and fixes; exception identity, final lifecycle fields, guard reset, and pending-subscription cleanup were self-reviewed. No further reviewer was dispatched.
+
+The failure-state follow-up from base `9aae063465f7dd1cb0f285fd2cc1ade8f4819968` corrected the lifecycle policy to fail closed because child callback side effects cannot be safely compensated. It also closed setup ownership/transition leaks and duplicate-subscription token ownership. All findings have failing regression evidence and passing recovery paths; no further reviewer was dispatched.

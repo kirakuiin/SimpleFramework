@@ -68,6 +68,15 @@ public interface IBufferedMessageChannel<T> : IMessageChannel<T>
 /// <typeparam name="T">消息类型。</typeparam>
 public class MessageChannel<T> : IMessageChannel<T>
 {
+    private sealed class EmptySubscription : IDisposable
+    {
+        public static EmptySubscription Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
+    }
+
     private readonly List<Action<T>> _messageHandlers = new();
 
     private readonly Dictionary<Action<T>, bool> _pendingHandlers = new();
@@ -163,10 +172,19 @@ public class MessageChannel<T> : IMessageChannel<T>
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>订阅消息处理器；同一处理器重复订阅不会创建新的注册。</summary>
+    /// <param name="handler">消息处理器。</param>
+    /// <returns>新注册的取消句柄；处理器已订阅时返回无操作句柄。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
     public virtual IDisposable Subscribe(Action<T> handler)
     {
         ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(handler);
+        if (IsSubscribed(handler))
+        {
+            return EmptySubscription.Instance;
+        }
+
         if (!_pendingHandlers.TryAdd(handler, true))
         {
             var shouldBeRemove = !_pendingHandlers[handler];

@@ -515,6 +515,27 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [ ] Add `TestBufferedReplayFailureDoesNotLeakSubscription`, buffering one value, subscribing a handler that throws the same exception during replay, then publishing again and asserting the failed handler is not invoked. Also add `TestBufferedReplayFailureDuringPublishDoesNotLeakPendingSubscription` to exercise the same rollback while the channel is dispatching. Run the first test with `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestBufferedReplayFailureDoesNotLeakSubscription"`; expect failure because `base.Subscribe` leaves the handler pending when replay throws. After the repair, run both tests and expect no leaked ordinary or in-dispatch pending registration.
 - [ ] Catch replay failure, dispose the subscription token to cancel pending or active registration, and rethrow without wrapping so exception identity is preserved. Rerun the focused command; expect one replay invocation, no later delivery, and the original exception instance.
 
+#### Task 3 Failure-State Repair Q: Fail closed after state lifecycle callback errors
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Update the prior deactivation exception tests to require inactive/null fail-closed fields, and add `TestHierarchicalDeactivationFailureClosesParentAndChild` plus `TestTransitionTargetChildEnterFailureClosesHierarchy`. Assert original exception identity, coherent parent/child active/current pairs, guard reset, and explicit reactivation after callbacks stop throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitExceptionFailsClosed|FullyQualifiedName~Test.Patterns.TestStateMachine.TestUncaughtReentrantActivationFailsClosed|FullyQualifiedName~Test.Patterns.TestStateMachine.TestHierarchicalDeactivationFailureClosesParentAndChild|FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionTargetChildEnterFailureClosesHierarchy"`; expect failures because deactivation currently restores active/current fields and transition entry failure leaves the target installed.
+- [ ] Make `SetActive` and `ChangeToState` set inactive/null on any entry or exit callback failure, reset the guard in `finally`, and rethrow the original exception. Retain activation failure's existing inactive/null behavior and document fail-closed semantics in Chinese. Rerun the focused command; expect every failed hierarchy to be inactive/null and recover only through an explicit later activation.
+
+#### Task 3 Failure-State Repair R: Roll back state ownership when setup fails
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestRootSetupFailureDoesNotPublishOwnership` and `TestChildSetupFailureDoesNotMutateHierarchy`, using the same exception instance and retry flags. Assert failed states have no owner, cannot be transition targets, retain depth/event propagation, do not create a child hierarchy, and can be added successfully after setup stops throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestRootSetupFailureDoesNotPublishOwnership|FullyQualifiedName~Test.Patterns.TestStateMachine.TestChildSetupFailureDoesNotMutateHierarchy"`; expect failures because root setup leaves list/owner state published and child setup leaks its child-machine owner.
+- [ ] Preserve setup-time access to `StateMachine`, but remove the state from the machine and clear its owner when setup throws; publish parent/hierarchy references only after child setup succeeds. Rethrow without wrapping and rerun the focused command; expect clean retryable state after both failures.
+
+#### Task 3 Failure-State Repair S: Give each message subscription token real ownership
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestFailedDuplicateBufferedReplayKeepsOriginalSubscription`, where the first buffered subscription of handler `h` succeeds and a duplicate replay throws before the publish boundary; assert rollback of the failed attempt does not remove the first registration. Add `TestSubscribeRejectsNullHandler` for base and buffered channels, asserting `ArgumentNullException` names `handler`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestFailedDuplicateBufferedReplayKeepsOriginalSubscription|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscribeRejectsNullHandler"`; expect duplicate rollback to remove the earlier pending registration and null handling to lack the explicit public guard.
+- [ ] Reject null at the base boundary; when a handler is already effectively subscribed, leave mutation state unchanged and return a no-op token. Return an owning token only when that call creates or restores a registration, so buffered replay rollback removes only its own registration. Document the boundary and rerun the focused command; expect original duplicate registration and pending semantics to survive.
+
 ### Task 4: ECS
 
 **Files:**
