@@ -9,7 +9,7 @@
 
 ## Required Inventories and Exhaustive Decisions
 
-The two exact Step 1 commands were run from the repository root. The public-declaration inventory returned 1,061 textual matches. Every match was reviewed in its containing type, including public members nested in non-public implementation types; the following grouping is a disposition ledger by module (not 1,061 separate prose entries):
+The two exact Step 1 commands were run from the repository root. The public-declaration inventory returned 1,061 textual matches. Every match was reviewed in its containing type, including public members nested in non-public implementation types. The complete path:line/declaration/disposition/reason-code evidence is in [the public inventory](./2026-07-10-round-6-public-inventory.md); the following table is its module summary:
 
 | Group | Matches | Decision |
 | --- | ---: | --- |
@@ -39,7 +39,7 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 - Important API consistency: `NetDiscovery` already linked backend scans to caller/disposal cancellation internally, but both public one-shot `ScanAsync<TMetadata>` overloads forced `CancellationToken.None`. The ordinary overload is now `(TimeSpan duration, CancellationToken token = default)` and the explicit-schema overload is `(uint metadataSchemaId, TimeSpan duration, CancellationToken token = default)`. Distinct first parameter types remove overload ambiguity while keeping cancellation optional and last; both forward to the existing linked path. The internal implementation was named `ScanCoreAsync` and the trivial public forwarding methods no longer create unnecessary async state machines.
 - Documentation: root README described removed Net types (`ITransport`, `ProtocolHandler`, `ConnectionModel`, and related APIs), attributed tag ownership to ECS entities, and documented a nonexistent Godot multiplayer transport. It now describes the current `GameNet`, ECS handle/World model, command buffer, and actual GDExt surface; the nullable Core example now uses `RequireModel`.
 - Documentation: `Patterns/README.md` was an implementation prompt rather than module documentation. It now documents all six current patterns and gives API-valid subscription and parent-blackboard examples. `docs/domain-lifecycle.md` now names the actual `InvalidOperationException` from `Require*`.
-- Public XML: completed the GDExt extension/channel/pool-clear contracts, discovery backend methods, discovery advertisement sentinel, metadata attribute constructor, versioned discovery packet, scan cancellation/return/exception contracts, and Net message-context positional parameters.
+- Public XML: completed the GDExt extension/channel/pool-clear contracts, discovery backend methods, discovery advertisement sentinel, metadata attribute constructor, versioned discovery packet, scan cancellation/return/exception contracts, and Net message-context positional parameters. Both public scan overloads now name every actual `InvalidOperationException` family: missing schema declaration, declared/requested schema mismatch, metadata-type mapping conflict, and schema-ID mapping conflict.
 - Equivalent syntax: `IniConfigTool` uses target-typed `new()` and ranges for section/key/value slicing; `FileUtil` uses correctly spaced target-typed construction. Broader collection-expression, primary-constructor, switch-expression, or expression-body churn was rejected where it would not be shorter and clearer.
 - Project files: target framework, nullable/implicit-using policy, references, conditional Godot dependencies, and test packaging were internally consistent; no project or dependency edit was justified.
 - Empty `Collections`, `Maths`, and `Utility` module README files make no stale API claims. ECS README/USAGE and Net README examples were checked against current signatures and remain valid.
@@ -49,7 +49,7 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 
 - Public total: run the exact public command and inspect `$LASTEXITCODE`; assigning its output to `$matches`, `$matches.Count` is 1,061. Normalize each matched path with `-replace '\\','/'`, map root files to Core and first-directory paths to their module (with `FrameworkImpl` separate), then `Group-Object`; this reproduces the table totals, whose sum is 1,061.
 - Risk total: assign the exact risk command output to `$matches`; `$matches.Count` is 118. Filtering paths with `Test/` yields 84 across 25 files; the complement yields 34. Grouping the production complement reproduces Core 7, ECS 6, Net 14, Patterns 4, Toolkit 1, Utility 2. The category bullets above dispose every match in each resulting group; zero TODO/FIXME/NotImplementedException and the single test pragma are direct subsets of the same output.
-- Scope manifests: `(git ls-files '*.cs' | Where-Object { $_ -notlike 'Test/*' }).Count` is 75; `(git ls-files 'Test/*.cs').Count` is 40; `(git ls-files '*.csproj').Count` is 10. Documentation scope is exactly `README.md`, `Collections/README.md`, `ECS/README.md`, `ECS/USAGE.md`, `Maths/README.md`, `Net/README.md`, `Patterns/README.md`, `Utility/README.md`, and `docs/domain-lifecycle.md`.
+- Scope manifests: `(git ls-files '*.cs' | Where-Object { $_ -notlike 'Test/*' }).Count` is 75; `(git ls-files 'Test/*.cs').Count` is 40; `(git ls-files '*.csproj').Count` is 10. Documentation scope is exactly `README.md`, `Collections/README.md`, `ECS/README.md`, `ECS/USAGE.md`, `Maths/README.md`, `Net/README.md`, `Patterns/README.md`, `Utility/README.md`, and `docs/domain-lifecycle.md`. The public appendix reconciles all 1,061 source locations with zero set difference.
 - LOC: for each tracked C# path, sum `(Get-Content $path).Count`, selecting or excluding `Test/` as stated in Scope and Baseline. For the baseline, enumerate the same paths from `git ls-tree -r --name-only cc226dc80717429ca359efdd58e7d9ddc4a812cf` and count `git show "cc226dc80717429ca359efdd58e7d9ddc4a812cf:$path"`; this reproduces 17,291 production and 17,624 test lines.
 
 ## TDD Evidence
@@ -68,7 +68,7 @@ Repair B was appended after takeover identified the intermediate overload shape 
 
 ## Test Simplification Review
 
-All 40 tracked test files were reviewed by fixture, setup, operation, and externally asserted contract. No test was deleted: no pair had identical setup/operation/observable contract while also lacking boundary, error, ordering, concurrency, or regression value.
+All 40 tracked test files were reviewed by fixture, setup, operation, and externally asserted contract. The complete per-file contract families, candidate comparisons and decisions are in [the test inventory](./2026-07-10-round-6-test-inventory.md); its tracked-path reconciliation has zero set difference. No test was deleted: no pair had identical setup/operation/observable contract while also lacking boundary, error, ordering, concurrency, or regression value.
 
 - Framework registration tests that look symmetric protect distinct System/Model/Utility lifecycle ownership and release ordering.
 - ECS `Update`/delta-time, real/buffered entity, and stale/foreign handle pairs protect different overload and identity contracts.
@@ -95,6 +95,9 @@ The same physical-line command was used for baseline and final comparison; test 
 - Final tests: 40 files and 17,649 physical lines, +25 lines; 752 tests, +1 API regression. No test was deleted.
 - `dotnet test .\SimpleFramework.sln --no-restore --configuration Debug`: 752 passed, 0 failed, 0 skipped.
 - `dotnet build .\SimpleFramework.sln --no-restore --configuration Release`: succeeded, 0 warnings, 0 errors, including GDExt.
+- `dotnet msbuild .\GDExt\GDExt.csproj -getProperty:DefineConstants -p:Configuration=Release`: evaluated `GODOT;RELEASE;NET;NET8_0;NETCOREAPP`. Contrary to the review concern, `GDExt.csproj` defines `GODOT` unconditionally, so the normal Release GDExt compilation includes the guarded branch.
+- `dotnet build .\GDExt\GDExt.csproj --no-restore --configuration Release`: succeeded with 0 warnings and 0 errors, providing focused compilation evidence for the `#if GODOT` edits without adding a dependency.
+- Appendix reconciliation commands: public source/ledger 1,061/1,061, 1,061 unique locations, zero set difference and zero per-file ordering errors; test tracked/ledger 40/40, 40 unique paths and zero set difference.
 - `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSourceTextQuality"`: 1 passed, 0 failed.
 - `git diff --check`: exit 0; only line-ending conversion notices were emitted.
 

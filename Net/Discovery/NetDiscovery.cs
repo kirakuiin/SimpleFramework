@@ -932,7 +932,7 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// <param name="duration">后端扫描窗口；非正值返回空结果。</param>
     /// <param name="token">取消标记。</param>
     /// <returns>与当前应用和元数据 schema 匹配的房间快照。</returns>
-    /// <exception cref="InvalidOperationException"><typeparamref name="TMetadata"/> 未声明发现元数据 schema。</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="TMetadata"/> 未声明发现元数据 schema、已登记为其他 schema ID，或其声明的 schema ID 已登记给其他元数据类型。</exception>
     /// <exception cref="ObjectDisposedException">发现组件已释放。</exception>
     /// <exception cref="OperationCanceledException">调用方取消或发现组件开始释放。</exception>
     public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(
@@ -948,7 +948,7 @@ public sealed class NetDiscovery : IAsyncDisposable
     /// <param name="duration">后端扫描窗口；非正值返回空结果。</param>
     /// <param name="token">取消标记。</param>
     /// <returns>与当前应用和指定 schema 匹配的房间快照。</returns>
-    /// <exception cref="InvalidOperationException">元数据类型已绑定到不同 schema。</exception>
+    /// <exception cref="InvalidOperationException">指定 schema ID 与类型声明不一致、元数据类型已登记为其他 schema ID，或指定 ID 已登记给其他元数据类型。</exception>
     /// <exception cref="ObjectDisposedException">发现组件已释放。</exception>
     /// <exception cref="OperationCanceledException">调用方取消或发现组件开始释放。</exception>
     public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(

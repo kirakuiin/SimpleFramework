@@ -874,6 +874,12 @@ Expected: the complete suite and source-quality test pass, Release has zero warn
 - RED: `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~DiscoveryScan_PublicApiIsUnambiguousAndForwardsCancellation"` must fail to compile because the schema-first calls do not match the duration-first schema overload.
 - GREEN: rerun the exact filter, then the complete Net discovery/stats fixture.
 
+#### Repair C: close independent-review evidence gaps
+
+- Files: `Net/Discovery/NetDiscovery.cs`, `docs/superpowers/reviews/2026-07-10-round-6-cross-cutting.md`, `docs/superpowers/reviews/2026-07-10-round-6-public-inventory.md`, `docs/superpowers/reviews/2026-07-10-round-6-test-inventory.md`.
+- Complete the two scan overloads' `InvalidOperationException` XML from the actual metadata registration failure branches. Add a 1,061-entry public declaration ledger and a 40-file test simplification ledger, each with a read-only path/count reconciliation command.
+- Verify the review concern about `#if GODOT` against evaluated Release properties and a focused GDExt build. Record the observed evidence rather than assuming whether the conditional branch compiled.
+
 ### Task 7: Independent Final Audit and Release Verification
 
 **Files:**
