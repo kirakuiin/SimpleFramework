@@ -187,6 +187,7 @@ public abstract class AbstractObjectPool<T> : IObjectPool<T>
 /// <param name="onReturn">将对象归还到池子触发的函数</param>
 /// <param name="onDestroy">销毁对象触发的函数</param>
 /// <typeparam name="T">池中对象的引用类型。</typeparam>
+/// <exception cref="ArgumentNullException"><paramref name="createFunc"/> 为 <see langword="null"/>。</exception>
 public sealed class ObjectPool<T>(
     Func<T> createFunc,
     Action<T>? onGet = null,
@@ -195,7 +196,7 @@ public sealed class ObjectPool<T>(
     : AbstractObjectPool<T>
     where T : class
 {
-    private readonly Func<T> _createFunc = createFunc ?? throw new ArgumentException(null, nameof(createFunc));
+    private readonly Func<T> _createFunc = createFunc ?? throw new ArgumentNullException(nameof(createFunc));
 
     protected override T CreateInstance()
     {

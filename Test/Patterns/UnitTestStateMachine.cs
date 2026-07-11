@@ -449,6 +449,70 @@ public class TestStateMachine
     }
 
     [Test]
+    public void TestSetupCannotActivateOrDispatchAndFailureIsRetryable()
+    {
+        var stateMachine = new StateMachine();
+        var state = new State().Named("setup state");
+        var child = new State().Named("setup child");
+        var expected = new InvalidOperationException("Setup failed after lifecycle attempts.");
+        var shouldFail = true;
+        var setupCount = 0;
+        var lifecycleErrors = new List<Exception?>();
+
+        state.CallOnSetup(() =>
+        {
+            setupCount++;
+            Assert.That(state.StateMachine, Is.SameAs(stateMachine));
+            stateMachine.InitialState = state;
+            stateMachine.AddTransition(state, state, "configured");
+            stateMachine.AddEventHandler("handled", _ => true);
+            state.AddState(child, true);
+
+            lifecycleErrors.Add(CaptureException(() => stateMachine.SetActive(true)));
+            lifecycleErrors.Add(CaptureException(() => stateMachine.Dispatch("configured")));
+
+            if (shouldFail) throw expected;
+        });
+
+        var actual = Assert.Throws<InvalidOperationException>(() => stateMachine.AddState(state));
+
+        Assert.That(actual, Is.SameAs(expected));
+        Assert.That(lifecycleErrors, Has.All.TypeOf<InvalidOperationException>());
+        Assert.That(stateMachine.IsActive, Is.False);
+        Assert.That(stateMachine.CurrentState, Is.Null);
+        Assert.That(stateMachine.InitialState, Is.Null);
+        Assert.That(state.StateMachine, Is.Null);
+        Assert.That(state.ChildrenStateMachine, Is.Null);
+        Assert.That(child.StateMachine, Is.Null);
+        Assert.That(child.Depth, Is.EqualTo(1));
+        Assert.Throws<InvalidOperationException>(() => stateMachine.AddTransition(state, state, "not owned"));
+        Assert.That(stateMachine.Dispatch("configured"), Is.False);
+
+        shouldFail = false;
+        Assert.DoesNotThrow(() => stateMachine.AddState(state));
+        Assert.That(setupCount, Is.EqualTo(2));
+        Assert.That(lifecycleErrors, Has.Count.EqualTo(4).And.All.TypeOf<InvalidOperationException>());
+        Assert.That(state.ChildrenStateMachine, Is.Not.Null);
+        Assert.That(child.StateMachine, Is.SameAs(state.ChildrenStateMachine));
+        Assert.DoesNotThrow(() => stateMachine.SetActive(true));
+        Assert.That(stateMachine.Dispatch("configured"), Is.True);
+        Assert.That(stateMachine.Dispatch("handled"), Is.True);
+    }
+
+    private static Exception? CaptureException(TestDelegate action)
+    {
+        try
+        {
+            action();
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+    }
+
+    [Test]
     public void TestAnyStateTransition()
     {
         var stateMachine = new StateMachine();

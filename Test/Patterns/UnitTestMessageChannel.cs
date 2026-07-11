@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using NUnit.Framework;
 using SimpleFramework.Patterns;
 
@@ -269,5 +270,75 @@ public class TestMessageChannel
 
         Assert.That(baseException!.ParamName, Is.EqualTo("handler"));
         Assert.That(bufferedException!.ParamName, Is.EqualTo("handler"));
+    }
+
+    [Test]
+    public void TestStaleSubscriptionTokenDoesNotCancelNewRegistration()
+    {
+        var invocationCount = 0;
+        void Handler(string _) => invocationCount++;
+
+        var firstSubscription = _channel.Subscribe(Handler);
+        _channel.Unsubscribe(Handler);
+        var secondSubscription = _channel.Subscribe(Handler);
+
+        firstSubscription.Dispose();
+        _channel.Publish("new registration");
+        secondSubscription.Dispose();
+        _channel.Publish("removed registration");
+
+        Assert.That(invocationCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TestCollectedSubscriptionTokenDoesNotUnsubscribeHandler()
+    {
+        var invocationCount = 0;
+        Action<string> handler = _ => invocationCount++;
+        var tokenReference = SubscribeWithoutKeepingToken(_channel, handler);
+
+        CollectSubscriptionToken(tokenReference);
+        _channel.Publish("still subscribed");
+
+        Assert.That(tokenReference.IsAlive, Is.False);
+        Assert.That(invocationCount, Is.EqualTo(1));
+        GC.KeepAlive(handler);
+    }
+
+    [Test]
+    public void TestSubscriptionImplementationIsNotPublicApi()
+    {
+        var exportedTypes = typeof(MessageChannel<>).Assembly.GetExportedTypes();
+
+        Assert.That(Array.Exists(exportedTypes,
+            type => type.Name.StartsWith("DisposableSubscription", StringComparison.Ordinal)), Is.False);
+    }
+
+    [Test]
+    public void TestUnsubscribeRejectsNullHandler()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(() => _channel.Unsubscribe(null!));
+
+        Assert.That(exception!.ParamName, Is.EqualTo("handler"));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference SubscribeWithoutKeepingToken(
+        MessageChannel<string> channel,
+        Action<string> handler)
+    {
+        var subscription = channel.Subscribe(handler);
+        return new WeakReference(subscription);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void CollectSubscriptionToken(WeakReference tokenReference)
+    {
+        for (var attempt = 0; attempt < 10 && tokenReference.IsAlive; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
     }
 } 

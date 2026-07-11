@@ -105,3 +105,25 @@ Independent review of commit `4c9033a9499fb83160fb515dceaee88d68404396` reported
 The final follow-up from base `9ee91aa422b9367a18914ed34a725000d645a66c` identified exception atomicity and buffered replay rollback. Both received failing regression tests and fixes; exception identity, final lifecycle fields, guard reset, and pending-subscription cleanup were self-reviewed. No further reviewer was dispatched.
 
 The failure-state follow-up from base `9aae063465f7dd1cb0f285fd2cc1ade8f4819968` corrected the lifecycle policy to fail closed because child callback side effects cannot be safely compensated. It also closed setup ownership/transition leaks and duplicate-subscription token ownership. All findings have failing regression evidence and passing recovery paths; no further reviewer was dispatched.
+
+## Ownership Closure Follow-up
+
+### Findings and Repairs
+
+- Subscription tokens previously identified only a handler. After an explicit unsubscribe and resubscribe of the same delegate, disposal of the stale token cancelled the newer registration. Active and pending registrations now carry monotonically increasing identifiers, and token disposal matches both handler and identifier.
+- Subscription finalization previously changed channel state, so merely dropping the returned token silently unsubscribed the handler. Tokens now have explicit-only lifetime, and their concrete implementation is private so callers cannot manufacture cancellation authority.
+- Setup could activate or dispatch through its temporarily published owner and could retain a child hierarchy after failure. A setup-depth guard now rejects both lifecycle operations before mutation, while transactional snapshots preserve successful transition/handler configuration and restore owner, list, initial state, transitions, handlers, and hierarchy after failure.
+- `Unsubscribe(null)` exposed the dictionary parameter name `key`, and a null object-pool factory threw `ArgumentException`. Both public boundaries now throw `ArgumentNullException` with their documented parameter names.
+
+### TDD Evidence
+
+- Exact closure RED: 6 failed, 0 passed. Stale-token and collected-token publication both observed zero calls instead of one; the concrete token was exported; null unsubscribe reported `key`; the pool threw `ArgumentException`; and setup activation/dispatch both succeeded and performed transitions.
+- Exact closure GREEN: 6 passed, 0 failed, 0 skipped.
+- Full Patterns: 118 passed, 0 failed, 0 skipped, including pending mutation, nested publication, buffered replay rollback, hierarchical lifecycle failure, and setup retry coverage.
+
+### Verification
+
+- Full `Test/Test.csproj`: 713 passed, 0 failed, 0 skipped.
+- Release solution build: 0 warnings, 0 errors.
+- Source-quality fixture: 1 passed, 0 failed, 0 skipped.
+- No additional reviewer was dispatched, as explicitly required for this closure.

@@ -30,6 +30,7 @@ public interface ISubscriber<out T> : IGameService
     /// 取消订阅
     /// </summary>
     /// <param name="handler">处理函数</param>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
     public void Unsubscribe(Action<T> handler);
 }
 
@@ -68,6 +69,22 @@ public interface IBufferedMessageChannel<T> : IMessageChannel<T>
 /// <typeparam name="T">消息类型。</typeparam>
 public class MessageChannel<T> : IMessageChannel<T>
 {
+    private sealed record Registration(Action<T> Handler, long Id);
+
+    private sealed class DisposableSubscription(
+        MessageChannel<T> channel,
+        Action<T> handler,
+        long registrationId) : IDisposable
+    {
+        private MessageChannel<T>? _channel = channel;
+
+        public void Dispose()
+        {
+            var owner = Interlocked.Exchange(ref _channel, null);
+            owner?.Unsubscribe(handler, registrationId);
+        }
+    }
+
     private sealed class EmptySubscription : IDisposable
     {
         public static EmptySubscription Instance { get; } = new();
@@ -77,10 +94,11 @@ public class MessageChannel<T> : IMessageChannel<T>
         }
     }
 
-    private readonly List<Action<T>> _messageHandlers = new();
+    private readonly List<Registration> _messageHandlers = new();
 
-    private readonly Dictionary<Action<T>, bool> _pendingHandlers = new();
+    private readonly Dictionary<Action<T>, Registration?> _pendingHandlers = new();
     private int _publishDepth;
+    private long _nextRegistrationId;
     
     /// <inheritdoc />
     public bool IsDisposed { get; private set; }
@@ -145,16 +163,12 @@ public class MessageChannel<T> : IMessageChannel<T>
 
     private void ClearPendingHandlers()
     {
-        foreach (var handler in _pendingHandlers.Keys)
+        foreach (var (handler, registration) in _pendingHandlers)
         {
-            var shouldBeAdded = _pendingHandlers[handler];
-            if (shouldBeAdded)
+            _messageHandlers.RemoveAll(item => item.Handler == handler);
+            if (registration is not null)
             {
-                _messageHandlers.Add(handler);
-            }
-            else
-            {
-                _messageHandlers.Remove(handler);
+                _messageHandlers.Add(registration);
             }
         }
         _pendingHandlers.Clear();
@@ -162,115 +176,69 @@ public class MessageChannel<T> : IMessageChannel<T>
 
     private void PublishMessage(T message)
     {
-        foreach (var handler in _messageHandlers)
+        foreach (var registration in _messageHandlers)
         {
             if (IsDisposed) break;
-            if (IsSubscribed(handler))
+            if (IsSubscribed(registration))
             {
-                handler(message);
+                registration.Handler(message);
             }
         }
     }
 
     /// <summary>订阅消息处理器；同一处理器重复订阅不会创建新的注册。</summary>
     /// <param name="handler">消息处理器。</param>
-    /// <returns>新注册的取消句柄；处理器已订阅时返回无操作句柄。</returns>
+    /// <returns>新注册的显式取消句柄；处理器已订阅时返回无操作句柄。</returns>
     /// <exception cref="ArgumentNullException"><paramref name="handler"/> 为 <see langword="null"/>。</exception>
+    /// <remarks>只有显式释放返回的句柄才会取消本次注册；句柄被垃圾回收不会改变订阅。</remarks>
     public virtual IDisposable Subscribe(Action<T> handler)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(handler);
-        if (IsSubscribed(handler))
+        if (GetEffectiveRegistration(handler) is not null)
         {
             return EmptySubscription.Instance;
         }
 
-        if (!_pendingHandlers.TryAdd(handler, true))
+        var registration = new Registration(handler, checked(++_nextRegistrationId));
+        _pendingHandlers[handler] = registration;
+
+        return new DisposableSubscription(this, handler, registration.Id);
+    }
+
+    private Registration? GetEffectiveRegistration(Action<T> handler)
+    {
+        if (_pendingHandlers.TryGetValue(handler, out var pendingRegistration))
         {
-            var shouldBeRemove = !_pendingHandlers[handler];
-            if (shouldBeRemove)
-            {
-                _pendingHandlers.Remove(handler);
-            }
+            return pendingRegistration;
         }
 
-        return new DisposableSubscription<T>(this, handler);
+        return _messageHandlers.Find(registration => registration.Handler == handler);
     }
 
-    private bool IsSubscribed(Action<T> handler)
-    {
-        var isPendingRemoval = _pendingHandlers.ContainsKey(handler) && !_pendingHandlers[handler];
-        var isPendingAdding = _pendingHandlers.ContainsKey(handler) && _pendingHandlers[handler];
-        return (_messageHandlers.Contains(handler) && !isPendingRemoval) || isPendingAdding;
-    }
+    private bool IsSubscribed(Registration registration) =>
+        GetEffectiveRegistration(registration.Handler)?.Id == registration.Id;
 
     /// <inheritdoc />
     public void Unsubscribe(Action<T> handler)
     {
         ThrowIfDisposed();
-        if (!IsSubscribed(handler)) return;
+        ArgumentNullException.ThrowIfNull(handler);
+        if (GetEffectiveRegistration(handler) is null) return;
 
-        if (!_pendingHandlers.TryAdd(handler, false))
-        {
-            var shouldBeAdded = _pendingHandlers[handler];
-            if (shouldBeAdded)
-            {
-                _pendingHandlers.Remove(handler);
-            }
-        }
+        _pendingHandlers[handler] = null;
+    }
+
+    private void Unsubscribe(Action<T> handler, long registrationId)
+    {
+        if (IsDisposed || GetEffectiveRegistration(handler)?.Id != registrationId) return;
+
+        _pendingHandlers[handler] = null;
     }
 
     protected void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-    }
-}
-
-/// <summary>
-/// 处理激活的信道订阅和取消订阅相关问题
-/// </summary>
-/// <typeparam name="T">消息类型。</typeparam>
-public sealed class DisposableSubscription<T> : IDisposable
-{
-    private Action<T>? _handler;
-    private IMessageChannel<T>? _channel;
-    private bool _isDisposed;
-
-    /// <summary>创建一个绑定到指定订阅的取消句柄。</summary>
-    /// <param name="messageChannel">订阅所属的通道。</param>
-    /// <param name="handler">要在释放时取消的处理器。</param>
-    public DisposableSubscription(IMessageChannel<T> messageChannel, Action<T> handler)
-    {
-        _channel = messageChannel;
-        _handler = handler;
-    }
-
-    ~DisposableSubscription()
-    {
-        Dispose(false);
-    }
-
-    /// <summary>取消绑定的订阅；重复调用不执行操作。</summary>
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    private void Dispose(bool isDisposing)
-    {
-        if (_isDisposed) return;
-        
-        _isDisposed = true;
-        if (_channel is { IsDisposed: false })
-        {
-            if (_handler != null)
-            {
-                _channel.Unsubscribe(_handler);
-            }
-        }
-        _handler = null;
-        _channel = null;
     }
 }
 

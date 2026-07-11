@@ -211,6 +211,14 @@ public class TestObjectPool
     }
 
     [Test]
+    public void TestCreateFuncCannotBeNull()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(() => new ObjectPool<TestObject>(null!));
+
+        Assert.That(exception!.ParamName, Is.EqualTo("createFunc"));
+    }
+
+    [Test]
     public void TestDuplicateReturnIsRejectedWithoutDuplicatingObject()
     {
         using var pool = new ObjectPool<TestObject>(() => new TestObject());

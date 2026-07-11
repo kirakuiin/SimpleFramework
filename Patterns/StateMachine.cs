@@ -254,6 +254,27 @@ public class State
     {
         StateMachine = stateMachine;
     }
+
+    internal void ClearParentState()
+    {
+        _parentStateRef = null;
+    }
+
+    internal void RestoreSetupHierarchy(
+        StateMachine? originalChildrenStateMachine,
+        StateMachine.SetupSnapshot? originalChildrenSnapshot)
+    {
+        if (!ReferenceEquals(ChildrenStateMachine, originalChildrenStateMachine))
+        {
+            ChildrenStateMachine?.DetachAllStates();
+            ChildrenStateMachine = originalChildrenStateMachine;
+        }
+
+        if (originalChildrenStateMachine is not null && originalChildrenSnapshot is not null)
+        {
+            originalChildrenStateMachine.RestoreSetupSnapshot(originalChildrenSnapshot);
+        }
+    }
 }
 
 /// <summary>
@@ -271,6 +292,12 @@ public class Transition(State? fromState, State toState, string eventName)
 /// </summary>
 public class StateMachine
 {
+    internal sealed record SetupSnapshot(
+        State[] States,
+        Transition[] Transitions,
+        KeyValuePair<string, StateEventHandler>[] EventHandlers,
+        State? InitialState);
+
     private readonly List<State> _states = new();
     private readonly List<Transition> _transitions = new();
     private readonly Dictionary<string, StateEventHandler> _eventHandlers = new();
@@ -278,6 +305,7 @@ public class StateMachine
     private State? _initialState;
     private bool _isActive;
     private bool _isChangingState;
+    private int _setupDepth;
 
     /// <summary>
     /// 当前活动状态
@@ -329,23 +357,25 @@ public class StateMachine
             throw new InvalidOperationException("状态已经属于另一个状态机。");
         }
 
+        var machineSnapshot = CaptureSetupSnapshot();
+        var originalChildrenStateMachine = state.ChildrenStateMachine;
+        var originalChildrenSnapshot = originalChildrenStateMachine?.CaptureSetupSnapshot();
         _states.Add(state);
         state.SetStateMachine(this);
+        _setupDepth++;
         try
         {
             state.Setup();
         }
         catch
         {
-            _states.Remove(state);
-            _transitions.RemoveAll(transition =>
-                ReferenceEquals(transition.FromState, state) || ReferenceEquals(transition.ToState, state));
-            if (ReferenceEquals(_initialState, state))
-            {
-                _initialState = null;
-            }
-            state.SetStateMachine(null);
+            RestoreSetupSnapshot(machineSnapshot);
+            state.RestoreSetupHierarchy(originalChildrenStateMachine, originalChildrenSnapshot);
             throw;
+        }
+        finally
+        {
+            _setupDepth--;
         }
     }
 
@@ -404,7 +434,7 @@ public class StateMachine
     /// 激活或停用状态机；激活时进入初始状态，停用时退出当前状态。
     /// </summary>
     /// <param name="active">是否活跃</param>
-    /// <exception cref="InvalidOperationException">正在执行状态进入或退出回调，不能重入生命周期变更。</exception>
+    /// <exception cref="InvalidOperationException">正在初始化状态或执行状态进入/退出回调，不能变更生命周期。</exception>
     /// <remarks>
     /// 进入或退出回调抛出的异常会原样传播。回调失败时状态机采用失败关闭策略，
     /// <see cref="IsActive"/> 为 <see langword="false"/>，<see cref="CurrentState"/> 为
@@ -412,6 +442,11 @@ public class StateMachine
     /// </remarks>
     public void SetActive(bool active)
     {
+        if (_setupDepth > 0)
+        {
+            throw new InvalidOperationException("状态初始化期间不能更改状态机的激活状态。");
+        }
+
         if (_isChangingState)
         {
             throw new InvalidOperationException("状态进入或退出期间不能更改状态机的激活状态。");
@@ -455,9 +490,14 @@ public class StateMachine
     /// <param name="eventName">事件名称</param>
     /// <param name="args">事件参数</param>
     /// <returns>事件是否被消耗</returns>
-    /// <exception cref="InvalidOperationException">状态正在执行进入或退出回调，不能重入转换。</exception>
+    /// <exception cref="InvalidOperationException">正在初始化状态或执行状态进入/退出回调，不能分发事件。</exception>
     public bool Dispatch(string eventName, object? args = null)
     {
+        if (_setupDepth > 0)
+        {
+            throw new InvalidOperationException("状态初始化期间不能分发事件。");
+        }
+
         if (_isChangingState)
         {
             throw new InvalidOperationException("状态进入或退出期间不能分发新的转换事件。");
@@ -531,5 +571,48 @@ public class StateMachine
         {
             _isChangingState = false;
         }
+    }
+
+    internal SetupSnapshot CaptureSetupSnapshot() => new(
+        _states.ToArray(),
+        _transitions.ToArray(),
+        [.. _eventHandlers],
+        _initialState);
+
+    internal void RestoreSetupSnapshot(SetupSnapshot snapshot)
+    {
+        foreach (var state in _states)
+        {
+            if (Array.IndexOf(snapshot.States, state) < 0)
+            {
+                state.SetStateMachine(null);
+                state.ClearParentState();
+            }
+        }
+
+        _states.Clear();
+        _states.AddRange(snapshot.States);
+        _transitions.Clear();
+        _transitions.AddRange(snapshot.Transitions);
+        _eventHandlers.Clear();
+        foreach (var (eventName, handler) in snapshot.EventHandlers)
+        {
+            _eventHandlers.Add(eventName, handler);
+        }
+        _initialState = snapshot.InitialState;
+    }
+
+    internal void DetachAllStates()
+    {
+        foreach (var state in _states)
+        {
+            state.SetStateMachine(null);
+            state.ClearParentState();
+        }
+
+        _states.Clear();
+        _transitions.Clear();
+        _eventHandlers.Clear();
+        _initialState = null;
     }
 }

@@ -536,6 +536,34 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - [ ] Add `TestFailedDuplicateBufferedReplayKeepsOriginalSubscription`, where the first buffered subscription of handler `h` succeeds and a duplicate replay throws before the publish boundary; assert rollback of the failed attempt does not remove the first registration. Add `TestSubscribeRejectsNullHandler` for base and buffered channels, asserting `ArgumentNullException` names `handler`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestFailedDuplicateBufferedReplayKeepsOriginalSubscription|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscribeRejectsNullHandler"`; expect duplicate rollback to remove the earlier pending registration and null handling to lack the explicit public guard.
 - [ ] Reject null at the base boundary; when a handler is already effectively subscribed, leave mutation state unchanged and return a no-op token. Return an owning token only when that call creates or restores a registration, so buffered replay rollback removes only its own registration. Document the boundary and rerun the focused command; expect original duplicate registration and pending semantics to survive.
 
+#### Task 3 Ownership Closure Repair T: Bind subscription tokens to registration generations
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestStaleSubscriptionTokenDoesNotCancelNewRegistration`: subscribe handler `h`, explicitly unsubscribe it, subscribe `h` again, dispose the first token, publish, then dispose the second token and publish again. Require the first disposal to leave the newer registration active and the second disposal to remove only that registration. Run its exact fully-qualified filter and expect failure because tokens currently unsubscribe by handler identity only.
+- [ ] Give every actually created active or pending registration a monotonically increasing identifier. Make owning-token disposal remove only the matching handler and identifier; keep duplicate/effective subscriptions non-owning and preserve deferred mutation plus nested publication semantics. Rerun the focused test and affected message-channel tests.
+
+#### Task 3 Ownership Closure Repair U: Make subscription lifetime explicitly controlled
+
+**Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
+
+- [ ] Add `TestCollectedSubscriptionTokenDoesNotUnsubscribeHandler` using a no-inline helper, `WeakReference`, and forced collection/finalization to prove a dropped token is collected while publication still invokes its handler. Add `TestSubscriptionImplementationIsNotPublicApi` to prevent callers manufacturing a token for an unowned registration. Run both exact filters and expect failure from finalizer-driven unsubscription and the exported `DisposableSubscription<T>` type.
+- [ ] Remove finalizer-driven token disposal; only explicit token disposal or channel subscription APIs may mutate registration state. Hide the concrete token implementation while retaining the public `IDisposable` return contract, and document explicit token lifetime in Chinese. Rerun the focused tests.
+
+#### Task 3 Ownership Closure Repair V: Isolate setup from state-machine lifecycle mutation
+
+**Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
+
+- [ ] Add `TestSetupCannotActivateOrDispatchAndFailureIsRetryable`, whose setup can access its owner, configures a transition/handler and child hierarchy, verifies `SetActive(true)` and `Dispatch` are rejected before mutation, then throws. Require inactive/null lifecycle fields, cleared owner/list/initial/transition/hierarchy state, reset guards, and a successful retry after failure is disabled. Run its exact filter and expect failure because setup currently permits activation and dispatch and failed setup retains hierarchy.
+- [ ] Track setup depth independently from transition/lifecycle reentrancy. Reject `SetActive` and `Dispatch` at setup entry before logging or mutation, retain setup-time transition and handler configuration, and roll back hierarchy created by a failing setup together with existing ownership/list/initial/transition cleanup. Rerun the focused test and all state-machine tests.
+
+#### Task 3 Ownership Closure Repair W: Enforce explicit null contracts
+
+**Files:** `Patterns/MessageChannel.cs`, `Patterns/ObjectPool.cs`, `Test/Patterns/UnitTestMessageChannel.cs`, `Test/Patterns/UnitTestObjectPool.cs`
+
+- [ ] Add `TestUnsubscribeRejectsNullHandler` and `TestCreateFuncCannotBeNull`, asserting `ArgumentNullException` with parameters `handler` and `createFunc`. Run their exact filters and expect failure because dictionary validation currently reports `key` and the pool constructor throws `ArgumentException`.
+- [ ] Validate both public boundaries explicitly and add accurate Chinese XML exception contracts. Rerun the focused tests.
+
 ### Task 4: ECS
 
 **Files:**
