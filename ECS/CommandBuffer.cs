@@ -6,28 +6,43 @@ namespace SimpleFramework.ECS;
 public readonly struct BufferedEntity : IEquatable<BufferedEntity>
 {
     internal BufferedEntity(int id)
+        : this(0, id)
     {
+    }
+
+    internal BufferedEntity(int ownerId, int id)
+    {
+        OwnerId = ownerId;
         Id = id;
     }
 
+    internal int OwnerId { get; }
+
     /// <summary>
-    /// 占位实体编号。
+    /// 占位实体在创建它的命令缓冲内的编号。
     /// </summary>
     public int Id { get; }
 
+    /// <summary>
+    /// 判断两个占位句柄是否来自同一命令缓冲且编号相同。
+    /// </summary>
+    /// <param name="other">要比较的占位句柄。</param>
+    /// <returns>如果两个句柄标识同一缓冲内的占位实体则为 <c>true</c>。</returns>
     public bool Equals(BufferedEntity other)
     {
-        return Id == other.Id;
+        return OwnerId == other.OwnerId && Id == other.Id;
     }
 
+    /// <inheritdoc/>
     public override bool Equals(object? obj)
     {
         return obj is BufferedEntity other && Equals(other);
     }
 
+    /// <inheritdoc/>
     public override int GetHashCode()
     {
-        return Id;
+        return HashCode.Combine(OwnerId, Id);
     }
 
     public static bool operator ==(BufferedEntity left, BufferedEntity right)
@@ -58,6 +73,7 @@ public sealed class CommandBufferResult
     /// </summary>
     /// <param name="entity">占位实体。</param>
     /// <returns>真实实体。</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不是本次播放创建的占位实体。</exception>
     public Entity Resolve(BufferedEntity entity)
     {
         if (!TryResolve(entity, out var resolved))
@@ -85,7 +101,10 @@ public sealed class CommandBufferResult
 /// </summary>
 public sealed class CommandBuffer
 {
+    private static int _nextBufferId;
+
     private readonly List<ICommand> _commands = new();
+    private readonly int _bufferId;
     private readonly World _world;
     private int _nextBufferedEntityId;
 
@@ -93,9 +112,11 @@ public sealed class CommandBuffer
     /// 创建绑定到指定世界的命令缓冲。
     /// </summary>
     /// <param name="world">命令播放的目标世界。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="world"/> 为 null。</exception>
     public CommandBuffer(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
+        _bufferId = Interlocked.Increment(ref _nextBufferId);
     }
 
     /// <summary>
@@ -113,8 +134,10 @@ public sealed class CommandBuffer
     /// <typeparam name="T1">组件类型。</typeparam>
     /// <param name="c1">组件值。</param>
     /// <returns>可在本缓冲中继续使用的占位实体。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="c1"/> 为 null。</exception>
     public BufferedEntity CreateEntity<T1>(T1 c1) where T1 : IComponent
     {
+        ThrowIfNull(c1, nameof(c1));
         return CreateEntity(new IComponent[] { c1 });
     }
 
@@ -126,10 +149,13 @@ public sealed class CommandBuffer
     /// <param name="c1">第一个组件值。</param>
     /// <param name="c2">第二个组件值。</param>
     /// <returns>可在本缓冲中继续使用的占位实体。</returns>
+    /// <exception cref="ArgumentNullException">任一组件值为 null。</exception>
     public BufferedEntity CreateEntity<T1, T2>(T1 c1, T2 c2)
         where T1 : IComponent
         where T2 : IComponent
     {
+        ThrowIfNull(c1, nameof(c1));
+        ThrowIfNull(c2, nameof(c2));
         return CreateEntity(new IComponent[] { c1, c2 });
     }
 
@@ -146,8 +172,10 @@ public sealed class CommandBuffer
     /// 延迟销毁占位实体。
     /// </summary>
     /// <param name="entity">占位实体。</param>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
     public void DestroyEntity(BufferedEntity entity)
     {
+        ValidateOwner(entity);
         _commands.Add(new DestroyEntityCommand(new EntityTarget(entity)));
     }
 
@@ -157,8 +185,10 @@ public sealed class CommandBuffer
     /// <typeparam name="T">组件类型。</typeparam>
     /// <param name="entity">真实实体。</param>
     /// <param name="component">组件值。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
     public void Add<T>(Entity entity, T component) where T : IComponent
     {
+        ThrowIfNull(component, nameof(component));
         _commands.Add(new AddCommand<T>(new EntityTarget(entity), component));
     }
 
@@ -168,8 +198,12 @@ public sealed class CommandBuffer
     /// <typeparam name="T">组件类型。</typeparam>
     /// <param name="entity">占位实体。</param>
     /// <param name="component">组件值。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
     public void Add<T>(BufferedEntity entity, T component) where T : IComponent
     {
+        ValidateOwner(entity);
+        ThrowIfNull(component, nameof(component));
         _commands.Add(new AddCommand<T>(new EntityTarget(entity), component));
     }
 
@@ -179,8 +213,10 @@ public sealed class CommandBuffer
     /// <typeparam name="T">组件类型。</typeparam>
     /// <param name="entity">真实实体。</param>
     /// <param name="component">组件值。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
     public void Set<T>(Entity entity, T component) where T : IComponent
     {
+        ThrowIfNull(component, nameof(component));
         _commands.Add(new SetCommand<T>(new EntityTarget(entity), component));
     }
 
@@ -190,8 +226,12 @@ public sealed class CommandBuffer
     /// <typeparam name="T">组件类型。</typeparam>
     /// <param name="entity">占位实体。</param>
     /// <param name="component">组件值。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
     public void Set<T>(BufferedEntity entity, T component) where T : IComponent
     {
+        ValidateOwner(entity);
+        ThrowIfNull(component, nameof(component));
         _commands.Add(new SetCommand<T>(new EntityTarget(entity), component));
     }
 
@@ -210,8 +250,10 @@ public sealed class CommandBuffer
     /// </summary>
     /// <typeparam name="T">组件类型。</typeparam>
     /// <param name="entity">占位实体。</param>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不属于当前命令缓冲。</exception>
     public void Remove<T>(BufferedEntity entity) where T : IComponent
     {
+        ValidateOwner(entity);
         _commands.Add(new RemoveCommand<T>(new EntityTarget(entity)));
     }
 
@@ -233,9 +275,25 @@ public sealed class CommandBuffer
 
     private BufferedEntity CreateEntity(IReadOnlyCollection<IComponent> components)
     {
-        var bufferedEntity = new BufferedEntity(_nextBufferedEntityId++);
+        var bufferedEntity = new BufferedEntity(_bufferId, _nextBufferedEntityId++);
         _commands.Add(new CreateEntityCommand(bufferedEntity, components.ToArray()));
         return bufferedEntity;
+    }
+
+    private void ValidateOwner(BufferedEntity entity)
+    {
+        if (entity.OwnerId != _bufferId)
+        {
+            throw new InvalidOperationException($"Buffered entity {entity.Id} belongs to another command buffer.");
+        }
+    }
+
+    private static void ThrowIfNull<T>(T component, string paramName) where T : IComponent
+    {
+        if (component is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
     }
 
     private interface ICommand

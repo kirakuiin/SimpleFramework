@@ -99,4 +99,31 @@ public class UnitTestArchetype
         Assert.IsNull(moved);
         Assert.AreEqual(0, archetype.EntityCount);
     }
+
+    [Test]
+    public void ArchetypeRejectedRowDoesNotCorruptAlignedStorage()
+    {
+        var signature = new TypeSignature(typeof(TestPosition), typeof(TestVelocity));
+        var archetype = new Archetype(signature);
+        var rejected = new Entity(1, 1, 1);
+
+        Assert.Throws<InvalidOperationException>(() => archetype.Add(rejected,
+            new Dictionary<Type, IComponent>
+            {
+                [typeof(TestPosition)] = new TestPosition { X = 10 }
+            }));
+        Assert.AreEqual(0, archetype.EntityCount);
+
+        var accepted = new Entity(1, 2, 1);
+        var row = archetype.Add(accepted, new IComponent[]
+        {
+            new TestPosition { X = 20 },
+            new TestVelocity { X = 30 }
+        });
+
+        Assert.AreEqual(0, row);
+        Assert.AreEqual(accepted, archetype.GetEntity(0));
+        Assert.AreEqual(20, archetype.Get<TestPosition>(0).X);
+        Assert.AreEqual(30, archetype.Get<TestVelocity>(0).X);
+    }
 }

@@ -164,6 +164,12 @@ public sealed class TypeSignature : IEquatable<TypeSignature>, IReadOnlyCollecti
             return 1;
         }
 
-        return string.Compare(left.FullName, right.FullName, StringComparison.Ordinal);
+        var nameComparison = string.Compare(left.FullName, right.FullName, StringComparison.Ordinal);
+        if (nameComparison != 0)
+        {
+            return nameComparison;
+        }
+
+        return string.Compare(left.AssemblyQualifiedName, right.AssemblyQualifiedName, StringComparison.Ordinal);
     }
 }

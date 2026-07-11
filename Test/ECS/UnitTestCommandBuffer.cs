@@ -113,4 +113,62 @@ public class UnitTestCommandBuffer
 
         Assert.AreEqual(1, world.EntityCount);
     }
+
+    [Test]
+    public void PlaybackRejectsBufferedEntityFromAnotherBuffer()
+    {
+        var world = new World();
+        var first = new CommandBuffer(world);
+        var second = new CommandBuffer(world);
+        var foreign = first.CreateEntity(new TestPosition { X = 1 });
+        var local = second.CreateEntity(new TestPosition { X = 2 });
+
+        Assert.AreEqual(foreign.Id, local.Id);
+        Assert.Throws<InvalidOperationException>(() => second.Add(foreign, new TestVelocity { X = 3 }));
+        Assert.AreEqual(0, world.EntityCount);
+
+        var result = second.Playback();
+        var entity = result.Resolve(local);
+        Assert.AreEqual(1, world.EntityCount);
+        Assert.IsFalse(world.Has<TestVelocity>(entity));
+    }
+
+    [Test]
+    public void ResultRejectsBufferedEntityFromAnotherBufferWithSameLocalId()
+    {
+        var world = new World();
+        var first = new CommandBuffer(world);
+        var second = new CommandBuffer(world);
+        var firstHandle = first.CreateEntity(new TestPosition { X = 1 });
+        var secondHandle = second.CreateEntity(new TestPosition { X = 2 });
+
+        var firstResult = first.Playback();
+        var secondResult = second.Playback();
+
+        Assert.AreEqual(firstHandle.Id, secondHandle.Id);
+        Assert.IsTrue(firstResult.TryResolve(firstHandle, out _));
+        Assert.IsFalse(secondResult.TryResolve(firstHandle, out _));
+        Assert.Throws<InvalidOperationException>(() => secondResult.Resolve(firstHandle));
+    }
+
+    [Test]
+    public void CommandBufferRejectsNullReferenceComponentBeforeRecording()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var createException = Assert.Throws<ArgumentNullException>(() => buffer.CreateEntity<TestName>(null!));
+        Assert.AreEqual("c1", createException!.ParamName);
+
+        var created = buffer.CreateEntity(new TestName { Value = "valid" });
+        var addException = Assert.Throws<ArgumentNullException>(() => buffer.Add<TestName>(created, null!));
+        Assert.AreEqual("component", addException!.ParamName);
+
+        var result = buffer.Playback();
+        var entity = result.Resolve(created);
+        buffer.Playback();
+
+        Assert.AreEqual(1, world.EntityCount);
+        Assert.AreEqual("valid", world.Get<TestName>(entity).Value);
+    }
 }

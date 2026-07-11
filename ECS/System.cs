@@ -9,9 +9,10 @@ public abstract class EcsSystem
     /// 创建 ECS 系统。
     /// </summary>
     /// <param name="world">系统所属世界。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="world"/> 为 null。</exception>
     protected EcsSystem(World world)
     {
-        World = world;
+        World = world ?? throw new ArgumentNullException(nameof(world));
     }
 
     /// <summary>

@@ -32,6 +32,14 @@ public class TestEcsSystem
         Assert.AreEqual(1, system.UpdateCount);
     }
 
+    [Test]
+    public void SystemConstructorRejectsNullWorld()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(() => new CountingSystem(null!));
+
+        Assert.AreEqual("world", exception!.ParamName);
+    }
+
     private sealed class MovementTestSystem : EcsSystem
     {
         private readonly Query _query;

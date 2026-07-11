@@ -435,6 +435,30 @@ public class TestSystemGroup
         CollectionAssert.AreEqual(new[] { "before", "after" }, calls);
     }
 
+    [Test]
+    public void UpdateRejectsReentrantDispatchAndRecovers()
+    {
+        var world = new World();
+        var calls = new List<string>();
+        var group = new SystemGroup();
+        InvalidOperationException? nestedException = null;
+        group.Add(new MutatingSystem(world, () =>
+        {
+            calls.Add("outer");
+            nestedException = Assert.Throws<InvalidOperationException>(() => group.Update());
+            calls.Add("after");
+        }));
+        group.Add(new RecordingSystem(world, calls, "next"));
+
+        group.Update();
+        CollectionAssert.AreEqual(new[] { "outer", "after", "next" }, calls);
+        StringAssert.Contains("already updating", nestedException!.Message);
+
+        calls.Clear();
+        group.Update();
+        CollectionAssert.AreEqual(new[] { "outer", "after", "next" }, calls);
+    }
+
     private class RecordingSystem : EcsSystem
     {
         private readonly List<string>? _calls;

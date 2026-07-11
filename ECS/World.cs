@@ -59,8 +59,10 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <typeparam name="T1">组件类型。</typeparam>
     /// <param name="c1">组件值。</param>
     /// <returns>新实体句柄。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="c1"/> 为 null。</exception>
     public Entity CreateEntity<T1>(T1 c1) where T1 : IComponent
     {
+        ThrowIfNull(c1, nameof(c1));
         return CreateEntityWithComponents(new IComponent[] { c1 });
     }
 
@@ -72,10 +74,13 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <param name="c1">第一个组件值。</param>
     /// <param name="c2">第二个组件值。</param>
     /// <returns>新实体句柄。</returns>
+    /// <exception cref="ArgumentNullException">任一组件值为 null。</exception>
     public Entity CreateEntity<T1, T2>(T1 c1, T2 c2)
         where T1 : IComponent
         where T2 : IComponent
     {
+        ThrowIfNull(c1, nameof(c1));
+        ThrowIfNull(c2, nameof(c2));
         return CreateEntityWithComponents(new IComponent[] { c1, c2 });
     }
 
@@ -89,11 +94,15 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <param name="c2">第二个组件值。</param>
     /// <param name="c3">第三个组件值。</param>
     /// <returns>新实体句柄。</returns>
+    /// <exception cref="ArgumentNullException">任一组件值为 null。</exception>
     public Entity CreateEntity<T1, T2, T3>(T1 c1, T2 c2, T3 c3)
         where T1 : IComponent
         where T2 : IComponent
         where T3 : IComponent
     {
+        ThrowIfNull(c1, nameof(c1));
+        ThrowIfNull(c2, nameof(c2));
+        ThrowIfNull(c3, nameof(c3));
         return CreateEntityWithComponents(new IComponent[] { c1, c2, c3 });
     }
 
@@ -109,12 +118,17 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <param name="c3">第三个组件值。</param>
     /// <param name="c4">第四个组件值。</param>
     /// <returns>新实体句柄。</returns>
+    /// <exception cref="ArgumentNullException">任一组件值为 null。</exception>
     public Entity CreateEntity<T1, T2, T3, T4>(T1 c1, T2 c2, T3 c3, T4 c4)
         where T1 : IComponent
         where T2 : IComponent
         where T3 : IComponent
         where T4 : IComponent
     {
+        ThrowIfNull(c1, nameof(c1));
+        ThrowIfNull(c2, nameof(c2));
+        ThrowIfNull(c3, nameof(c3));
+        ThrowIfNull(c4, nameof(c4));
         return CreateEntityWithComponents(new IComponent[] { c1, c2, c3, c4 });
     }
 
@@ -209,8 +223,11 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <param name="entity">实体句柄。</param>
     /// <param name="component">组件值。</param>
     /// <returns>原实体句柄。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="entity"/> 不是当前世界中的存活实体。</exception>
     public Entity Add<T>(Entity entity, T component) where T : IComponent
     {
+        ThrowIfNull(component, nameof(component));
         var slot = Validate(entity);
         if (slot.Archetype.Signature.Has<T>())
         {
@@ -232,8 +249,11 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
     /// <param name="entity">实体句柄。</param>
     /// <param name="component">组件值。</param>
     /// <returns>原实体句柄。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="component"/> 为 null。</exception>
+    /// <exception cref="InvalidOperationException">实体无效或缺少指定组件。</exception>
     public Entity Set<T>(Entity entity, T component) where T : IComponent
     {
+        ThrowIfNull(component, nameof(component));
         var slot = Validate(entity);
         if (!slot.Archetype.Signature.Has<T>())
         {
@@ -532,6 +552,14 @@ public partial class World : IEnumerable<Archetype>, IEquatable<World>
 
         slot = candidate;
         return true;
+    }
+
+    private static void ThrowIfNull<T>(T component, string paramName) where T : IComponent
+    {
+        if (component is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
     }
 
     private sealed class EntitySlot

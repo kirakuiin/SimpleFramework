@@ -10,7 +10,7 @@ This document shows the recommended shape for a small ECS loop using `World`, `Q
 
 ## Components
 
-Components are plain value types that implement `IComponent`.
+Components are plain types that implement `IComponent`. Struct components are copied by value. Class components retain their references, including when instantiated from an `EntityPrefab`; null component values are rejected.
 
 ```csharp
 using SimpleFramework.ECS;
@@ -53,13 +53,16 @@ public sealed class InputSystem : EcsSystem
 [RunBefore(typeof(RenderSystem))]
 public sealed class MovementSystem : EcsSystem
 {
+    private readonly Query _query;
+
     public MovementSystem(World world) : base(world)
     {
+        _query = world.Query<Position, Velocity>().Not<Dead>();
     }
 
     public override void Update(float deltaTime)
     {
-        foreach (var entity in World.Query<Position, Velocity>().Not<Dead>())
+        foreach (var entity in _query)
         {
             ref var position = ref World.Get<Position>(entity);
             ref var velocity = ref World.Get<Velocity>(entity);
@@ -78,13 +81,16 @@ public sealed class MovementSystem : EcsSystem
 [RunAfter(typeof(MovementSystem))]
 public sealed class RenderSystem : EcsSystem
 {
+    private readonly Query _query;
+
     public RenderSystem(World world) : base(world)
     {
+        _query = world.Query<Position>().Not<Dead>();
     }
 
     public override void Update()
     {
-        foreach (var entity in World.Query<Position>().Not<Dead>())
+        foreach (var entity in _query)
         {
             ref var position = ref World.Get<Position>(entity);
             // Draw entity at position.
@@ -144,4 +150,40 @@ Keeping disabled systems in the graph makes ordering stable. It also means depen
 
 ## Structural Changes During Queries
 
-Do not add, remove, or destroy entities while enumerating a `Query`. The query checks the world's structural version and throws if the world changes during enumeration. Collect entity handles first or use a command-buffer style step when structural changes are needed.
+Do not add, remove, or destroy entities while enumerating a `Query`. The query checks the world's structural version and throws if the world changes during enumeration. Record those changes in a `CommandBuffer` and play them afterward:
+
+```csharp
+var commands = new CommandBuffer(world);
+
+foreach (var entity in world.Query<Position>())
+{
+    commands.Add(entity, new Dead());
+}
+
+commands.Playback();
+```
+
+A `BufferedEntity` returned by `CreateEntity` belongs only to that buffer. It can be targeted by later commands in the same buffer and resolved through that buffer's successful playback result:
+
+```csharp
+var commands = new CommandBuffer(world);
+var created = commands.CreateEntity(new Position());
+commands.Add(created, new Velocity());
+
+var result = commands.Playback();
+var entity = result.Resolve(created);
+```
+
+Playback follows recorded order and uses the same invalid-entity policy as `World`. It is not transactional: if a later command fails, earlier successful changes remain applied, playback stops, and the recorded commands are cleared only after a fully successful playback.
+
+## Prefabs
+
+An `EntityPrefab` stores default values for one entity:
+
+```csharp
+var projectile = EntityPrefab.Create()
+    .With(new Position())
+    .With(new Velocity { X = 10f });
+
+var entity = world.Instantiate(projectile);
+```

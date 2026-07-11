@@ -155,4 +155,18 @@ public class UnitTestQuery
         Assert.AreEqual(2, archetypes.Count);
         Assert.IsTrue(archetypes.All(archetype => archetype.Signature.Has<TestPosition>()));
     }
+
+    [Test]
+    public void GetArchetypesCannotMutateQueryCache()
+    {
+        var world = new World();
+        var entity = world.CreateEntity(new TestPosition());
+        var query = world.Query<TestPosition>();
+        var archetypes = query.GetArchetypes();
+
+        Assert.Throws<NotSupportedException>(() => ((IList<Archetype>)archetypes).Clear());
+
+        CollectionAssert.AreEqual(new[] { entity }, query.ToList());
+        Assert.AreEqual(1, query.GetArchetypes().Count);
+    }
 }

@@ -12,6 +12,10 @@ Core concepts:
 - `Query` filters entities by included and excluded component types.
 - `EcsSystem` is a small base class for update logic.
 - `SystemGroup` updates systems by manual order, then dependency attributes, then insertion order.
+- `CommandBuffer` records structural changes and plays them after query traversal.
+- `EntityPrefab` stores default component values for one entity.
+
+Components may be structs or classes. Struct values are copied; class values keep their references. Null class components are rejected at the public API boundary.
 
 Example:
 
@@ -48,3 +52,5 @@ public sealed class MovementSystem : EcsSystem
 ```
 
 `RunBefore` and `RunAfter` targets must inherit from `EcsSystem`. Dependencies are applied only between systems that share the same manual `order` value in `SystemGroup`.
+
+Buffered entity handles belong to the `CommandBuffer` that created them and cannot be used with another buffer or playback result, even when their local `Id` values match.

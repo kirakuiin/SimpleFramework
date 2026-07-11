@@ -10,6 +10,7 @@ public sealed class Query : IEnumerable<Entity>
     private readonly HashSet<Type> _exclude = new();
     private readonly HashSet<Type> _include = new();
     private readonly List<Archetype> _matchingArchetypes = new();
+    private readonly IReadOnlyList<Archetype> _matchingArchetypesView;
     private readonly World _world;
     private int _lastArchetypeVersion = -1;
 
@@ -20,6 +21,7 @@ public sealed class Query : IEnumerable<Entity>
     public Query(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
+        _matchingArchetypesView = _matchingArchetypes.AsReadOnly();
     }
 
     /// <summary>
@@ -79,12 +81,13 @@ public sealed class Query : IEnumerable<Entity>
     }
 
     /// <summary>
-    /// 获取当前匹配的原型列表。
+    /// 获取当前匹配的原型只读视图；后续刷新会更新同一视图的内容。
     /// </summary>
+    /// <returns>不能由调用方修改的原型列表视图。</returns>
     public IReadOnlyList<Archetype> GetArchetypes()
     {
         Refresh();
-        return _matchingArchetypes;
+        return _matchingArchetypesView;
     }
 
     /// <summary>

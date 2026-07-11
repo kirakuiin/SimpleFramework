@@ -53,4 +53,18 @@ public class UnitTestEntityPrefab
 
         Assert.Throws<ArgumentNullException>(() => world.Instantiate(null!));
     }
+
+    [Test]
+    public void PrefabRejectsNullReferenceComponentWithoutMutation()
+    {
+        var prefab = EntityPrefab.Create();
+
+        var exception = Assert.Throws<ArgumentNullException>(() => prefab.With<TestName>(null!));
+        Assert.AreEqual("component", exception!.ParamName);
+
+        prefab.With(new TestName { Value = "valid" });
+        var world = new World();
+        var entity = world.Instantiate(prefab);
+        Assert.AreEqual("valid", world.Get<TestName>(entity).Value);
+    }
 }

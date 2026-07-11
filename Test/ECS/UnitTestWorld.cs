@@ -370,4 +370,29 @@ public class UnitTestWorld
 
         Assert.AreEqual(2, world.Count());
     }
+
+    [Test]
+    public void WorldRejectsNullReferenceComponentsWithoutStructuralChange()
+    {
+        var world = new World();
+        var names = world.Query<TestName>();
+
+        var createException = Assert.Throws<ArgumentNullException>(() => world.CreateEntity<TestName>(null!));
+        Assert.AreEqual("c1", createException!.ParamName);
+        Assert.AreEqual(0, world.EntityCount);
+        Assert.IsEmpty(names);
+        Assert.IsEmpty(world);
+
+        var entity = world.CreateEntity(new TestPosition { X = 1 });
+        var archetype = world.GetArchetype(entity);
+        var addException = Assert.Throws<ArgumentNullException>(() => world.Add<TestName>(entity, null!));
+        var setException = Assert.Throws<ArgumentNullException>(() => world.Set<TestName>(entity, null!));
+
+        Assert.AreEqual("component", addException!.ParamName);
+        Assert.AreEqual("component", setException!.ParamName);
+        Assert.AreSame(archetype, world.GetArchetype(entity));
+        Assert.IsFalse(world.Has<TestName>(entity));
+        Assert.IsEmpty(names);
+        Assert.AreEqual(1, world.EntityCount);
+    }
 }

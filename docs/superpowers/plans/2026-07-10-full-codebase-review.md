@@ -630,23 +630,23 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - Consumes: static monotonically increasing entity IDs, archetype/query update contracts, and Utility/Collections behavior.
 - Produces: verified structural changes, query membership, command replay, prefab application, system scheduling, and one reviewable commit.
 
-- [ ] **Step 1: Run the ECS baseline**
+- [x] **Step 1: Run the ECS baseline**
 
 ```powershell
-dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.ECS"
+dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.ECS"
 ```
 
 Expected: all ECS tests pass before repairs.
 
-- [ ] **Step 2: Review every ECS source, test, and user-facing example**
+- [x] **Step 2: Review every ECS source, test, and user-facing example**
 
 Trace create/destroy, add/set/remove component, archetype migration, component-column swaps, stale Entity values, world ownership, query creation/update/disposal, command-buffer ordering and invalid targets, prefab inheritance/application, TypeSignature equality, dependency cycles, deterministic system ordering, disabled systems, mutation during update, hot-path allocations, public API usability, Chinese XML docs, and example accuracy.
 
-- [ ] **Step 3: Repair findings using appended TDD subtasks**
+- [x] **Step 3: Repair findings using appended TDD subtasks**
 
 Every structural bug test must assert world, archetype, query, and entity observations after the operation. Scheduling tests must assert deterministic order and failure details. Avoid optimization that reduces ECS readability unless measurement or obvious repeated allocation justifies it.
 
-- [ ] **Step 4: Record, verify, commit, and review round 4**
+- [x] **Step 4: Record, verify, commit, and review round 4**
 
 ```powershell
 dotnet test .\Test\Test.csproj --no-restore
@@ -657,6 +657,55 @@ git commit -m "review: harden ecs lifecycle and scheduling"
 ```
 
 Request review for the round range, resolve Critical and Important feedback, rerun verification, and record the disposition.
+
+#### Task 4 Repair A: Make archetype insertion transactional
+
+**Files:** `ECS/Archetype.cs`, `Test/ECS/UnitTestArchetype.cs`
+
+- [x] Add `ArchetypeRejectedRowDoesNotCorruptAlignedStorage`, attempting to add a row whose component dictionary omits one signature type; assert the expected `InvalidOperationException`, zero entity rows, then add a valid row and assert its entity and both component columns occupy row zero. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.ECS.UnitTestArchetype.ArchetypeRejectedRowDoesNotCorruptAlignedStorage"`; expect failure because `Archetype.Add` currently appends the entity and an earlier component column before discovering the missing component.
+- [x] Validate and collect every signature component before mutating `_entities` or any column, then append the complete row. Rerun the exact filter and all `UnitTestArchetype` tests; expect aligned storage and all selected tests to pass.
+
+#### Task 4 Repair B: Bind buffered handles and playback results to their command buffer
+
+**Files:** `ECS/CommandBuffer.cs`, `Test/ECS/UnitTestCommandBuffer.cs`
+
+- [x] Add `PlaybackRejectsBufferedEntityFromAnotherBuffer` and `ResultRejectsBufferedEntityFromAnotherBufferWithSameLocalId`. Use two buffers whose first placeholders share local ID zero; assert the foreign command throws `InvalidOperationException` before changing either target entity, and the foreign result cannot resolve the other buffer's placeholder. Run their exact fully-qualified filter; expect failure because `BufferedEntity` equality and resolution currently use only the local ID.
+- [x] Give each `CommandBuffer` a unique owner ID, include it in `BufferedEntity` equality/hash identity, validate ownership when recording every buffered-target command, and carry the identity into `CommandBufferResult`. Keep `BufferedEntity.Id` as the documented local number and preserve recorded command order. Rerun the two tests and all command-buffer tests; expect foreign handles to be rejected deterministically and existing same-buffer playback to pass.
+
+#### Task 4 Repair C: Reject reentrant SystemGroup updates before dispatch
+
+**Files:** `ECS/SystemGroup.cs`, `Test/ECS/UnitTestSystemGroup.cs`
+
+- [x] Add `UpdateRejectsReentrantDispatchAndRecovers`, whose first system calls the same group's `Update()` once, captures `InvalidOperationException`, and whose later normal update proves the guard resets; assert exact deterministic call order and no nested system dispatch. Run its exact fully-qualified filter; expect failure because `UpdateCore` currently permits recursive dispatch.
+- [x] Check `_isUpdating` at the start of `UpdateCore` before changing state or sorting, throw `InvalidOperationException` with a direct reentrancy diagnostic, and retain the existing `finally` reset for callback failures. Document the rejection on both public update overloads in Chinese XML. Rerun the focused test and all `TestSystemGroup` tests; expect deterministic single dispatch and recovery.
+
+#### Task 4 Repair D: Return a genuinely read-only query archetype view
+
+**Files:** `ECS/Query.cs`, `Test/ECS/UnitTestQuery.cs`
+
+- [x] Add `GetArchetypesCannotMutateQueryCache`, cast the returned view to `IList<Archetype>`, assert mutation throws `NotSupportedException`, then assert a subsequent query enumeration and archetype observation remain correct. Run its exact fully-qualified filter; expect failure because the returned object is the mutable internal `List<Archetype>`.
+- [x] Create one `ReadOnlyCollection<Archetype>` wrapper over the internal list and return it from `GetArchetypes`, preserving lazy refresh without per-call copies. Update the Chinese XML return contract. Rerun the focused test and all query tests; expect the cache to remain protected and live refresh behavior to pass.
+
+#### Task 4 Repair E: Distinguish component types with identical full names
+
+**Files:** `ECS/TypeSignature.cs`, `Test/ECS/UnitTestSignature.cs`
+
+- [x] Add `TypeSignatureDoesNotConfuseSameNamedTypesFromDifferentAssemblies`, creating two deterministic dynamic assemblies with component types that have the same namespace/name and implement `IComponent`; assert a signature containing the first does not `Has` the second, the two one-type signatures are unequal, and their set behavior remains coherent. Run its exact fully-qualified filter; expect failure because the binary-search comparer currently compares only `Type.FullName`.
+- [x] Extend the stable type ordering tie-breaker with assembly identity so comparer equality implies runtime type equality for distinct component types. Rerun the focused test and all signature tests; expect correct membership and equality/hash behavior.
+
+#### Task 4 Repair F: Reject null reference components at public boundaries
+
+**Files:** `ECS/World.cs`, `ECS/EntityPrefab.cs`, `ECS/CommandBuffer.cs`, `Test/ECS/UnitTestWorld.cs`, `Test/ECS/UnitTestEntityPrefab.cs`, `Test/ECS/UnitTestCommandBuffer.cs`
+
+- [x] Add `WorldRejectsNullReferenceComponentsWithoutStructuralChange`, `PrefabRejectsNullReferenceComponentWithoutMutation`, and `CommandBufferRejectsNullReferenceComponentBeforeRecording`. Assert `ArgumentNullException` uses the public component parameter, world entity/archetype/query observations remain unchanged, the prefab remains reusable, and the command buffer can subsequently play one valid command exactly once. Run their exact fully-qualified filter; expect failure because creation currently dereferences null and add/set paths can store null component values.
+- [x] Add a small generic null guard at every public component-taking boundary in `World`, `EntityPrefab`, and `CommandBuffer`; reject null before recording commands or mutating world/prefab state, while preserving struct component paths and class-component reference semantics. Add accurate Chinese XML exception contracts to touched public declarations. Rerun the focused tests and all ECS tests; expect deterministic `ArgumentNullException` and unchanged structural state.
+
+#### Task 4 Repair G: Reject a null world when constructing a system
+
+**Files:** `ECS/System.cs`, `Test/ECS/UnitTestEcsSystem.cs`
+
+- [x] Add `SystemConstructorRejectsNullWorld`, constructing the fixture's concrete counting system with null and asserting `ArgumentNullException` names `world`. Run its exact fully-qualified filter; expect failure because `EcsSystem` currently publishes a null `World` reference.
+- [x] Guard the protected `EcsSystem` constructor before assigning `World` and document the exception in Chinese XML. Rerun the focused test and all ECS tests; expect deterministic construction failure and no regression.
 
 ### Task 5: Net
 

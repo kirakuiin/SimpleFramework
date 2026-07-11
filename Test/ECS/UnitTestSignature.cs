@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using NUnit.Framework;
 using SimpleFramework.ECS;
 
@@ -66,5 +68,34 @@ public class TestTypeSignature
         StringAssert.Contains(nameof(TestPosition), text);
         StringAssert.Contains(nameof(TestDeadTag), text);
         StringAssert.Contains(nameof(TestName), text);
+    }
+
+    [Test]
+    public void TypeSignatureDoesNotConfuseSameNamedTypesFromDifferentAssemblies()
+    {
+        var firstType = CreateDynamicComponentType("SignatureCollisionA");
+        var secondType = CreateDynamicComponentType("SignatureCollisionB");
+        var first = new TypeSignature(firstType);
+        var second = new TypeSignature(secondType);
+
+        Assert.AreEqual(firstType.FullName, secondType.FullName);
+        Assert.IsTrue(first.Has(firstType));
+        Assert.IsFalse(first.Has(secondType));
+        Assert.AreNotEqual(first, second);
+        Assert.AreEqual(2, new HashSet<TypeSignature> { first, second }.Count);
+
+        var combined = new TypeSignature(firstType, secondType);
+        var reversed = new TypeSignature(secondType, firstType);
+        Assert.AreEqual(combined, reversed);
+        Assert.AreEqual(combined.GetHashCode(), reversed.GetHashCode());
+    }
+
+    private static Type CreateDynamicComponentType(string assemblyName)
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule(assemblyName);
+        var builder = module.DefineType("Collision.SameComponent", TypeAttributes.Public | TypeAttributes.Class);
+        builder.AddInterfaceImplementation(typeof(IComponent));
+        return builder.CreateType()!;
     }
 }

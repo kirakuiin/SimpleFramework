@@ -34,17 +34,24 @@ public sealed class Archetype : IEnumerable<Entity>
     {
         ArgumentNullException.ThrowIfNull(components);
 
-        var row = _entities.Count;
-        _entities.Add(entity);
-
+        var rowComponents = new IComponent[Signature.Count];
+        var index = 0;
         foreach (var type in Signature)
         {
-            if (!components.TryGetValue(type, out var component))
+            if (!components.TryGetValue(type, out var component) || component is null || !type.IsInstanceOfType(component))
             {
-                throw new InvalidOperationException($"Missing component {type.Name}.");
+                throw new InvalidOperationException($"Missing or invalid component {type.Name}.");
             }
 
-            _columns[type].AddBoxed(component);
+            rowComponents[index++] = component;
+        }
+
+        var row = _entities.Count;
+        _entities.Add(entity);
+        index = 0;
+        foreach (var type in Signature)
+        {
+            _columns[type].AddBoxed(rowComponents[index++]);
         }
 
         return row;

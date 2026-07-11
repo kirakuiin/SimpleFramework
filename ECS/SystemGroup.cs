@@ -70,6 +70,7 @@ public sealed class SystemGroup
     /// <summary>
     /// 按顺序更新全部系统。
     /// </summary>
+    /// <exception cref="InvalidOperationException">系统依赖成环，或当前系统组正在更新。</exception>
     public void Update()
     {
         UpdateCore(system => system.Update());
@@ -79,6 +80,7 @@ public sealed class SystemGroup
     /// 按顺序使用帧间隔时间更新全部系统。
     /// </summary>
     /// <param name="deltaTime">距离上次更新经过的时间。</param>
+    /// <exception cref="InvalidOperationException">系统依赖成环，或当前系统组正在更新。</exception>
     public void Update(float deltaTime)
     {
         UpdateCore(system => system.Update(deltaTime));
@@ -86,6 +88,11 @@ public sealed class SystemGroup
 
     private void UpdateCore(Action<EcsSystem> update)
     {
+        if (_isUpdating)
+        {
+            throw new InvalidOperationException("System group is already updating and cannot be updated reentrantly.");
+        }
+
         _isUpdating = true;
         try
         {
