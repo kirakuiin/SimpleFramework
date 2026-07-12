@@ -954,6 +954,6 @@ git status --short
 
 Expected: commit succeeds and the working tree is clean.
 
-- [ ] **Step 6: Run the completion audit after the final commit**
+- [x] **Step 6: Run the completion audit after the final commit**
 
 Repeat the full commands from Step 4 against the committed tree, inspect `git log --oneline 61a02f5..HEAD`, and mark the goal complete only when every approved design condition has authoritative evidence and no required work remains.

@@ -35,13 +35,13 @@
 | Round 4 ECS | `round-4-ecs.md`：World/Archetype/Query/CommandBuffer/Prefab/SystemGroup/TypeSignature；唯一 Critical stack-overflow 路径已修复并回归 | 覆盖完整。 |
 | Round 5 Net | `round-5-net.md`：传输、会话、消息、发现、flow、stats、异常/取消/资源/并发及热点；安全明确排除 | 覆盖完整。 |
 | Round 6 Cross-cutting | `round-6-cross-cutting.md` + public/test inventories；75 个 production C#、40 个 test C#、10 个 csproj 与指定文档均审查 | 覆盖完整。 |
-| Round 7 独立复审与发布验证 | Step 1 独立 reviewer 复审 `10bf96f`：Critical/Important/Minor 均无；`Ready to ship/merge: Yes`；本记录逐要求复核并运行 fresh gates | 覆盖完整；Step 6 留给提交后的独立 closure。 |
+| Round 7 独立复审与发布验证 | Step 1 独立 reviewer 复审 `10bf96f`：Critical/Important/Minor 均无；`Ready to ship/merge: Yes`；本记录逐要求复核并运行 fresh gates；独立 closure 在 `c5d3744` 的 committed tree 上重复全部门禁和历史审计 | 覆盖完整；Step 1–6 均有直接证据。 |
 | 测试策略 | 每轮记录含 RED/GREEN、相关 fixture、全量 Debug、Release 与 source-quality；最终修复新增 11/11、相关 fixture 240/240；本轮 fresh Debug 763/763 | 满足；并发/异步修复使用 gate、token、manual time，不以 sleep 作为证明。 |
 | 公共 API 与中文 XML | public inventory 当前 source/ledger `1061/1061`、唯一定位 `1061`、差异 `0`；最终 typed-send 六个 API 行标记“最终复核修正”；source-quality 1/1 | 满足；变更 API 有中文参数、返回、取消/异常合同和行为测试。 |
 | 测试精简不降保护 | test inventory tracked/ledger `40/40`、差异 `0`；Round 6 删除 0 项；Round 7 新增 11 项并同步 late-flow 既有测试 | 满足。 |
 | 性能与热点 | Round 3 移除 dispatch 临时列表；Round 5 TCP prefix 测量 `32,000,024 -> 24 B`；Round 7 inbound Kind probe 同线程预热 16 个 256 KiB packet 为 `4,206,080 -> 0 B`；ECS 保留装箱迁移有明确轻量/readability 理由 | 满足；无尚可通过小改消除的已知明显浪费。 |
 | Critical/Important/Minor 处置 | Round 1–6 各记录的 findings/independent review 均列明修复或 retained 理由；最终 3 Important + 2 Minor 均在 `10bf96f` 修复；最终复审三类均为 0 | 无未关闭项；没有无理由拒绝或延期的反馈。 |
-| 完成条件与可回溯提交 | `git log --reverse 61a02f5..10bf96f` 共 27 项，按轮次与 feedback commit 清晰分组；fresh Debug/Release/source-quality/whitespace gates 全绿 | Step 1–5 达成；Step 6 有意保持未完成。 |
+| 完成条件与可回溯提交 | 独立 closure 完整读取 `git log --reverse 61a02f5..c5d3744` 共 29 项；各轮实现、feedback、发布审计与 Round 6 格式修正均可独立回溯；committed tree 的 Debug/Release/source-quality/GDExt/allocation/inventory/whitespace gates 全绿 | Step 1–6 全部达成。 |
 
 范围边界复核：`git diff --name-status 61a02f5..10bf96f` 没有 rename；没有 `.csproj` 变更或第三方运行时依赖新增；没有跨项目源文件移动、程序集边界改变、架构/ECS/协议体系重写。Net 只处理正确性、取消、生命周期、并发、异常和实际热点，未加入认证、加密、抗攻击或平台压力测试。本轮所称“不在范围”是批准设计的边界，不作为残余发布风险描述。
 
@@ -56,7 +56,7 @@
 
 ## Changes
 
-- 新建本发布审计记录，并将计划 Task 7 Step 1–5 标记完成；Step 6“final commit 后重复门禁”保持未勾选，明确交由独立 closure 在本提交之后执行。
+- 新建本发布审计记录，并由独立 closure 在发布审计提交及 Round 6 记录格式修正提交之后完成 Task 7 Step 6；本次同步其 committed-tree 证据并将 Step 6 标记完成。
 - 未改生产代码、测试代码、项目文件或依赖；未移动文件，未扩大网络安全范围。
 
 ## Verification
@@ -78,8 +78,27 @@
 
 `10bf96f` 提交前的修复证据还包括：新增 11/11、相关 `NetDiscoveryStatsTests|NetMessagingTests|NetSessionTests|NetFlowTests` 240/240、GDExt focused Release 0 warning/0 error，以及 allocation RED `4,206,080 B` → GREEN `0 B`。这些结果与本轮 fresh 全量/专项结果一致。
 
+独立 post-commit closure 从干净的 `c5d3744d37977f4785589c2ce1f85f10990902e2` 开始；该提交只将 Round 6 主记录重排为计划规定的六个固定章节，没有改生产、测试、项目或依赖文件。以下命令均在该 committed tree 上 fresh 运行且退出码为 0：
+
+| Closure 命令 | 完整结果摘要 |
+| --- | --- |
+| `dotnet restore .\SimpleFramework.sln` | 所有项目均为最新；restore 成功。 |
+| `dotnet test .\SimpleFramework.sln --no-restore --configuration Debug` | 失败 0，通过 763，跳过 0，总计 763。 |
+| `dotnet build .\SimpleFramework.sln --no-restore --configuration Release` | solution 全项目成功；0 warning，0 error。 |
+| `dotnet test .\Test\Test.csproj --no-build --configuration Debug --filter "FullyQualifiedName~TestSourceTextQuality"` | 失败 0，通过 1，跳过 0，总计 1。 |
+| `dotnet msbuild .\GDExt\GDExt.csproj -getProperty:DefineConstants -p:Configuration=Release` | `GODOT;RELEASE;NET;NET8_0;NETCOREAPP`。 |
+| `dotnet build .\GDExt\GDExt.csproj --no-restore --configuration Release` | 成功；0 warning，0 error。 |
+| `dotnet test .\Test\Test.csproj --no-build --configuration Debug --filter "FullyQualifiedName~InboundKindProbe_LargePayloadAvoidsFullEnvelopeAllocation" --logger "console;verbosity=detailed"` | 1/1；标准输出 `Warmed kind probe allocation: 0 bytes for 16 large packets.` |
+| public ledger reconciliation | source 1,061；source unique 1,061；ledger 1,061；ledger unique 1,061；diff 0。 |
+| test ledger reconciliation | tracked 40；tracked unique 40；ledger 40；ledger unique 40；diff 0。 |
+| 七轮主记录格式审计 | 7/7 H1 正确；每份均含按顺序排列的六个固定章节；唯一未勾选项是执行中的 Task 7 Step 6。 |
+| `git diff --check 61a02f5..HEAD` 与 `git status --short` | 均无输出；历史差异无 whitespace 错误，工作树干净。 |
+| `git log --reverse --format='%h %s' 61a02f5..HEAD` | 完整读取 29 个提交；无 rename、无项目/依赖文件变化，七轮记录齐全，源码中无 `TODO`、`FIXME` 或 `NotImplementedException`。 |
+
+逐项 completion audit 结论：批准设计的七轮范围、中文公共 API、关键回归、现代清晰语法、实际热点、Net 非安全边界、非颠覆性项目范围、独立复审及可回溯提交均有权威证据；没有未关闭的 Critical、Important 或 Minor 反馈，也没有需要继续修改的生产或测试问题。
+
 ## Independent Review
 
 - Task 7 Step 1 的独立全库 reviewer 使用基线 `61a02f5` 并复审最终修复提交 `10bf96f`，要求 file:line 证据与 merge-readiness 判断；结果：Critical、Important、Minor 均无，`Ready to ship/merge: Yes`。
 - 本次发布审计逐条复核 reviewer disposition、六轮记录、两份 inventory、批准设计与完整提交历史，没有发现证据缺失、新回归或范围越界。
-- 上线结论：`10bf96f` 上的 pre-commit release readiness 条件满足，可进入发布/合并 closure。Task 7 Step 6 仍未执行、未勾选；独立 closure 必须在本审计提交之后重复 Step 4 全部门禁、检查最终 `git log` 并确认 committed tree 洁净，之后方可宣告整个 Task 7 完成。
+- 上线结论：独立 closure 已在 `c5d3744` 的 committed tree 上重复全部发布门禁、inventory、记录格式、范围与历史审计，Task 7 Step 6 完成；当前证据支持进入发布或合并流程。
