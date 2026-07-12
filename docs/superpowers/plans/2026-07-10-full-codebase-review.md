@@ -919,19 +919,19 @@ Expected: the complete suite and source-quality test pass, Release has zero warn
 
 - [x] Replace the fixed delay in `Flow_LateResponseAfterCompletion_IsIgnored` with a condition-based wait until server diagnostics prove the late response was processed; then assert the completed result remains unchanged and `PendingFlowIds` remains empty. Run the exact test and the complete `NetFlowTests` fixture.
 
-- [ ] **Step 1: Request a full-range independent review**
+- [x] **Step 1: Request a full-range independent review**
 
 Use `superpowers:requesting-code-review` with base `61a02f5`, current HEAD, the approved design, AGENTS.md constraints, and explicit instructions to inspect the entire repository rather than only changed files. Require file:line evidence for every issue and a merge-readiness verdict.
 
-- [ ] **Step 2: Reconcile every requirement and finding**
+- [x] **Step 2: Reconcile every requirement and finding**
 
 Read all round records and reviewer output. Confirm every design requirement has direct evidence, every Critical/Important item is repaired, every accepted Minor item improves clarity or size, every rejected item has technical reasoning, and all public API changes have Chinese XML docs and tests.
 
-- [ ] **Step 3: Inspect final performance and scope boundaries**
+- [x] **Step 3: Inspect final performance and scope boundaries**
 
 Confirm major hot paths were inspected for avoidable allocation, copying, computation, and lock contention; confirm any small justified fixes are present; confirm no network-security expansion, architecture rewrite, unrelated dependency, or unnecessary file move entered the branch.
 
-- [ ] **Step 4: Run fresh release gates**
+- [x] **Step 4: Run fresh release gates**
 
 ```powershell
 dotnet restore .\SimpleFramework.sln
@@ -944,7 +944,7 @@ git status --short
 
 Expected: restore succeeds; all tests pass with zero failures; Release builds with zero warnings/errors; source-quality passes; Git reports no whitespace errors; only the final release record is uncommitted before Step 5.
 
-- [ ] **Step 5: Commit the final audit record**
+- [x] **Step 5: Commit the final audit record**
 
 ```powershell
 git add -- docs/superpowers/reviews/2026-07-10-round-7-release.md docs/superpowers/plans/2026-07-10-full-codebase-review.md
