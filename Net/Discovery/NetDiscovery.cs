@@ -264,9 +264,16 @@ public sealed class LanBrowser<TMetadata> : IAsyncDisposable
     /// <summary>
     /// 执行一次浏览刷新并触发对应事件。
     /// </summary>
+    /// <remarks>浏览器或所属发现组件释放所触发的内部取消会使当前刷新正常结束。</remarks>
     public async Task RefreshAsync()
     {
-        await RefreshAsync(_refreshCancellation.Token).ConfigureAwait(false);
+        try
+        {
+            await RefreshAsync(_refreshCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_refreshCancellation.IsCancellationRequested)
+        {
+        }
     }
 
     private async Task RefreshAsync(CancellationToken token)
@@ -527,14 +534,21 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly TimeProvider _timeProvider;
+    private readonly Action? _receiveStarted;
     private int _disposed;
     private int _activeScans;
     private Task? _disposeTask;
     private TaskCompletionSource? _scansDrained;
 
     public UdpDiscoveryNetwork(TimeProvider? timeProvider = null)
+        : this(timeProvider ?? TimeProvider.System, null)
     {
-        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    internal UdpDiscoveryNetwork(TimeProvider timeProvider, Action? receiveStarted)
+    {
+        _timeProvider = timeProvider;
+        _receiveStarted = receiveStarted;
     }
 
     public async Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, CancellationToken token = default)
@@ -673,6 +687,7 @@ public sealed class UdpDiscoveryNetwork : IDiscoveryBackend
             UdpReceiveResult received;
             try
             {
+                _receiveStarted?.Invoke();
                 received = await client.ReceiveAsync(linkedTimeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -971,7 +986,12 @@ public sealed class NetDiscovery : IAsyncDisposable
         if (duration <= TimeSpan.Zero)
             return Array.Empty<LanScanResult<TMetadata>>();
         var results = new List<LanScanResult<TMetadata>>();
-        foreach (var packet in await _backend.ScanAsync(duration, _options.Discovery, linkedCancellation.Token).ConfigureAwait(false))
+        var packets = await _backend.ScanAsync(
+            duration,
+            _options.Discovery,
+            linkedCancellation.Token).ConfigureAwait(false);
+        linkedCancellation.Token.ThrowIfCancellationRequested();
+        foreach (var packet in packets)
         {
             if (packet.Magic != DiscoveryPacket.ExpectedMagic ||
                 packet.PacketVersion != DiscoveryPacket.CurrentPacketVersion)

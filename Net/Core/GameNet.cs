@@ -180,11 +180,17 @@ public sealed class GameNet : IAsyncDisposable
     /// </summary>
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="message">要发送的消息。</param>
-    public ValueTask<NetSendResult> SendToServerAsync<T>(T message)
+    /// <param name="channel">发送通道；默认为可靠通道。</param>
+    /// <param name="token">取消标记；取消映射为 <see cref="NetSendStatus.TransportFailed"/>。</param>
+    /// <returns>结构化发送结果。</returns>
+    public ValueTask<NetSendResult> SendToServerAsync<T>(
+        T message,
+        NetChannel channel = NetChannel.Reliable,
+        CancellationToken token = default)
     {
         return IsDisposed
             ? ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
-            : Messages.SendToServerAsync(message);
+            : Messages.SendToServerAsync(message, channel, token);
     }
 
     /// <summary>
@@ -193,23 +199,36 @@ public sealed class GameNet : IAsyncDisposable
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="peerId">目标对等体。</param>
     /// <param name="message">要发送的消息。</param>
-    public ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
+    /// <param name="channel">发送通道；默认为可靠通道。</param>
+    /// <param name="token">取消标记；取消映射为 <see cref="NetSendStatus.TransportFailed"/>。</param>
+    /// <returns>结构化发送结果。</returns>
+    public ValueTask<NetSendResult> SendAsync<T>(
+        PeerId peerId,
+        T message,
+        NetChannel channel = NetChannel.Reliable,
+        CancellationToken token = default)
     {
         return IsDisposed
             ? ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
-            : Messages.SendAsync(peerId, message);
+            : Messages.SendAsync(peerId, message, channel, token);
     }
 
     /// <summary>
-    /// 从服务器向所有远端对等体广播类型化消息；单个目标失败不会阻止后续发送，结果返回首个失败。
+    /// 从服务器向所有远端对等体广播类型化消息；非取消失败不会阻止后续发送，结果返回首个失败。
     /// </summary>
     /// <typeparam name="T">消息类型。</typeparam>
     /// <param name="message">要广播的消息。</param>
-    public ValueTask<NetSendResult> BroadcastAsync<T>(T message)
+    /// <param name="channel">发送通道；默认为可靠通道。</param>
+    /// <param name="token">取消标记；取消后停止尝试后续目标并返回结构化失败。</param>
+    /// <returns>结构化发送结果。</returns>
+    public ValueTask<NetSendResult> BroadcastAsync<T>(
+        T message,
+        NetChannel channel = NetChannel.Reliable,
+        CancellationToken token = default)
     {
         return IsDisposed
             ? ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed))
-            : Messages.BroadcastAsync(message);
+            : Messages.BroadcastAsync(message, channel, token);
     }
 
     /// <summary>
@@ -957,7 +976,37 @@ public sealed class GameNet : IAsyncDisposable
     {
         try
         {
-            return JsonSerializer.Deserialize<NetPacket>(data)?.Kind;
+            var reader = new Utf8JsonReader(data);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return null;
+
+            string? kind = null;
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName ||
+                    reader.CurrentDepth != 1 ||
+                    !reader.ValueTextEquals("Kind"u8))
+                {
+                    continue;
+                }
+
+                if (!reader.Read() || reader.TokenType != JsonTokenType.String)
+                    return null;
+
+                kind = reader.ValueTextEquals(NetPacket.Message)
+                    ? NetPacket.Message
+                    : reader.ValueTextEquals(NetPacket.Request)
+                        ? NetPacket.Request
+                        : reader.ValueTextEquals(NetPacket.Response)
+                            ? NetPacket.Response
+                            : reader.ValueTextEquals(NetPacket.Relay)
+                                ? NetPacket.Relay
+                                : reader.ValueTextEquals(NetPacket.RelayResult)
+                                    ? NetPacket.RelayResult
+                                    : reader.GetString();
+            }
+
+            return kind;
         }
         catch (JsonException)
         {
@@ -1846,17 +1895,24 @@ public sealed class GameNet : IAsyncDisposable
         return await SendTransportAsync(connectionId, payload, NetChannel.System).ConfigureAwait(false);
     }
 
-    private ValueTask<NetSendResult> SendToServerPacketAsync(byte[] packet, CancellationToken token)
+    private ValueTask<NetSendResult> SendToServerPacketAsync(
+        byte[] packet,
+        NetChannel channel,
+        CancellationToken token)
     {
         if (IsDisposed)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
         if (_transport is null || _serverConnectionId == TransportConnectionId.None)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.SessionClosed));
 
-        return SendTransportAsync(_serverConnectionId, packet, NetChannel.Reliable, token, recordFailure: false);
+        return SendTransportAsync(_serverConnectionId, packet, channel, token, recordFailure: false);
     }
 
-    private ValueTask<NetSendResult> SendToPeerPacketAsync(PeerId peerId, byte[] packet, CancellationToken token)
+    private ValueTask<NetSendResult> SendToPeerPacketAsync(
+        PeerId peerId,
+        byte[] packet,
+        NetChannel channel,
+        CancellationToken token)
     {
         if (IsDisposed)
             return ValueTask.FromResult(new NetSendResult(NetSendStatus.ObjectDisposed));
@@ -1870,7 +1926,7 @@ public sealed class GameNet : IAsyncDisposable
                 return ValueTask.FromResult(new NetSendResult(NetSendStatus.PeerUnavailable));
         }
 
-        return SendTransportAsync(connectionId, packet, NetChannel.Reliable, token, recordFailure: false);
+        return SendTransportAsync(connectionId, packet, channel, token, recordFailure: false);
     }
 
     private IReadOnlyCollection<PeerId> GetBroadcastTargets()

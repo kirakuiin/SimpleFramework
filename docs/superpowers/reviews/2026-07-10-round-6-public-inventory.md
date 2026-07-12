@@ -10,6 +10,7 @@ rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj
 
 - **已核验**：签名、命名、空值/异常、所有权或模块边界与现有契约一致，无需修改。
 - **本轮修正**：Round 6 实际修改了该 public API 的签名或直接契约。
+- **最终复核修正**：Round 7 最终复核修改了该 public API 的签名或直接契约，并已重跑相关行为测试。
 - **保留**：识别到可讨论的旧命名或可变视图，但因兼容性或已实现接口契约明确不改。
 
 ## 理由代码
@@ -723,19 +724,19 @@ rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj
 | `Net/Core/GameNet.cs:161` | `public void On<T>(Func<NetContext, T, Task> handler) => Messages.On(handler);` | 已核验 | R08+R06 |
 | `Net/Core/GameNet.cs:169` | `public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, TResponse> handler) =>` | 已核验 | R08 |
 | `Net/Core/GameNet.cs:175` | `public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, Task<TResponse>> handler) =>` | 已核验 | R08+R06 |
-| `Net/Core/GameNet.cs:183` | `public ValueTask<NetSendResult> SendToServerAsync<T>(T message)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:196` | `public ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:208` | `public ValueTask<NetSendResult> BroadcastAsync<T>(T message)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:224` | `public Task<NetRequestResult<TResponse>> RequestAsync<TRequest, TResponse>(` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:243` | `public Task<NetSendResult> RelayAsync<T>(` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:259` | `public Task<NetSessionResult> HostAsync(HostOptions options, CancellationToken token = default)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:269` | `public Task<NetSessionResult> StartServerAsync(HostOptions options, CancellationToken token = default)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:280` | `public async Task<JoinResult> JoinAsync(JoinOptions options, CancellationToken token = default)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:497` | `public async Task<NetSessionResult> LeaveAsync(CancellationToken token = default)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:508` | `public async Task<NetSessionResult> KickAsync(PeerId peerId, DisconnectReason reason = DisconnectReason.Kicked)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:540` | `public async Task<NetSessionResult> StopAsync(CancellationToken token = default)` | 已核验 | R08+R06+R10 |
-| `Net/Core/GameNet.cs:619` | `public ValueTask DisposeAsync()` | 已核验 | R08+R06+R02 |
-| `Net/Core/GameNet.cs:694` | `public static void ValidateOptions(GameNetOptions options)` | 已核验 | R08+R10 |
+| `Net/Core/GameNet.cs:186` | `public ValueTask<NetSendResult> SendToServerAsync<T>(` | 最终复核修正 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:205` | `public ValueTask<NetSendResult> SendAsync<T>(` | 最终复核修正 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:224` | `public ValueTask<NetSendResult> BroadcastAsync<T>(` | 最终复核修正 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:243` | `public Task<NetRequestResult<TResponse>> RequestAsync<TRequest, TResponse>(` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:262` | `public Task<NetSendResult> RelayAsync<T>(` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:278` | `public Task<NetSessionResult> HostAsync(HostOptions options, CancellationToken token = default)` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:288` | `public Task<NetSessionResult> StartServerAsync(HostOptions options, CancellationToken token = default)` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:299` | `public async Task<JoinResult> JoinAsync(JoinOptions options, CancellationToken token = default)` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:516` | `public async Task<NetSessionResult> LeaveAsync(CancellationToken token = default)` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:527` | `public async Task<NetSessionResult> KickAsync(PeerId peerId, DisconnectReason reason = DisconnectReason.Kicked)` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:559` | `public async Task<NetSessionResult> StopAsync(CancellationToken token = default)` | 已核验 | R08+R06+R10 |
+| `Net/Core/GameNet.cs:638` | `public ValueTask DisposeAsync()` | 已核验 | R08+R06+R02 |
+| `Net/Core/GameNet.cs:713` | `public static void ValidateOptions(GameNetOptions options)` | 已核验 | R08+R10 |
 | `Net/Core/INetEventDispatcher.cs:6` | `public interface INetEventDispatcher` | 已核验 | R08 |
 | `Net/Core/NetChannel.cs:6` | `public enum NetChannel` | 已核验 | R08+R10 |
 | `Net/Core/NetResults.cs:6` | `public enum NetSendStatus` | 已核验 | R08+R10 |
@@ -815,42 +816,42 @@ rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj
 | `Net/Discovery/NetDiscovery.cs:252` | `public event Action<LanScanResult<TMetadata>>? RoomUpdated;` | 已核验 | R09+R02+R10 |
 | `Net/Discovery/NetDiscovery.cs:257` | `public event Action<LanScanResult<TMetadata>>? RoomLost;` | 已核验 | R09+R02+R10 |
 | `Net/Discovery/NetDiscovery.cs:262` | `public LanBrowserSnapshot<TMetadata> Snapshot { get; private set; }` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:267` | `public async Task RefreshAsync()` | 已核验 | R09+R06 |
-| `Net/Discovery/NetDiscovery.cs:320` | `public ValueTask DisposeAsync()` | 已核验 | R09+R06+R02 |
-| `Net/Discovery/NetDiscovery.cs:404` | `public sealed class DiscoveryMetadataRegistry` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:413` | `public DiscoveryMetadataDescriptor Register<TMetadata>(string schemaKey)` | 已核验 | R09+R13 |
-| `Net/Discovery/NetDiscovery.cs:435` | `public static uint GetSchemaId(string schemaKey)` | 已核验 | R09+R13 |
-| `Net/Discovery/NetDiscovery.cs:459` | `public sealed record DiscoveryMetadataDescriptor(Type MetadataType, string SchemaKey, uint SchemaId);` | 已核验 | R09+R10 |
-| `Net/Discovery/NetDiscovery.cs:464` | `public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:469` | `public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, Cancell...` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:482` | `public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, Can...` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:496` | `public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)` | 已核验 | R09+R06 |
-| `Net/Discovery/NetDiscovery.cs:507` | `public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToke...` | 已核验 | R09+R06+R03+R10 |
-| `Net/Discovery/NetDiscovery.cs:516` | `public ValueTask DisposeAsync() => ValueTask.CompletedTask;` | 已核验 | R09+R06+R02 |
-| `Net/Discovery/NetDiscovery.cs:522` | `public sealed class UdpDiscoveryNetwork : IDiscoveryBackend` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:535` | `public UdpDiscoveryNetwork(TimeProvider? timeProvider = null)` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:540` | `public async Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, C...` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:562` | `public async Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions option...` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:582` | `public async Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)` | 已核验 | R09+R06 |
-| `Net/Discovery/NetDiscovery.cs:623` | `public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToke...` | 已核验 | R09+R06+R03+R10 |
-| `Net/Discovery/NetDiscovery.cs:707` | `public ValueTask DisposeAsync()` | 已核验 | R09+R06+R02 |
-| `Net/Discovery/NetDiscovery.cs:790` | `public sealed class NetDiscovery : IAsyncDisposable` | 已核验 | R09+R06 |
-| `Net/Discovery/NetDiscovery.cs:809` | `public NetDiscovery(GameNetOptions options)` | 已核验 | R09+R10 |
-| `Net/Discovery/NetDiscovery.cs:817` | `public NetDiscovery(GameNetOptions options, IDiscoveryBackend backend, NetDiagnostics? diagnostics = null)` | 已核验 | R09+R10 |
-| `Net/Discovery/NetDiscovery.cs:831` | `public NetDiagnostics Diagnostics { get; }` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:836` | `public async Task<NetSessionResult> StartAdvertiseAsync<TMetadata>(LanAdvertiseInfo info, TMetadata metadata)` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:872` | `public async Task<NetSessionResult> UpdateAdvertiseMetadataAsync<TMetadata>(TMetadata metadata)` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:903` | `public async Task<NetSessionResult> StopAdvertiseAsync()` | 已核验 | R09+R06+R10 |
-| `Net/Discovery/NetDiscovery.cs:938` | `public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(` | 本轮修正 | R09+R06+R03+R10 |
-| `Net/Discovery/NetDiscovery.cs:954` | `public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(` | 本轮修正 | R09+R06+R03+R10 |
-| `Net/Discovery/NetDiscovery.cs:1050` | `public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>()` | 已核验 | R09+R06 |
-| `Net/Discovery/NetDiscovery.cs:1058` | `public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>(uint metadataSchemaId)` | 已核验 | R09+R06 |
-| `Net/Discovery/NetDiscovery.cs:1077` | `public ValueTask DisposeAsync()` | 已核验 | R09+R06+R02 |
-| `Net/Discovery/NetDiscovery.cs:1350` | `public sealed record DiscoveryPacket(` | 已核验 | R09+R10 |
-| `Net/Discovery/NetDiscovery.cs:1362` | `public const uint ExpectedMagic = 0x53464E44;` | 已核验 | R09+R10 |
-| `Net/Discovery/NetDiscovery.cs:1365` | `public const ushort CurrentPacketVersion = 1;` | 已核验 | R09+R10 |
-| `Net/Discovery/NetDiscovery.cs:1369` | `public IPEndPoint? RemoteEndPoint { get; init; }` | 已核验 | R09 |
-| `Net/Discovery/NetDiscovery.cs:1373` | `public TimeSpan? EstimatedLatency { get; init; }` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:268` | `public async Task RefreshAsync()` | 最终复核修正 | R09+R06 |
+| `Net/Discovery/NetDiscovery.cs:327` | `public ValueTask DisposeAsync()` | 已核验 | R09+R06+R02 |
+| `Net/Discovery/NetDiscovery.cs:411` | `public sealed class DiscoveryMetadataRegistry` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:420` | `public DiscoveryMetadataDescriptor Register<TMetadata>(string schemaKey)` | 已核验 | R09+R13 |
+| `Net/Discovery/NetDiscovery.cs:442` | `public static uint GetSchemaId(string schemaKey)` | 已核验 | R09+R13 |
+| `Net/Discovery/NetDiscovery.cs:466` | `public sealed record DiscoveryMetadataDescriptor(Type MetadataType, string SchemaKey, uint SchemaId);` | 已核验 | R09+R10 |
+| `Net/Discovery/NetDiscovery.cs:471` | `public sealed class MemoryDiscoveryNetwork : IDiscoveryBackend` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:476` | `public Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, Cancell...` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:489` | `public Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions options, Can...` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:503` | `public Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)` | 已核验 | R09+R06 |
+| `Net/Discovery/NetDiscovery.cs:514` | `public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToke...` | 已核验 | R09+R06+R03+R10 |
+| `Net/Discovery/NetDiscovery.cs:523` | `public ValueTask DisposeAsync() => ValueTask.CompletedTask;` | 已核验 | R09+R06+R02 |
+| `Net/Discovery/NetDiscovery.cs:529` | `public sealed class UdpDiscoveryNetwork : IDiscoveryBackend` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:543` | `public UdpDiscoveryNetwork(TimeProvider? timeProvider = null)` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:554` | `public async Task<DiscoveryAdvertisementId> StartAdvertiseAsync(DiscoveryPacket packet, DiscoveryOptions options, C...` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:576` | `public async Task UpdateAdvertiseAsync(DiscoveryAdvertisementId id, DiscoveryPacket packet, DiscoveryOptions option...` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:596` | `public async Task StopAdvertiseAsync(DiscoveryAdvertisementId id, CancellationToken token = default)` | 已核验 | R09+R06 |
+| `Net/Discovery/NetDiscovery.cs:637` | `public Task<IReadOnlyList<DiscoveryPacket>> ScanAsync(TimeSpan duration, DiscoveryOptions options, CancellationToke...` | 已核验 | R09+R06+R03+R10 |
+| `Net/Discovery/NetDiscovery.cs:722` | `public ValueTask DisposeAsync()` | 已核验 | R09+R06+R02 |
+| `Net/Discovery/NetDiscovery.cs:805` | `public sealed class NetDiscovery : IAsyncDisposable` | 已核验 | R09+R06 |
+| `Net/Discovery/NetDiscovery.cs:824` | `public NetDiscovery(GameNetOptions options)` | 已核验 | R09+R10 |
+| `Net/Discovery/NetDiscovery.cs:832` | `public NetDiscovery(GameNetOptions options, IDiscoveryBackend backend, NetDiagnostics? diagnostics = null)` | 已核验 | R09+R10 |
+| `Net/Discovery/NetDiscovery.cs:846` | `public NetDiagnostics Diagnostics { get; }` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:851` | `public async Task<NetSessionResult> StartAdvertiseAsync<TMetadata>(LanAdvertiseInfo info, TMetadata metadata)` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:887` | `public async Task<NetSessionResult> UpdateAdvertiseMetadataAsync<TMetadata>(TMetadata metadata)` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:918` | `public async Task<NetSessionResult> StopAdvertiseAsync()` | 已核验 | R09+R06+R10 |
+| `Net/Discovery/NetDiscovery.cs:953` | `public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(` | 本轮修正 | R09+R06+R03+R10 |
+| `Net/Discovery/NetDiscovery.cs:969` | `public Task<IReadOnlyList<LanScanResult<TMetadata>>> ScanAsync<TMetadata>(` | 本轮修正 | R09+R06+R03+R10 |
+| `Net/Discovery/NetDiscovery.cs:1070` | `public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>()` | 已核验 | R09+R06 |
+| `Net/Discovery/NetDiscovery.cs:1078` | `public Task<LanBrowser<TMetadata>> StartBrowserAsync<TMetadata>(uint metadataSchemaId)` | 已核验 | R09+R06 |
+| `Net/Discovery/NetDiscovery.cs:1097` | `public ValueTask DisposeAsync()` | 已核验 | R09+R06+R02 |
+| `Net/Discovery/NetDiscovery.cs:1370` | `public sealed record DiscoveryPacket(` | 已核验 | R09+R10 |
+| `Net/Discovery/NetDiscovery.cs:1382` | `public const uint ExpectedMagic = 0x53464E44;` | 已核验 | R09+R10 |
+| `Net/Discovery/NetDiscovery.cs:1385` | `public const ushort CurrentPacketVersion = 1;` | 已核验 | R09+R10 |
+| `Net/Discovery/NetDiscovery.cs:1389` | `public IPEndPoint? RemoteEndPoint { get; init; }` | 已核验 | R09 |
+| `Net/Discovery/NetDiscovery.cs:1393` | `public TimeSpan? EstimatedLatency { get; init; }` | 已核验 | R09 |
 | `Net/Flow/NetFlow.cs:9` | `public sealed class FlowPolicy` | 已核验 | R08 |
 | `Net/Flow/NetFlow.cs:26` | `public string Mode { get; }` | 已核验 | R08 |
 | `Net/Flow/NetFlow.cs:31` | `public int Count { get; }` | 已核验 | R08+R03 |
@@ -946,21 +947,21 @@ rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj
 | `Net/Messaging/NetMessenger.cs:135` | `public void OnRequest<TRequest, TResponse>(Func<NetContext, TRequest, Task<TResponse>> handler)` | 已核验 | R08+R06 |
 | `Net/Messaging/NetMessenger.cs:161` | `public void RegisterAssemblyHandlers(Assembly assembly, object? target = null, Func<Type, object>? targetFactory = ...` | 已核验 | R08+R13 |
 | `Net/Messaging/NetMessenger.cs:311` | `public void AllowRelay<T>(Func<NetRelayContext, T, bool> policy)` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:350` | `public async ValueTask<NetSendResult> SendToServerAsync<T>(T message)` | 已核验 | R08+R06+R10 |
-| `Net/Messaging/NetMessenger.cs:366` | `public async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)` | 已核验 | R08+R06+R10 |
-| `Net/Messaging/NetMessenger.cs:387` | `public async ValueTask<NetSendResult> BroadcastAsync<T>(T message)` | 已核验 | R08+R06+R10 |
-| `Net/Messaging/NetMessenger.cs:412` | `public async Task<NetSendResult> RelayAsync<T>(` | 已核验 | R08+R06+R10 |
-| `Net/Messaging/NetMessenger.cs:489` | `public async Task<NetRequestResult<TResponse>> RequestAsync<TRequest, TResponse>(` | 已核验 | R08+R06+R10 |
-| `Net/Messaging/NetMessenger.cs:1335` | `public ProtocolManifestReservation(` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1345` | `public void Commit()` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1353` | `public void Dispose()` | 已核验 | R08+R02 |
-| `Net/Messaging/NetMessenger.cs:1364` | `public int InFlightPackets { get; set; }` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1365` | `public int InFlightBytes { get; set; }` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1366` | `public DateTimeOffset WindowStartedAt { get; set; }` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1367` | `public int SentInWindow { get; set; }` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1372` | `public PeerId PeerId { get; } = peerId;` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1373` | `public ulong ResponseMessageId { get; } = responseMessageId;` | 已核验 | R08 |
-| `Net/Messaging/NetMessenger.cs:1375` | `public TaskCompletionSource<PendingResponse> Completion { get; } =` | 已核验 | R08+R06 |
+| `Net/Messaging/NetMessenger.cs:355` | `public async ValueTask<NetSendResult> SendToServerAsync<T>(` | 最终复核修正 | R08+R06+R10 |
+| `Net/Messaging/NetMessenger.cs:380` | `public async ValueTask<NetSendResult> SendAsync<T>(` | 最终复核修正 | R08+R06+R10 |
+| `Net/Messaging/NetMessenger.cs:414` | `public async ValueTask<NetSendResult> BroadcastAsync<T>(` | 最终复核修正 | R08+R06+R10 |
+| `Net/Messaging/NetMessenger.cs:452` | `public async Task<NetSendResult> RelayAsync<T>(` | 已核验 | R08+R06+R10 |
+| `Net/Messaging/NetMessenger.cs:529` | `public async Task<NetRequestResult<TResponse>> RequestAsync<TRequest, TResponse>(` | 已核验 | R08+R06+R10 |
+| `Net/Messaging/NetMessenger.cs:1384` | `public ProtocolManifestReservation(` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1394` | `public void Commit()` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1402` | `public void Dispose()` | 已核验 | R08+R02 |
+| `Net/Messaging/NetMessenger.cs:1413` | `public int InFlightPackets { get; set; }` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1414` | `public int InFlightBytes { get; set; }` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1415` | `public DateTimeOffset WindowStartedAt { get; set; }` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1416` | `public int SentInWindow { get; set; }` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1421` | `public PeerId PeerId { get; } = peerId;` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1422` | `public ulong ResponseMessageId { get; } = responseMessageId;` | 已核验 | R08 |
+| `Net/Messaging/NetMessenger.cs:1424` | `public TaskCompletionSource<PendingResponse> Completion { get; } =` | 已核验 | R08+R06 |
 | `Net/Session/SessionPackets.cs:16` | `public const string JoinRequest = "session.join.request";` | 已核验 | R08+R10 |
 | `Net/Session/SessionPackets.cs:17` | `public const string JoinAccepted = "session.join.accepted";` | 已核验 | R08+R10 |
 | `Net/Session/SessionPackets.cs:18` | `public const string JoinRejected = "session.join.rejected";` | 已核验 | R08+R10 |
@@ -1045,21 +1046,21 @@ rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj
 | `Net/Stats/NetStats.cs:109` | `public bool DropProbeResponses { get; set; }` | 已核验 | R08 |
 | `Net/Stats/NetStats.cs:114` | `public Task<NetStatsResult> GetLatencyAsync(PeerId peerId)` | 已核验 | R08+R06+R13+R10 |
 | `Net/Stats/NetStats.cs:122` | `public async Task<NetStatsResult> GetLatencyAsync(PeerId peerId, TimeSpan timeout, CancellationToken token = default)` | 已核验 | R08+R06+R13+R10 |
-| `Net/Stats/NetStats.cs:193` | `public NetPeerStats GetPeerStats(PeerId peerId)` | 已核验 | R08+R13 |
-| `Net/Stats/NetStats.cs:292` | `public PendingProbe(PeerId peerId, DateTimeOffset sentAt)` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:298` | `public PeerId PeerId { get; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:299` | `public DateTimeOffset SentAt { get; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:300` | `public TaskCompletionSource<NetPong> Completion { get; } =` | 已核验 | R08+R06 |
-| `Net/Stats/NetStats.cs:306` | `public TimeSpan? Rtt { get; set; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:307` | `public TimeSpan? AverageRtt { get; set; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:308` | `public TimeSpan? Jitter { get; set; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:309` | `public long ProbeCount { get; set; }` | 已核验 | R08+R03 |
-| `Net/Stats/NetStats.cs:310` | `public long ProbeFailures { get; set; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:311` | `public long TimeoutCount { get; set; }` | 已核验 | R08+R03 |
-| `Net/Stats/NetStats.cs:312` | `public int SuccessCount { get; set; }` | 已核验 | R08+R03 |
-| `Net/Stats/NetStats.cs:313` | `public DateTimeOffset LastSeenAt { get; set; }` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:315` | `public NetPeerStats ToSnapshot()` | 已核验 | R08 |
-| `Net/Stats/NetStats.cs:332` | `public NetStatsStatus Status { get; } = status;` | 已核验 | R08+R10 |
+| `Net/Stats/NetStats.cs:196` | `public NetPeerStats GetPeerStats(PeerId peerId)` | 已核验 | R08+R13 |
+| `Net/Stats/NetStats.cs:295` | `public PendingProbe(PeerId peerId, DateTimeOffset sentAt)` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:301` | `public PeerId PeerId { get; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:302` | `public DateTimeOffset SentAt { get; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:303` | `public TaskCompletionSource<NetPong> Completion { get; } =` | 已核验 | R08+R06 |
+| `Net/Stats/NetStats.cs:309` | `public TimeSpan? Rtt { get; set; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:310` | `public TimeSpan? AverageRtt { get; set; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:311` | `public TimeSpan? Jitter { get; set; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:312` | `public long ProbeCount { get; set; }` | 已核验 | R08+R03 |
+| `Net/Stats/NetStats.cs:313` | `public long ProbeFailures { get; set; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:314` | `public long TimeoutCount { get; set; }` | 已核验 | R08+R03 |
+| `Net/Stats/NetStats.cs:315` | `public int SuccessCount { get; set; }` | 已核验 | R08+R03 |
+| `Net/Stats/NetStats.cs:316` | `public DateTimeOffset LastSeenAt { get; set; }` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:318` | `public NetPeerStats ToSnapshot()` | 已核验 | R08 |
+| `Net/Stats/NetStats.cs:335` | `public NetStatsStatus Status { get; } = status;` | 已核验 | R08+R10 |
 | `Net/Transports/TcpNetTransport.cs:20` | `public static DefaultTcpFrameWriter Instance { get; } = new();` | 已核验 | R08 |
 | `Net/Transports/TcpNetTransport.cs:26` | `public async ValueTask WriteAsync(` | 已核验 | R08+R06 |
 | `Net/Transports/TcpNetTransport.cs:44` | `public sealed class TcpNetTransport : INetTransport` | 已核验 | R08 |
@@ -1124,11 +1125,11 @@ rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj
 以下只读 PowerShell 校验 exact rg 输出、ledger 行数和模块分组：
 
 ```powershell
-$matches = rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj/**'
-if ($matches.Count -ne 1061) { throw "public inventory count: $($matches.Count)" }
+$sourceMatches = rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj/**'
+if ($sourceMatches.Count -ne 1061) { throw "public inventory count: $($sourceMatches.Count)" }
 $ledger = Select-String -Path '.\docs\superpowers\reviews\2026-07-10-round-6-public-inventory.md' -Pattern '^\| `[^`]+:\d+` \|'
-if ($ledger.Count -ne $matches.Count) { throw "ledger count: $($ledger.Count)" }
-$groups = $matches | ForEach-Object {
+if ($ledger.Count -ne $sourceMatches.Count) { throw "ledger count: $($ledger.Count)" }
+$groups = $sourceMatches | ForEach-Object {
     $path = (($_ -split ':', 3)[0] -replace '\\', '/')
     if ($path -notmatch '/') { 'Core' } elseif ($path -like 'FrameworkImpl/*') { 'FrameworkImpl' } else { ($path -split '/')[0] }
 } | Group-Object -NoElement | Sort-Object Name

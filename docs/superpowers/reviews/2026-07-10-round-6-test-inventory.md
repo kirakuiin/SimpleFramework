@@ -50,6 +50,7 @@
 - 40/40 tracked test C# 文件均有逐文件决定；删除 0 个测试。
 - 没有任何候选同时满足相同 setup、相同 operation、相同 observable contract 且不损失边界/错误/顺序/并发/回归保护。
 - 最终仍为 40 个文件、752 个 VSTest 测试；Round 6 仅保留一个 discovery public API 回归测试的净新增。
+- Round 7 最终复核后仍为 40 个 tracked test C# 文件；新增 11 个确定性 Net 回归测试，最终全量为 763 个 VSTest 测试。`NetDiscoveryStatsTests` 新增真实 UDP in-flight caller/disposal cancellation；`NetMessagingTests` 新增 typed-send 取消/通道/广播（含忽略 token 的 transport）与顶层 Kind allocation/correctness；`NetSessionTests` 新增 GameNet public typed-send 形状与取消重试；`NetFlowTests` 保留原测试数并将 late-response 固定等待改为 gate 加诊断条件同步。
 
 ```powershell
 $tracked = git ls-files 'Test/*.cs' | Sort-Object

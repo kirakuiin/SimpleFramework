@@ -9,8 +9,8 @@ namespace SimpleFramework.Net;
 /// </summary>
 public sealed class NetMessenger
 {
-    private readonly Func<byte[], CancellationToken, ValueTask<NetSendResult>> _sendToServer;
-    private readonly Func<PeerId, byte[], CancellationToken, ValueTask<NetSendResult>> _sendToPeer;
+    private readonly Func<byte[], NetChannel, CancellationToken, ValueTask<NetSendResult>> _sendToServer;
+    private readonly Func<PeerId, byte[], NetChannel, CancellationToken, ValueTask<NetSendResult>> _sendToPeer;
     private readonly Func<IReadOnlyCollection<PeerId>> _getBroadcastTargets;
     private readonly NetDiagnostics _diagnostics;
     private readonly INetCodec _codec;
@@ -34,8 +34,8 @@ public sealed class NetMessenger
     private int _protocolManifestPermanentlyFrozen;
 
     internal NetMessenger(
-        Func<byte[], CancellationToken, ValueTask<NetSendResult>> sendToServer,
-        Func<PeerId, byte[], CancellationToken, ValueTask<NetSendResult>> sendToPeer,
+        Func<byte[], NetChannel, CancellationToken, ValueTask<NetSendResult>> sendToServer,
+        Func<PeerId, byte[], NetChannel, CancellationToken, ValueTask<NetSendResult>> sendToPeer,
         Func<IReadOnlyCollection<PeerId>> getBroadcastTargets,
         NetDiagnostics diagnostics,
         int maxPacketSize,
@@ -347,13 +347,21 @@ public sealed class NetMessenger
     /// <summary>
     /// 从客户端向服务器发送类型化消息。
     /// </summary>
-    public async ValueTask<NetSendResult> SendToServerAsync<T>(T message)
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="message">要发送的消息。</param>
+    /// <param name="channel">发送通道；默认为可靠通道。</param>
+    /// <param name="token">取消标记；取消映射为 <see cref="NetSendStatus.TransportFailed"/>。</param>
+    /// <returns>结构化发送结果。</returns>
+    public async ValueTask<NetSendResult> SendToServerAsync<T>(
+        T message,
+        NetChannel channel = NetChannel.Reliable,
+        CancellationToken token = default)
     {
         var packet = EncodeMessagePacket(message);
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
-        var send = await SendPacketToServerAsync(packet.Data!).ConfigureAwait(false);
+        var send = await SendPacketToServerAsync(packet.Data!, token, channel).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packet.Data!.Length);
 
@@ -363,18 +371,32 @@ public sealed class NetMessenger
     /// <summary>
     /// 从服务器向指定对等体发送类型化消息。
     /// </summary>
-    public async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message)
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="peerId">目标对等体。</param>
+    /// <param name="message">要发送的消息。</param>
+    /// <param name="channel">发送通道；默认为可靠通道。</param>
+    /// <param name="token">取消标记；取消映射为 <see cref="NetSendStatus.TransportFailed"/>。</param>
+    /// <returns>结构化发送结果。</returns>
+    public async ValueTask<NetSendResult> SendAsync<T>(
+        PeerId peerId,
+        T message,
+        NetChannel channel = NetChannel.Reliable,
+        CancellationToken token = default)
     {
-        return await SendAsync(peerId, message, CancellationToken.None).ConfigureAwait(false);
+        return await SendCoreAsync(peerId, message, channel, token).ConfigureAwait(false);
     }
 
-    internal async ValueTask<NetSendResult> SendAsync<T>(PeerId peerId, T message, CancellationToken token)
+    private async ValueTask<NetSendResult> SendCoreAsync<T>(
+        PeerId peerId,
+        T message,
+        NetChannel channel,
+        CancellationToken token)
     {
         var packet = EncodeMessagePacket(message);
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
 
-        var send = await SendPacketToPeerAsync(peerId, packet.Data!, token).ConfigureAwait(false);
+        var send = await SendPacketToPeerAsync(peerId, packet.Data!, token, channel).ConfigureAwait(false);
         if (send.Succeeded)
             _diagnostics.AddPacketSent(packet.Data!.Length);
 
@@ -382,10 +404,21 @@ public sealed class NetMessenger
     }
 
     /// <summary>
-    /// 从服务器向所有远端对等体广播类型化消息；单个目标失败不会阻止后续发送，结果返回首个失败。
+    /// 从服务器向所有远端对等体广播类型化消息；非取消失败不会阻止后续发送，结果返回首个失败。
     /// </summary>
-    public async ValueTask<NetSendResult> BroadcastAsync<T>(T message)
+    /// <typeparam name="T">消息类型。</typeparam>
+    /// <param name="message">要广播的消息。</param>
+    /// <param name="channel">发送通道；默认为可靠通道。</param>
+    /// <param name="token">取消标记；取消后停止尝试后续目标并返回结构化失败。</param>
+    /// <returns>结构化发送结果。</returns>
+    public async ValueTask<NetSendResult> BroadcastAsync<T>(
+        T message,
+        NetChannel channel = NetChannel.Reliable,
+        CancellationToken token = default)
     {
+        if (token.IsCancellationRequested)
+            return new NetSendResult(NetSendStatus.TransportFailed, "The operation was canceled.");
+
         var packet = EncodeMessagePacket(message);
         if (packet.Status != NetSendStatus.Ok)
             return new NetSendResult(packet.Status, packet.Message);
@@ -393,14 +426,21 @@ public sealed class NetMessenger
         NetSendResult? firstFailure = null;
         foreach (var peerId in _getBroadcastTargets())
         {
-            var send = await SendPacketToPeerAsync(peerId, packet.Data!).ConfigureAwait(false);
+            var send = await SendPacketToPeerAsync(peerId, packet.Data!, token, channel).ConfigureAwait(false);
             if (!send.Succeeded)
             {
                 firstFailure ??= send;
-                continue;
+            }
+            else
+            {
+                _diagnostics.AddPacketSent(packet.Data!.Length);
             }
 
-            _diagnostics.AddPacketSent(packet.Data!.Length);
+            if (token.IsCancellationRequested)
+            {
+                firstFailure ??= new NetSendResult(NetSendStatus.TransportFailed, "The operation was canceled.");
+                break;
+            }
         }
 
         return firstFailure ?? NetSendResult.Ok();
@@ -1011,17 +1051,26 @@ public sealed class NetMessenger
         throw new TimeoutException();
     }
 
-    private ValueTask<NetSendResult> SendPacketToPeerAsync(PeerId peerId, byte[] packet, CancellationToken token = default)
+    private ValueTask<NetSendResult> SendPacketToPeerAsync(
+        PeerId peerId,
+        byte[] packet,
+        CancellationToken token = default,
+        NetChannel channel = NetChannel.Reliable)
     {
         return SendPacketWithLimitsAsync(
             peerId,
             packet,
-            () => peerId == PeerId.Server ? _sendToServer(packet, token) : _sendToPeer(peerId, packet, token));
+            () => peerId == PeerId.Server
+                ? _sendToServer(packet, channel, token)
+                : _sendToPeer(peerId, packet, channel, token));
     }
 
-    private ValueTask<NetSendResult> SendPacketToServerAsync(byte[] packet, CancellationToken token = default)
+    private ValueTask<NetSendResult> SendPacketToServerAsync(
+        byte[] packet,
+        CancellationToken token = default,
+        NetChannel channel = NetChannel.Reliable)
     {
-        return SendPacketWithLimitsAsync(PeerId.Server, packet, () => _sendToServer(packet, token));
+        return SendPacketWithLimitsAsync(PeerId.Server, packet, () => _sendToServer(packet, channel, token));
     }
 
     private async ValueTask<NetSendResult> SendPacketWithLimitsAsync(PeerId peerId, byte[] packet, Func<ValueTask<NetSendResult>> send)

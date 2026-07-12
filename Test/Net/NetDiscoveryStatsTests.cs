@@ -34,6 +34,41 @@ public sealed record RoomSecret(string Token);
 public class NetDiscoveryStatsTests
 {
     [Test]
+    public async Task UdpDiscoveryScan_CallerCancellationAfterReceiveStarts_Throws()
+    {
+        var receiveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var backend = new UdpDiscoveryNetwork(TimeProvider.System, () => receiveStarted.TrySetResult());
+        var discovery = new NetDiscovery(
+            Options(Guid.NewGuid(), discoveryPort: GetUnusedUdpPort()),
+            backend);
+        using var cancellation = new CancellationTokenSource();
+
+        var scan = discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMinutes(1), cancellation.Token);
+        await receiveStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await scan);
+        await discovery.DisposeAsync();
+    }
+
+    [Test]
+    public async Task NetDiscoveryScan_DisposeAfterUdpReceiveStarts_Throws()
+    {
+        var receiveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var backend = new UdpDiscoveryNetwork(TimeProvider.System, () => receiveStarted.TrySetResult());
+        var discovery = new NetDiscovery(
+            Options(Guid.NewGuid(), discoveryPort: GetUnusedUdpPort()),
+            backend);
+
+        var scan = discovery.ScanAsync<RoomListMetadata>(TimeSpan.FromMinutes(1));
+        await receiveStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var disposing = discovery.DisposeAsync().AsTask();
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await scan);
+        await disposing.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
     public async Task DiscoveryScan_FiltersDifferentApplicationId()
     {
         var network = new MemoryDiscoveryNetwork();
@@ -1033,8 +1068,8 @@ public class NetDiscoveryStatsTests
         var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var diagnostics = new NetDiagnostics();
         var messenger = new NetMessenger(
-            (_, _) => new ValueTask<NetSendResult>(NetSendResult.Ok()),
-            async (_, _, _) =>
+            (_, _, _) => new ValueTask<NetSendResult>(NetSendResult.Ok()),
+            async (_, _, _, _) =>
             {
                 sendStarted.TrySetResult();
                 await releaseSend.Task;

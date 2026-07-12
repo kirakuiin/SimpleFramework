@@ -132,7 +132,10 @@ public sealed class NetStats
         _pending[sequence] = pending;
         RecordProbeAttempt(peerId);
 
-        var send = await _messenger.SendAsync(peerId, new NetPing(sequence, sentAt), token).ConfigureAwait(false);
+        var send = await _messenger.SendAsync(
+            peerId,
+            new NetPing(sequence, sentAt),
+            token: token).ConfigureAwait(false);
         if (!send.Succeeded)
         {
             _pending.TryRemove(sequence, out _);

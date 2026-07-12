@@ -17,6 +17,59 @@ namespace Test.Net;
 public class NetSessionTests
 {
     [Test]
+    public async Task GameNetTypedSend_PublicCallShapesCompileAndReturnStructuredResults()
+    {
+        await using var game = new GameNet(Options(Guid.NewGuid()), new MemoryDiscoveryNetwork());
+        game.Messages.RegisterMessage<PlayerReady>();
+
+        var ordinary = await game.SendToServerAsync(new PlayerReady(true));
+        var channel = await game.SendAsync(new PeerId(2), new PlayerReady(true), NetChannel.Reliable);
+        var namedToken = await game.BroadcastAsync(new PlayerReady(true), token: CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ordinary.Status, Is.EqualTo(NetSendStatus.SessionClosed));
+            Assert.That(channel.Status, Is.EqualTo(NetSendStatus.SessionClosed));
+            Assert.That(namedToken.Status, Is.EqualTo(NetSendStatus.Ok));
+        });
+    }
+
+    [Test]
+    public async Task GameNetTypedSend_CancellationAfterTransportStartsAllowsRetry()
+    {
+        var appId = Guid.NewGuid();
+        var network = new MemoryNetNetwork();
+        await using var server = new GameNet(network.CreateTransport("server"), Options(appId));
+        var clientTransport = new CancellationThrowingSendTransport(network.CreateTransport("client"));
+        await using var client = new GameNet(clientTransport, Options(appId));
+        using var cancellation = new CancellationTokenSource();
+        server.Messages.RegisterMessage<PlayerReady>();
+        client.Messages.RegisterMessage<PlayerReady>();
+        await server.HostAsync(new HostOptions { Port = 7777 });
+        Assert.That((await client.JoinAsync(new JoinOptions { Host = "server", Port = 7777 })).Succeeded, Is.True);
+        clientTransport.ObservedChannels.Clear();
+        clientTransport.BlockSends = true;
+
+        var sending = client.SendToServerAsync(
+            new PlayerReady(true),
+            NetChannel.Unreliable,
+            cancellation.Token).AsTask();
+        await clientTransport.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        var cancelled = await sending.WaitAsync(TimeSpan.FromSeconds(1));
+        clientTransport.BlockSends = false;
+        var retried = await client.SendToServerAsync(new PlayerReady(true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cancelled.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+            Assert.That(retried.Status, Is.EqualTo(NetSendStatus.Ok));
+            Assert.That(clientTransport.ObservedChannels,
+                Is.EqualTo(new[] { NetChannel.Unreliable, NetChannel.Reliable }));
+        });
+    }
+
+    [Test]
     public async Task Join_WithCompatibleApplication_AssignsPeerAndUpdatesDirectories()
     {
         var appId = Guid.NewGuid();
@@ -2293,6 +2346,7 @@ public class NetSessionTests
         }
 
         public bool BlockSends { get; set; }
+        public List<NetChannel> ObservedChannels { get; } = new();
         public TaskCompletionSource SendStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource SendGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public event Action<TransportPeerConnected>? PeerConnected;
@@ -2313,6 +2367,7 @@ public class NetSessionTests
             NetChannel channel,
             CancellationToken token = default)
         {
+            ObservedChannels.Add(channel);
             if (BlockSends)
             {
                 SendStarted.TrySetResult();

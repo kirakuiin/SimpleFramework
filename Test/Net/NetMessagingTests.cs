@@ -153,6 +153,206 @@ public static class RuntimeAsyncVoidHandlers
 public class NetMessagingTests
 {
     [Test]
+    public async Task NetMessengerTypedSend_PublicCallShapesCompileAndRun()
+    {
+        var messenger = new NetMessenger(
+            (_, _, _) => ValueTask.FromResult(NetSendResult.Ok()),
+            (_, _, _, _) => ValueTask.FromResult(NetSendResult.Ok()),
+            () => new[] { new PeerId(2) },
+            new NetDiagnostics(),
+            64 * 1024,
+            1024 * 1024,
+            1024,
+            int.MaxValue);
+        messenger.RegisterMessage<PlayerReady>();
+
+        var ordinary = await messenger.SendToServerAsync(new PlayerReady(true));
+        var channel = await messenger.SendAsync(new PeerId(2), new PlayerReady(true), NetChannel.Reliable);
+        var namedToken = await messenger.BroadcastAsync(new PlayerReady(true), token: CancellationToken.None);
+
+        Assert.That(new[] { ordinary.Status, channel.Status, namedToken.Status },
+            Is.All.EqualTo(NetSendStatus.Ok));
+    }
+
+    [Test]
+    public async Task NetMessengerTypedSend_CancellationReleasesReservationAndAllowsRetry()
+    {
+        var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        var observedChannels = new List<NetChannel>();
+        var messenger = new NetMessenger(
+            async (_, channel, token) =>
+            {
+                observedChannels.Add(channel);
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    sendStarted.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+
+                return NetSendResult.Ok();
+            },
+            (_, _, _, _) => ValueTask.FromResult(NetSendResult.Ok()),
+            () => Array.Empty<PeerId>(),
+            new NetDiagnostics(),
+            64 * 1024,
+            1024 * 1024,
+            1,
+            int.MaxValue);
+        messenger.RegisterMessage<PlayerReady>();
+        using var cancellation = new CancellationTokenSource();
+
+        var sending = messenger.SendToServerAsync(
+            new PlayerReady(true),
+            NetChannel.Unreliable,
+            cancellation.Token).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        var cancelled = await sending.WaitAsync(TimeSpan.FromSeconds(1));
+        var retried = await messenger.SendToServerAsync(new PlayerReady(true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cancelled.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+            Assert.That(retried.Status, Is.EqualTo(NetSendStatus.Ok));
+            Assert.That(observedChannels, Is.EqualTo(new[] { NetChannel.Unreliable, NetChannel.Reliable }));
+        });
+    }
+
+    [Test]
+    public async Task NetMessengerBroadcast_CancellationStopsBeforeLaterTargets()
+    {
+        var firstTarget = new PeerId(2);
+        var secondTarget = new PeerId(3);
+        var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attemptedTargets = new List<PeerId>();
+        var observedChannels = new List<NetChannel>();
+        var messenger = new NetMessenger(
+            (_, _, _) => ValueTask.FromResult(NetSendResult.Ok()),
+            async (peerId, _, channel, token) =>
+            {
+                attemptedTargets.Add(peerId);
+                observedChannels.Add(channel);
+                sendStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return NetSendResult.Ok();
+            },
+            () => new[] { firstTarget, secondTarget },
+            new NetDiagnostics(),
+            64 * 1024,
+            1024 * 1024,
+            1024,
+            int.MaxValue);
+        messenger.RegisterMessage<PlayerReady>();
+        using var cancellation = new CancellationTokenSource();
+
+        var broadcasting = messenger.BroadcastAsync(
+            new PlayerReady(true),
+            NetChannel.Unreliable,
+            token: cancellation.Token).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        var result = await broadcasting.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(attemptedTargets, Is.EqualTo(new[] { firstTarget }));
+        Assert.That(observedChannels, Is.EqualTo(new[] { NetChannel.Unreliable }));
+    }
+
+    [Test]
+    public async Task NetMessengerBroadcast_TransportIgnoringCancellationStillReturnsStructuredFailure()
+    {
+        var firstTarget = new PeerId(2);
+        var secondTarget = new PeerId(3);
+        var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attemptedTargets = new List<PeerId>();
+        var messenger = new NetMessenger(
+            (_, _, _) => ValueTask.FromResult(NetSendResult.Ok()),
+            async (peerId, _, _, _) =>
+            {
+                attemptedTargets.Add(peerId);
+                sendStarted.TrySetResult();
+                await releaseSend.Task;
+                return NetSendResult.Ok();
+            },
+            () => new[] { firstTarget, secondTarget },
+            new NetDiagnostics(),
+            64 * 1024,
+            1024 * 1024,
+            1024,
+            int.MaxValue);
+        messenger.RegisterMessage<PlayerReady>();
+        using var cancellation = new CancellationTokenSource();
+
+        var broadcasting = messenger.BroadcastAsync(
+            new PlayerReady(true),
+            token: cancellation.Token).AsTask();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+        releaseSend.TrySetResult();
+        var result = await broadcasting.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.That(result.Status, Is.EqualTo(NetSendStatus.TransportFailed));
+        Assert.That(attemptedTargets, Is.EqualTo(new[] { firstTarget }));
+    }
+
+    [Test]
+    public void InboundKindProbe_LargePayloadAvoidsFullEnvelopeAllocation()
+    {
+        var probe = CreateInboundKindProbe();
+        var packet = JsonSerializer.SerializeToUtf8Bytes(new NetPacket
+        {
+            Kind = NetPacket.Message,
+            MessageId = 1,
+            Payload = new byte[256 * 1024]
+        });
+        for (var index = 0; index < 8; index++)
+            Assert.That(probe(packet), Is.EqualTo(NetPacket.Message));
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 16; index++)
+            _ = probe(packet);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        TestContext.WriteLine($"Warmed kind probe allocation: {allocated:N0} bytes for 16 large packets.");
+
+        Assert.That(allocated, Is.LessThan(64 * 1024),
+            $"Kind probe allocated {allocated:N0} bytes for 16 warmed large packets.");
+    }
+
+    [Test]
+    public void InboundKindProbe_ReadsOnlyTopLevelKindInAnyPropertyOrder()
+    {
+        var probe = CreateInboundKindProbe();
+        var kindLast = "{\"Payload\":\"AQID\",\"Kind\":\"message\"}"u8.ToArray();
+        var nestedBeforeTopLevel = "{\"Envelope\":{\"Kind\":\"request\"},\"Payload\":\"\",\"Kind\":\"response\"}"u8.ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probe(kindLast), Is.EqualTo(NetPacket.Message));
+            Assert.That(probe(nestedBeforeTopLevel), Is.EqualTo(NetPacket.Response));
+        });
+    }
+
+    [Test]
+    public void InboundKindProbe_UnknownAndMalformedPreserveRoutingSignals()
+    {
+        var probe = CreateInboundKindProbe();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probe("{\"Kind\":\"future.packet\"}"u8), Is.EqualTo("future.packet"));
+            Assert.That(probe("{\"Kind\":1}"u8), Is.Null);
+            Assert.That(probe("{\"Kind\":null}"u8), Is.Null);
+            Assert.That(probe("{\"Kind\":\"message\""u8), Is.Null);
+            Assert.That(probe("{\"Envelope\":{\"Kind\":\"message\"}}"u8), Is.Null);
+        });
+    }
+
+    [Test]
     public async Task ClientSendToServer_DeliversTypedMessageWithSenderContext()
     {
         var appId = Guid.NewGuid();
@@ -1930,6 +2130,17 @@ public class NetMessagingTests
         MaxPacketSize = maxPacketSize
     };
 
+    private static PacketKindProbe CreateInboundKindProbe()
+    {
+        var method = typeof(GameNet).GetMethod(
+            "GetMessagePacketKind",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(method, Is.Not.Null);
+        return method!.CreateDelegate<PacketKindProbe>();
+    }
+
+    private delegate string? PacketKindProbe(ReadOnlySpan<byte> data);
+
     private static bool IsScanFixtureType(Type type)
     {
         return type == typeof(ScanAlpha) ||
@@ -1958,10 +2169,10 @@ public class NetMessagingTests
         INetCodec? codec = null)
     {
         return new NetMessenger(
-            (data, _) => sendToServer(data),
+            (data, _, _) => sendToServer(data),
             sendToPeer is null
-                ? ((_, _, _) => new ValueTask<NetSendResult>(NetSendResult.Ok()))
-                : ((peerId, data, _) => sendToPeer(peerId, data)),
+                ? ((_, _, _, _) => new ValueTask<NetSendResult>(NetSendResult.Ok()))
+                : ((peerId, data, _, _) => sendToPeer(peerId, data)),
             () => broadcastTargets ?? Array.Empty<PeerId>(),
             diagnostics,
             maxPacketSize,

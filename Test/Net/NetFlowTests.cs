@@ -554,11 +554,14 @@ public class NetFlowTests
             Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Accepted));
             Assert.That(result.Responses.Count, Is.EqualTo(1));
 
+            var packetsBeforeLateResponse = fixture.Server.Diagnostics.GetSnapshot().PacketsReceived;
             releaseLate.SetResult();
-            await Task.Delay(100);
+            await WaitUntilAsync(
+                () => fixture.Server.Diagnostics.GetSnapshot().PacketsReceived > packetsBeforeLateResponse);
 
             Assert.That(result.Reason, Is.EqualTo(FlowEndReason.Accepted));
             Assert.That(result.Responses.Count, Is.EqualTo(1));
+            Assert.That(fixture.Server.Flow.PendingFlowIds, Is.Empty);
         }
     }
 
@@ -672,6 +675,13 @@ public class NetFlowTests
             await ClientA.DisposeAsync();
             await Server.DisposeAsync();
         }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        while (!condition())
+            await Task.Delay(10, timeout.Token);
     }
 
     private static GameNetOptions Options(

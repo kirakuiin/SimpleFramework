@@ -48,6 +48,7 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 ## Evidence Reproduction
 
 - Public total: run the exact public command and inspect `$LASTEXITCODE`; assigning its output to `$matches`, `$matches.Count` is 1,061. Normalize each matched path with `-replace '\\','/'`, map root files to Core and first-directory paths to their module (with `FrameworkImpl` separate), then `Group-Object`; this reproduces the table totals, whose sum is 1,061.
+- Round 7 final reconciliation rebuilt every affected `GameNet`, `NetDiscovery`, `NetMessenger`, and `NetStats` ledger row from the exact current source location and declaration. The total remains 1,061 (Net 422), with 1,061 unique source locations and zero source/ledger differences; the typed-send and browser-refresh rows identify their final-review contract repairs.
 - Risk total: assign the exact risk command output to `$matches`; `$matches.Count` is 118. Filtering paths with `Test/` yields 84 across 25 files; the complement yields 34. Grouping the production complement reproduces Core 7, ECS 6, Net 14, Patterns 4, Toolkit 1, Utility 2. The category bullets above dispose every match in each resulting group; zero TODO/FIXME/NotImplementedException and the single test pragma are direct subsets of the same output.
 - Scope manifests: `(git ls-files '*.cs' | Where-Object { $_ -notlike 'Test/*' }).Count` is 75; `(git ls-files 'Test/*.cs').Count` is 40; `(git ls-files '*.csproj').Count` is 10. Documentation scope is exactly `README.md`, `Collections/README.md`, `ECS/README.md`, `ECS/USAGE.md`, `Maths/README.md`, `Net/README.md`, `Patterns/README.md`, `Utility/README.md`, and `docs/domain-lifecycle.md`. The public appendix reconciles all 1,061 source locations with zero set difference.
 - LOC: for each tracked C# path, sum `(Get-Content $path).Count`, selecting or excluding `Test/` as stated in Scope and Baseline. For the baseline, enumerate the same paths from `git ls-tree -r --name-only cc226dc80717429ca359efdd58e7d9ddc4a812cf` and count `git show "cc226dc80717429ca359efdd58e7d9ddc4a812cf:$path"`; this reproduces 17,291 production and 17,624 test lines.
@@ -81,7 +82,7 @@ No helper extraction made intent clearer than the local setup. Final test count 
 ## Retained Cross-Cutting Decisions
 
 - `Get`/`TryGet`/`Require` is used where absence is a normal query distinction. `ServiceLocator.Get` and other single-shape APIs retain their documented `KeyNotFoundException`/validation behavior rather than gaining unused variants.
-- Cancellation tokens remain optional and last. Immediate one-packet send convenience methods retain structured `NetSendResult` semantics; adding cancellation everywhere without a demonstrated wait would broaden API and diagnostics without evidence.
+- Cancellation tokens remain optional and last. Final-review gated transport tests demonstrated blocking waits in typed sends, so `GameNet` and `NetMessenger` typed send/broadcast APIs now expose channel selection followed by an optional token while retaining structured `NetSendResult` cancellation semantics.
 - CPU/local ownership types use `IDisposable`; transports, discovery, browser, and `GameNet` use `IAsyncDisposable` because cleanup awaits active work. No sync-over-async bridge was introduced.
 - Core returns `IUnRegister`, Patterns returns standard `IDisposable`, and Net exposes .NET events. These shapes match their ownership models; unifying names alone would be disruptive.
 - Read-only query/registry/peer/diagnostic surfaces use cached wrappers or snapshots. Mutable collection views exist only on dictionary-compatible collection types where they are part of the implemented interface contract.
@@ -93,6 +94,7 @@ The same physical-line command was used for baseline and final comparison; test 
 
 - Final production: 75 files and 17,373 physical lines, +82 lines. The increase is Chinese XML for previously undocumented public surfaces; the executable syntax/refactor changes are locally neutral or shorter.
 - Final tests: 40 files and 17,649 physical lines, +25 lines; 752 tests, +1 API regression. No test was deleted.
+- Round 7 final state: the same 40 tracked test files now contain 763 VSTest tests. The 11-test increase is limited to deterministic Net cancellation, public typed-send/channel, and inbound-kind performance/correctness regressions; the existing late-flow test was synchronized without changing the count.
 - `dotnet test .\SimpleFramework.sln --no-restore --configuration Debug`: 752 passed, 0 failed, 0 skipped.
 - `dotnet build .\SimpleFramework.sln --no-restore --configuration Release`: succeeded, 0 warnings, 0 errors, including GDExt.
 - `dotnet msbuild .\GDExt\GDExt.csproj -getProperty:DefineConstants -p:Configuration=Release`: evaluated `GODOT;RELEASE;NET;NET8_0;NETCOREAPP`. Contrary to the review concern, `GDExt.csproj` defines `GODOT` unconditionally, so the normal Release GDExt compilation includes the guarded branch.

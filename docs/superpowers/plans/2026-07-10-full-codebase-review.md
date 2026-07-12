@@ -59,11 +59,11 @@ Record every inspected production file, every discovered issue with severity, th
 - Consumes: lifecycle and lookup contracts in `AGENTS.md`, `docs/domain-lifecycle.md`, and the approved design spec.
 - Produces: verified Domain/component/event/command/query/bindable contracts, a round record, and one reviewable commit.
 
-- [ ] **Step 1: Read every listed file and map public contracts**
+- [x] **Step 1: Read every listed file and map public contracts**
 
 Check initialization and release ordering, ownership versus lookup inheritance, component registration aliases, replacement lifecycle, local versus global events, command/query dispatch, nullable returns, comparer scope, exception behavior, and XML documentation accuracy. Record concrete observations directly in the round record.
 
-- [ ] **Step 2: Run the focused baseline**
+- [x] **Step 2: Run the focused baseline**
 
 Run:
 
@@ -73,15 +73,15 @@ dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleF
 
 Expected: all selected tests pass with zero failures before repairs.
 
-- [ ] **Step 3: Audit every contract against tests and implementation**
+- [x] **Step 3: Audit every contract against tests and implementation**
 
 Trace at least one normal, duplicate, replacement, missing-value, parent lookup, and release path for each applicable abstraction. Search for null suppression, unchecked casts, duplicate lifecycle calls, mutable global state, stale registrations, public members without Chinese XML docs, and old syntax that can be simplified without changing behavior.
 
-- [ ] **Step 4: Repair each concrete finding through a plan amendment and TDD**
+- [x] **Step 4: Repair each concrete finding through a plan amendment and TDD**
 
 For every behavior or API issue, first append its exact repair subtask beneath this task, then follow RED → GREEN → REFACTOR. Documentation or equivalent syntax findings may be edited directly after the audit record states why the change is behavior-neutral.
 
-- [ ] **Step 5: Verify the complete round**
+- [x] **Step 5: Verify the complete round**
 
 Run:
 
@@ -93,14 +93,14 @@ git diff --check
 
 Expected: 627 baseline tests plus new tests pass, Release build has zero warnings/errors, and Git reports no whitespace errors.
 
-- [ ] **Step 6: Commit round 1**
+- [x] **Step 6: Commit round 1**
 
 ```powershell
 git add -- Directory.Build.props global.json SimpleFramework.csproj *.cs FrameworkImpl Test/Framework Test/Extensions Test/Documentation docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-1-core.md
 git commit -m "review: harden core framework contracts"
 ```
 
-- [ ] **Step 7: Request independent review**
+- [x] **Step 7: Request independent review**
 
 Use `superpowers:requesting-code-review` with the pre-round and post-round SHAs. Resolve all Critical and Important findings, rerun Step 5, commit any review corrections as `review: address core review feedback`, and record the disposition in the round record.
 
@@ -108,64 +108,64 @@ Use `superpowers:requesting-code-review` with the pre-round and post-round SHAs.
 
 **Files:** `AbstractDomain.cs`, `Framework.cs`, `FrameworkExtension.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Change `TestTryGetAndRequireModel`, `TestTryGetAndRequireUtility`, and `TestTryGetAndRequireSystem` to expect `InvalidOperationException` while retaining the missing type and domain assertions. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestTryGetAndRequire"`; expect all three tests to fail because the implementation still throws `NullReferenceException`.
-- [ ] Make `RequireModel`, `RequireUtility`, and `RequireSystem` throw `InvalidOperationException` with the same diagnostic type/domain details, and update every touched Chinese XML `<exception>` contract. Rerun the same command; expect all three tests to pass.
+- [x] Change `TestTryGetAndRequireModel`, `TestTryGetAndRequireUtility`, and `TestTryGetAndRequireSystem` to expect `InvalidOperationException` while retaining the missing type and domain assertions. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestTryGetAndRequire"`; expect all three tests to fail because the implementation still throws `NullReferenceException`.
+- [x] Make `RequireModel`, `RequireUtility`, and `RequireSystem` throw `InvalidOperationException` with the same diagnostic type/domain details, and update every touched Chinese XML `<exception>` contract. Rerun the same command; expect all three tests to pass.
 
 #### Task 1 Repair B: Reject null container registrations immediately
 
 **Files:** `FrameworkImpl/Container.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestContainerRegisterRejectsNull`, calling `Container.Register<IUtility>(null!)` and expecting `ArgumentNullException` naming `instance`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestContainerRegisterRejectsNull"`; expect failure because the Release-safe null guard is absent.
-- [ ] Add `ArgumentNullException.ThrowIfNull(instance)` before changing container state and document the exception in Chinese XML. Rerun the focused command; expect the test to pass.
+- [x] Add `TestContainerRegisterRejectsNull`, calling `Container.Register<IUtility>(null!)` and expecting `ArgumentNullException` naming `instance`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestContainerRegisterRejectsNull"`; expect failure because the Release-safe null guard is absent.
+- [x] Add `ArgumentNullException.ThrowIfNull(instance)` before changing container state and document the exception in Chinese XML. Rerun the focused command; expect the test to pass.
 
 #### Task 1 Repair C: Express missing events without null suppression
 
 **Files:** `FrameworkImpl/Event.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestEventContainerMissingEventReturnsNull`, asserting a new `EventContainer` returns null for `GetEvent<Event<EventA>>()`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestEventContainerMissingEventReturnsNull"`; expect the runtime assertion to pass, demonstrating the public non-null signature disagrees with behavior.
-- [ ] Change `GetEvent<T>` to return `T?`, remove the unchecked cast/null suppression through type-pattern matching, and update the Chinese XML return contract. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestEventContainerMissingEventReturnsNull|FullyQualifiedName~Test.Framework.TestFramework.TestEventBus"`; expect all selected tests to pass with nullable analysis clean.
+- [x] Add `TestEventContainerMissingEventReturnsNull`, asserting a new `EventContainer` returns null for `GetEvent<Event<EventA>>()`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestEventContainerMissingEventReturnsNull"`; expect the runtime assertion to pass, demonstrating the public non-null signature disagrees with behavior.
+- [x] Change `GetEvent<T>` to return `T?`, remove the unchecked cast/null suppression through type-pattern matching, and update the Chinese XML return contract. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestEventContainerMissingEventReturnsNull|FullyQualifiedName~Test.Framework.TestFramework.TestEventBus"`; expect all selected tests to pass with nullable analysis clean.
 
 #### Task 1 Repair D: Prevent reentrant domain release from duplicating lifecycle calls
 
 **Files:** `AbstractDomain.cs`, `Framework.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestReentrantUninitializeReleasesComponentOnce` plus a guarded `ReentrantUninitializeModel` whose first `OnUninitialize` calls `Domain.UnInitialize()` and whose counter exposes duplicate release. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestReentrantUninitializeReleasesComponentOnce"`; expect failure with an uninitialize count of 2 instead of 1.
-- [ ] Treat a reentrant `UnInitialize` call as an idempotent no-op while the outer release owns cleanup, and document that contract on `IDomain.UnInitialize` and `AbstractDomain<T>.UnInitialize`. Rerun the focused command; expect one release and a passing test.
+- [x] Add `TestReentrantUninitializeReleasesComponentOnce` plus a guarded `ReentrantUninitializeModel` whose first `OnUninitialize` calls `Domain.UnInitialize()` and whose counter exposes duplicate release. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestReentrantUninitializeReleasesComponentOnce"`; expect failure with an uninitialize count of 2 instead of 1.
+- [x] Treat a reentrant `UnInitialize` call as an idempotent no-op while the outer release owns cleanup, and document that contract on `IDomain.UnInitialize` and `AbstractDomain<T>.UnInitialize`. Rerun the focused command; expect one release and a passing test.
 
 #### Task 1 Repair E: Read a bindable property's old value only once
 
 **Files:** `BindableProperty.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestBindableSetterReadsOldValueOnce` plus a `CountingBindableProperty` subclass that counts `GetValue` calls; assert one old-value read and one post-write read when notifying. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestBindableSetterReadsOldValueOnce"`; expect failure because the setter reads the virtual getter three times.
-- [ ] Capture the old value once before comparison, retain the post-write read used for the delivered current value, and add accurate Chinese XML documentation to the touched public/protected members. Rerun the focused command; expect two reads and a passing test.
+- [x] Add `TestBindableSetterReadsOldValueOnce` plus a `CountingBindableProperty` subclass that counts `GetValue` calls; assert one old-value read and one post-write read when notifying. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestBindableSetterReadsOldValueOnce"`; expect failure because the setter reads the virtual getter three times.
+- [x] Capture the old value once before comparison, retain the post-write read used for the delivered current value, and add accurate Chinese XML documentation to the touched public/protected members. Rerun the focused command; expect two reads and a passing test.
 
 #### Task 1 Repair F: Keep lifecycle replacement state atomic when cleanup fails
 
 **Files:** `AbstractDomain.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration` plus a controllable lifecycle model whose `OnUninitialize` throws. Assert the cleanup exception remains directly diagnosable, the previous model remains registered, and the replacement is not initialized. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration"`; expect failure because the container currently publishes the replacement before releasing the previous model.
-- [ ] Release a previous last lifecycle reference before replacing its container entry; determine last-reference status while excluding the key being replaced, preserve alias lifecycle behavior, and publish/initialize the replacement only after successful cleanup. Document the direct cleanup-exception contract. Rerun the focused command plus all `TestRegisterModel`, `TestRegisterSystem`, `TestDualRole`, and `TestUtility` lifecycle tests; expect all selected tests to pass.
+- [x] Add `TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration` plus a controllable lifecycle model whose `OnUninitialize` throws. Assert the cleanup exception remains directly diagnosable, the previous model remains registered, and the replacement is not initialized. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration"`; expect failure because the container currently publishes the replacement before releasing the previous model.
+- [x] Release a previous last lifecycle reference before replacing its container entry; determine last-reference status while excluding the key being replaced, preserve alias lifecycle behavior, and publish/initialize the replacement only after successful cleanup. Document the direct cleanup-exception contract. Rerun the focused command plus all `TestRegisterModel`, `TestRegisterSystem`, `TestDualRole`, and `TestUtility` lifecycle tests; expect all selected tests to pass.
 
 #### Task 1 Repair G: Remove components whose initialization fails
 
 **Files:** `AbstractDomain.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestRegisterModelInitializationFailureDoesNotPublishComponent` plus a model that throws from `OnInitialize`; assert the original exception is propagated and the failed component is absent from lookup. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterModelInitializationFailureDoesNotPublishComponent"`; expect failure because registration currently publishes the model before initialization succeeds.
-- [ ] Roll back the new container/lifecycle-key entry when initialization fails, restoring a prior still-valid non-released entry when applicable, and document the direct initialization-exception contract. Rerun the focused command and all core lifecycle tests; expect the failed component to remain absent and all selected tests to pass.
+- [x] Add `TestRegisterModelInitializationFailureDoesNotPublishComponent` plus a model that throws from `OnInitialize`; assert the original exception is propagated and the failed component is absent from lookup. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterModelInitializationFailureDoesNotPublishComponent"`; expect failure because registration currently publishes the model before initialization succeeds.
+- [x] Roll back the new container/lifecycle-key entry when initialization fails, restoring a prior still-valid non-released entry when applicable, and document the direct initialization-exception contract. Rerun the focused command and all core lifecycle tests; expect the failed component to remain absent and all selected tests to pass.
 
 #### Task 1 Repair H: Reject nested registration during replacement cleanup
 
 **Files:** `AbstractDomain.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent` plus a model whose replacement cleanup attempts one nested registration. Assert `InvalidOperationException`, the old registration remains visible, and neither requested replacement initializes. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent"`; expect failure because nested registration currently publishes and initializes a component during outer cleanup.
-- [ ] Guard last-reference replacement cleanup with a dedicated lifecycle-cleanup state and reject component registration while it is active, resetting the guard in `finally`; retain the outer old registration when the callback propagates the guard exception. Rerun the focused command and all core lifecycle tests; expect the nested and outer replacements to remain uninitialized and all tests to pass.
+- [x] Add `TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent` plus a model whose replacement cleanup attempts one nested registration. Assert `InvalidOperationException`, the old registration remains visible, and neither requested replacement initializes. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestRegisterDuringReplacementCleanupDoesNotPublishNestedComponent"`; expect failure because nested registration currently publishes and initializes a component during outer cleanup.
+- [x] Guard last-reference replacement cleanup with a dedicated lifecycle-cleanup state and reject component registration while it is active, resetting the guard in `finally`; retain the outer old registration when the callback propagates the guard exception. Rerun the focused command and all core lifecycle tests; expect the nested and outer replacements to remain uninitialized and all tests to pass.
 
 #### Task 1 Repair I: Consume custom unregister callbacks before invocation
 
 **Files:** `FrameworkImpl/Event.cs`, `Test/Framework/UnitTestFrame.cs`
 
-- [ ] Add `TestCustomUnregisterThrowingCallbackRunsOnce`, using a callback that increments a counter and throws `InvalidOperationException`; assert the first `UnRegister` propagates the original exception and a subsequent `Dispose` does not invoke the callback again. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestCustomUnregisterThrowingCallbackRunsOnce"`; expect failure because the counter becomes 2 when the callback throws before the field is cleared.
-- [ ] Capture the callback, clear the stored field before invocation, and invoke the captured callback without catching it so the original exception is preserved. Document in Chinese XML that the callback is consumed at most once even when it throws and that its exception propagates. Rerun the focused command; expect the first call to throw, the second call to complete, the counter to remain 1, and the test to pass.
+- [x] Add `TestCustomUnregisterThrowingCallbackRunsOnce`, using a callback that increments a counter and throws `InvalidOperationException`; assert the first `UnRegister` propagates the original exception and a subsequent `Dispose` does not invoke the callback again. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Framework.TestFramework.TestCustomUnregisterThrowingCallbackRunsOnce"`; expect failure because the counter becomes 2 when the callback throws before the field is cleared.
+- [x] Capture the callback, clear the stored field before invocation, and invoke the captured callback without catching it so the original exception is preserved. Document in Chinese XML that the callback is consumed at most once even when it throws and that its exception propagates. Rerun the focused command; expect the first call to throw, the second call to complete, the counter to remain 1, and the test to pass.
 
 ### Task 2: Collections, Utility, Toolkit, and Maths
 
@@ -182,7 +182,7 @@ Use `superpowers:requesting-code-review` with the pre-round and post-round SHAs.
 - Consumes: project-wide public API, documentation, TDD, and style constraints.
 - Produces: verified collection, utility, configuration, and math contracts plus one reviewable commit.
 
-- [ ] **Step 1: Run the focused baseline**
+- [x] **Step 1: Run the focused baseline**
 
 ```powershell
 dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Collections|FullyQualifiedName~SimpleFramework.Test.Utility|FullyQualifiedName~SimpleFramework.Test.Toolkit|FullyQualifiedName~SimpleFramework.Test.Maths"
@@ -190,15 +190,15 @@ dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleF
 
 Expected: all selected tests pass before repairs.
 
-- [ ] **Step 2: Review all listed source and test files**
+- [x] **Step 2: Review all listed source and test files**
 
 Check empty collections, missing keys, comparer preservation, enumeration invalidation, disposal idempotence, file-not-found and malformed data behavior, serializer options, cancellation, time boundaries, INI round trips, matrix dimensions, coordinate conversion, invalid hex ranges, allocation in repeated operations, public naming, XML docs, and opportunities for clearer collection expressions, pattern matching, ranges, target-typed construction, and expression bodies.
 
-- [ ] **Step 3: Repair concrete findings with appended TDD subtasks**
+- [x] **Step 3: Repair concrete findings with appended TDD subtasks**
 
 Append exact subtasks before behavior changes. Prefer direct APIs and deterministic tests; do not add abstraction layers solely to facilitate testing.
 
-- [ ] **Step 4: Create the round record and verify**
+- [x] **Step 4: Create the round record and verify**
 
 ```powershell
 dotnet test .\Test\Test.csproj --no-restore
@@ -208,7 +208,7 @@ git diff --check
 
 Expected: all tests pass, Release has zero warnings/errors, and no whitespace errors exist.
 
-- [ ] **Step 5: Commit and independently review round 2**
+- [x] **Step 5: Commit and independently review round 2**
 
 ```powershell
 git add -- Collections Utility Toolkit Maths Test/Collections Test/Utility Test/Toolkit Test/Maths docs/superpowers/plans/2026-07-10-full-codebase-review.md docs/superpowers/reviews/2026-07-10-round-2-foundations.md
@@ -221,148 +221,148 @@ Request review for the exact Git range, resolve Critical and Important feedback,
 
 **Files:** `Collections/Counter.cs`, `Test/Collections/UnitTestCounter.cs`
 
-- [ ] Add `TestSubtractIncludesRightOnlyKeys`, subtracting a counter that contains a key absent from the left operand and asserting that the result contains the negated right-hand count. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestCounter.TestSubtractIncludesRightOnlyKeys"`; expect failure because binary subtraction currently enumerates only left-hand keys.
-- [ ] Build the result from the union of both key sets and subtract missing values as zero. Rerun the same command; expect the right-only key to be present with its negative count and the test to pass.
+- [x] Add `TestSubtractIncludesRightOnlyKeys`, subtracting a counter that contains a key absent from the left operand and asserting that the result contains the negated right-hand count. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestCounter.TestSubtractIncludesRightOnlyKeys"`; expect failure because binary subtraction currently enumerates only left-hand keys.
+- [x] Build the result from the union of both key sets and subtract missing values as zero. Rerun the same command; expect the right-only key to be present with its negative count and the test to pass.
 
 #### Task 2 Repair B: Preserve caller-supplied key comparers
 
 **Files:** `Collections/DefaultDict.cs`, `Collections/Counter.cs`, `Test/Collections/UnitTestDefaultDict.cs`, `Test/Collections/UnitTestCounter.cs`
 
-- [ ] Add `TestUsesSuppliedComparer` and `TestCopyAndOperatorsPreserveComparer`; use reflection only for the initial RED so the tests compile before the comparer-aware constructors exist, then assert case-insensitive lookup, copy, addition, and subtraction keep one logical key. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestDefaultDict.TestUsesSuppliedComparer|FullyQualifiedName~Test.Collections.TestCounter.TestCopyAndOperatorsPreserveComparer"`; expect both tests to fail because neither type accepts or exposes a comparer.
-- [ ] Let `DefaultDict` accept an optional comparer and expose the effective comparer; let every `Counter` constructor and derived operator preserve the originating counter's comparer. Refactor the green tests to call the public APIs directly, rerun the same command, and expect both tests to pass without duplicate case-variant keys.
+- [x] Add `TestUsesSuppliedComparer` and `TestCopyAndOperatorsPreserveComparer`; use reflection only for the initial RED so the tests compile before the comparer-aware constructors exist, then assert case-insensitive lookup, copy, addition, and subtraction keep one logical key. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestDefaultDict.TestUsesSuppliedComparer|FullyQualifiedName~Test.Collections.TestCounter.TestCopyAndOperatorsPreserveComparer"`; expect both tests to fail because neither type accepts or exposes a comparer.
+- [x] Let `DefaultDict` accept an optional comparer and expose the effective comparer; let every `Counter` constructor and derived operator preserve the originating counter's comparer. Refactor the green tests to call the public APIs directly, rerun the same command, and expect both tests to pass without duplicate case-variant keys.
 
 #### Task 2 Repair C: Reject a missing DefaultDict factory immediately
 
 **Files:** `Collections/DefaultDict.cs`, `Test/Collections/UnitTestDefaultDict.cs`
 
-- [ ] Add `TestConstructorRejectsNullFactory`, constructing the dictionary with a null callback and expecting `ArgumentNullException` naming `initCallback`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestDefaultDict.TestConstructorRejectsNullFactory"`; expect failure because construction currently succeeds and defers a null-reference failure until a missing-key read.
-- [ ] Guard the constructor before storing the callback and document the exception in Chinese XML. Rerun the same command; expect the test to pass.
+- [x] Add `TestConstructorRejectsNullFactory`, constructing the dictionary with a null callback and expecting `ArgumentNullException` naming `initCallback`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Collections.TestDefaultDict.TestConstructorRejectsNullFactory"`; expect failure because construction currently succeeds and defers a null-reference failure until a missing-key read.
+- [x] Guard the constructor before storing the callback and document the exception in Chinese XML. Rerun the same command; expect the test to pass.
 
 #### Task 2 Repair D: Complete grouped disposal deterministically
 
 **Files:** `Utility/Disposable.cs`, `Test/Utility/UnitTestDisposable.cs`
 
-- [ ] Add `TestDisposableGroupDisposesAllChildrenWhenOneThrows`, registering a throwing child before a tracking child and expecting an `AggregateException` containing the original failure while both children are called once. Add `TestDisposableGroupDisposesItemsAddedAfterDisposal`, asserting an item added after group disposal is immediately disposed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestDisposable.TestDisposableGroupDisposesAllChildrenWhenOneThrows|FullyQualifiedName~Test.Utility.TestDisposable.TestDisposableGroupDisposesItemsAddedAfterDisposal"`; expect failures because the first exception aborts cleanup and post-disposal additions are retained without disposal.
-- [ ] Consume the group's children once, attempt every disposal in insertion order, aggregate failures deterministically, ignore null entries, and immediately dispose non-null items added after the group is closed. Rerun the same command; expect both tests to pass and repeated group disposal to remain a no-op.
+- [x] Add `TestDisposableGroupDisposesAllChildrenWhenOneThrows`, registering a throwing child before a tracking child and expecting an `AggregateException` containing the original failure while both children are called once. Add `TestDisposableGroupDisposesItemsAddedAfterDisposal`, asserting an item added after group disposal is immediately disposed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestDisposable.TestDisposableGroupDisposesAllChildrenWhenOneThrows|FullyQualifiedName~Test.Utility.TestDisposable.TestDisposableGroupDisposesItemsAddedAfterDisposal"`; expect failures because the first exception aborts cleanup and post-disposal additions are retained without disposal.
+- [x] Consume the group's children once, attempt every disposal in insertion order, aggregate failures deterministically, ignore null entries, and immediately dispose non-null items added after the group is closed. Rerun the same command; expect both tests to pass and repeated group disposal to remain a no-op.
 
 #### Task 2 Repair E: Express nullable JSON results and remove the UTF-8 round-trip allocation
 
 **Files:** `Utility/SerializeUtil.cs`, `Utility/FileUtil.cs`, `Test/Utility/UnitTestSerializeUtil.cs`
 
-- [ ] Add `TestDeserializeDeclaresNullableResult`, using `NullabilityInfoContext` to require nullable return metadata on generic and runtime-type deserialize overloads, and `TestSerializeBytesAvoidsIntermediateStringAllocation`, comparing warmed repeated allocations for a large ASCII payload against string serialization. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestSerializeUtil.TestDeserializeDeclaresNullableResult|FullyQualifiedName~Test.Utility.TestSerializeUtil.TestSerializeBytesAvoidsIntermediateStringAllocation"`; expect metadata and allocation assertions to fail because deserialize suppresses null and byte serialization creates a JSON string before UTF-8 encoding.
-- [ ] Return nullable results without suppression, cache the default serializer options, call `JsonSerializer.SerializeToUtf8Bytes` and byte-span deserialize APIs directly, and make `FileUtil` treat a JSON `null` payload as a successful nullable result. Rerun the same command plus all serialization/file tests; expect nullable metadata, allocation, and round trips to pass.
+- [x] Add `TestDeserializeDeclaresNullableResult`, using `NullabilityInfoContext` to require nullable return metadata on generic and runtime-type deserialize overloads, and `TestSerializeBytesAvoidsIntermediateStringAllocation`, comparing warmed repeated allocations for a large ASCII payload against string serialization. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestSerializeUtil.TestDeserializeDeclaresNullableResult|FullyQualifiedName~Test.Utility.TestSerializeUtil.TestSerializeBytesAvoidsIntermediateStringAllocation"`; expect metadata and allocation assertions to fail because deserialize suppresses null and byte serialization creates a JSON string before UTF-8 encoding.
+- [x] Return nullable results without suppression, cache the default serializer options, call `JsonSerializer.SerializeToUtf8Bytes` and byte-span deserialize APIs directly, and make `FileUtil` treat a JSON `null` payload as a successful nullable result. Rerun the same command plus all serialization/file tests; expect nullable metadata, allocation, and round trips to pass.
 
 #### Task 2 Repair F: Allow WaitUntil cancellation
 
 **Files:** `Utility/TaskUtil.cs`, `Test/Utility/UnitTestTaskUtil.cs`
 
-- [ ] Add `TestWaitUntilHonorsCancellation`, using reflection for the initial RED to require the direct four-parameter overload and invoking it with a pre-cancelled token. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestTaskUtil.TestWaitUntilHonorsCancellation"`; expect failure because no token-aware API exists.
-- [ ] Add an optional trailing `CancellationToken`, check cancellation before polling, and pass it into `Task.Delay`; document cancellation propagation in Chinese XML. Refactor the green test to call the API directly and rerun the same command; expect `OperationCanceledException` and a passing test.
+- [x] Add `TestWaitUntilHonorsCancellation`, using reflection for the initial RED to require the direct four-parameter overload and invoking it with a pre-cancelled token. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestTaskUtil.TestWaitUntilHonorsCancellation"`; expect failure because no token-aware API exists.
+- [x] Add an optional trailing `CancellationToken`, check cancellation before polling, and pass it into `Task.Delay`; document cancellation propagation in Chinese XML. Refactor the green test to call the API directly and rerun the same command; expect `OperationCanceledException` and a passing test.
 
 #### Task 2 Repair G: Reject invalid utility boundary inputs
 
 **Files:** `Utility/TimeUtil.cs`, `Utility/Extensions/RandomExtension.cs`, `Utility/Extensions/StringExtension.cs`, `Test/Utility/UnitTestTimeUtil.cs`, `Test/Extensions/UnitTestExtension.cs`
 
-- [ ] Add `TestToMsThrowsOnOverflow`, `TestChoiceRejectsEmptyList`, `TestSampleRejectsNegativeCount`, and `TestRepeatRejectsNegativeCount`, asserting `OverflowException` or an argument exception naming the invalid parameter. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestTimeUtil.TestToMsThrowsOnOverflow|FullyQualifiedName~Test.Extensions.TestRandom.TestChoiceRejectsEmptyList|FullyQualifiedName~Test.Extensions.TestRandom.TestSampleRejectsNegativeCount|FullyQualifiedName~Test.Extensions.TestString.TestRepeatRejectsNegativeCount"`; expect all four to fail because overflow wraps, empty choice fails through an index, and negative counts silently produce empty results.
-- [ ] Use checked seconds-to-milliseconds arithmetic and direct parameter validation for empty/negative inputs, with exact Chinese XML exception contracts. Rerun the same command; expect all four tests to pass.
+- [x] Add `TestToMsThrowsOnOverflow`, `TestChoiceRejectsEmptyList`, `TestSampleRejectsNegativeCount`, and `TestRepeatRejectsNegativeCount`, asserting `OverflowException` or an argument exception naming the invalid parameter. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Utility.TestTimeUtil.TestToMsThrowsOnOverflow|FullyQualifiedName~Test.Extensions.TestRandom.TestChoiceRejectsEmptyList|FullyQualifiedName~Test.Extensions.TestRandom.TestSampleRejectsNegativeCount|FullyQualifiedName~Test.Extensions.TestString.TestRepeatRejectsNegativeCount"`; expect all four to fail because overflow wraps, empty choice fails through an index, and negative counts silently produce empty results.
+- [x] Use checked seconds-to-milliseconds arithmetic and direct parameter validation for empty/negative inputs, with exact Chinese XML exception contracts. Rerun the same command; expect all four tests to pass.
 
 #### Task 2 Repair H: Persist typed INI values independently of ambient culture
 
 **Files:** `Toolkit/ConfigTool.cs`, `Test/Toolkit/UnitTestIniConfigTool.cs`
 
-- [ ] Add `TestTypedValuesRoundTripAcrossCultures`, setting a double and `DateTime` under `fr-FR`, saving, then loading and reading under `en-US`, while asserting an explicitly supplied raw string containing a comma is unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Toolkit.TestIniConfigTool.TestTypedValuesRoundTripAcrossCultures"`; expect failure because typed values currently use ambient-culture `ToString` and `Convert` behavior.
-- [ ] Format non-string `IFormattable` values with invariant culture (using round-trip format for `DateTime`) and convert typed reads with invariant culture, while returning raw string values unchanged. Rerun the same command; expect exact numeric/date values and raw text to round-trip across cultures.
+- [x] Add `TestTypedValuesRoundTripAcrossCultures`, setting a double and `DateTime` under `fr-FR`, saving, then loading and reading under `en-US`, while asserting an explicitly supplied raw string containing a comma is unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Toolkit.TestIniConfigTool.TestTypedValuesRoundTripAcrossCultures"`; expect failure because typed values currently use ambient-culture `ToString` and `Convert` behavior.
+- [x] Format non-string `IFormattable` values with invariant culture (using round-trip format for `DateTime`) and convert typed reads with invariant culture, while returning raw string values unchanged. Rerun the same command; expect exact numeric/date values and raw text to round-trip across cultures.
 
 #### Task 2 Repair I: Reject non-finite matrix inversion
 
 **Files:** `Maths/Matrix.cs`, `Test/Maths/UnitTestMatrix2D.cs`
 
-- [ ] Add `TestNonFiniteMatrixThrows`, constructing matrices whose determinants are `NaN` or infinity and expecting `InvalidOperationException`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestMatrix2D.TestNonFiniteMatrixThrows"`; expect failure because the epsilon comparison lets non-finite determinants through and returns non-finite inverse values.
-- [ ] Treat a non-finite determinant as non-invertible and document the exception contract. Rerun the same command and the existing inverse tests; expect all selected tests to pass.
+- [x] Add `TestNonFiniteMatrixThrows`, constructing matrices whose determinants are `NaN` or infinity and expecting `InvalidOperationException`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestMatrix2D.TestNonFiniteMatrixThrows"`; expect failure because the epsilon comparison lets non-finite determinants through and returns non-finite inverse values.
+- [x] Treat a non-finite determinant as non-invertible and document the exception contract. Rerun the same command and the existing inverse tests; expect all selected tests to pass.
 
 #### Task 2 Repair J: Validate hex coordinates and checked arithmetic
 
 **Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
 
-- [ ] Add `TestHexRejectsOverflowInvalidCoordinates`, `TestHexArithmeticThrowsOnOverflow`, and `TestFractionalHexRejectsNonFiniteCoordinates`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestHexRejectsOverflowInvalidCoordinates|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestHexArithmeticThrowsOnOverflow|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestFractionalHexRejectsNonFiniteCoordinates"`; expect failures because integer-sum overflow can satisfy the invariant, coordinate operators wrap, and NaN/infinity bypass the fractional sum check.
-- [ ] Validate integer sums in widened arithmetic, perform integer coordinate arithmetic in checked context, reject each non-finite fractional coordinate with `ArgumentOutOfRangeException`, and retain `ArgumentException` for finite coordinates whose sum is invalid. Rerun the same command and all hex arithmetic/rounding tests; expect all selected tests to pass.
+- [x] Add `TestHexRejectsOverflowInvalidCoordinates`, `TestHexArithmeticThrowsOnOverflow`, and `TestFractionalHexRejectsNonFiniteCoordinates`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestHexRejectsOverflowInvalidCoordinates|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestHexArithmeticThrowsOnOverflow|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestFractionalHexRejectsNonFiniteCoordinates"`; expect failures because integer-sum overflow can satisfy the invariant, coordinate operators wrap, and NaN/infinity bypass the fractional sum check.
+- [x] Validate integer sums in widened arithmetic, perform integer coordinate arithmetic in checked context, reject each non-finite fractional coordinate with `ArgumentOutOfRangeException`, and retain `ArgumentException` for finite coordinates whose sum is invalid. Rerun the same command and all hex arithmetic/rounding tests; expect all selected tests to pass.
 
 #### Task 2 Repair K: Make hex presets immutable and reject unusable layout inputs
 
 **Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
 
-- [ ] Add `TestOrientationPresetsAreReadOnlyProperties`, `TestLayoutRejectsZeroOrNonFiniteSize`, and `TestDirectionMethodsNameInvalidDirection`; require preset properties rather than mutable fields, reject a zero/non-finite scale axis, and require invalid direction failures to name `direction`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestOrientationPresetsAreReadOnlyProperties|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsZeroOrNonFiniteSize|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestDirectionMethodsNameInvalidDirection"`; expect failures because presets are writable fields, invalid scales create non-finite inverse transforms, and list indexing reports `index`.
-- [ ] Make `HexOrientation` readonly with get-only static presets, validate finite non-zero layout size axes while allowing finite negative mirroring scales, and validate direction values before lookup. Rerun the same command plus all layout/corner tests; expect all selected tests to pass.
+- [x] Add `TestOrientationPresetsAreReadOnlyProperties`, `TestLayoutRejectsZeroOrNonFiniteSize`, and `TestDirectionMethodsNameInvalidDirection`; require preset properties rather than mutable fields, reject a zero/non-finite scale axis, and require invalid direction failures to name `direction`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestOrientationPresetsAreReadOnlyProperties|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsZeroOrNonFiniteSize|FullyQualifiedName~Test.Maths.TestHexagonGrid.TestDirectionMethodsNameInvalidDirection"`; expect failures because presets are writable fields, invalid scales create non-finite inverse transforms, and list indexing reports `index`.
+- [x] Make `HexOrientation` readonly with get-only static presets, validate finite non-zero layout size axes while allowing finite negative mirroring scales, and validate direction values before lookup. Rerun the same command plus all layout/corner tests; expect all selected tests to pass.
 
 #### Task 2 Repair L: Reject a non-finite hex layout origin
 
 **Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
 
-- [ ] Add `TestLayoutRejectsNonFiniteOrigin`, constructing a layout with a NaN or infinite origin coordinate and expecting `ArgumentOutOfRangeException` naming `origin`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsNonFiniteOrigin"`; expect failure because non-finite origin values are currently stored and later poison every coordinate conversion.
-- [ ] Validate both origin coordinates as finite while retaining every finite origin value. Rerun the same command and the existing layout round-trip tests; expect all selected tests to pass.
+- [x] Add `TestLayoutRejectsNonFiniteOrigin`, constructing a layout with a NaN or infinite origin coordinate and expecting `ArgumentOutOfRangeException` naming `origin`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Maths.TestHexagonGrid.TestLayoutRejectsNonFiniteOrigin"`; expect failure because non-finite origin values are currently stored and later poison every coordinate conversion.
+- [x] Validate both origin coordinates as finite while retaining every finite origin value. Rerun the same command and the existing layout round-trip tests; expect all selected tests to pass.
 
 #### Task 2 Repair M: Make comparer semantics consistent across dictionary pairs and Counter operations
 
 **Files:** `Collections/DefaultDict.cs`, `Collections/Counter.cs`, `Test/Collections/UnitTestDefaultDict.cs`, `Test/Collections/UnitTestCounter.cs`
 
-- [ ] Add `TestPairContainsUsesConfiguredComparer`, `TestCrossComparerArithmeticThrows`, `TestCrossComparerRelationsThrow`, and `TestComparerCompatibilityControlsEqualityAndHashing`; retain same-comparer aggregation assertions. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestPairContainsUsesConfiguredComparer|FullyQualifiedName~TestCrossComparerArithmeticThrows|FullyQualifiedName~TestCrossComparerRelationsThrow|FullyQualifiedName~TestComparerCompatibilityControlsEqualityAndHashing"`; expect pair containment to ignore the configured comparer and cross-comparer operations to return inconsistent values instead of a documented failure.
-- [ ] Delegate pair containment through `ICollection<KeyValuePair<TKey,TValue>>`, define comparer compatibility through comparer equality, reject binary arithmetic and every relational direction with `ArgumentException` naming the incompatible operand, keep incompatible equality false, and document the rule. Rerun the same command plus all Counter/DefaultDict tests; expect comparer-aware containment, symmetric failures, same-comparer aggregation, and equality/hash invariants to pass.
+- [x] Add `TestPairContainsUsesConfiguredComparer`, `TestCrossComparerArithmeticThrows`, `TestCrossComparerRelationsThrow`, and `TestComparerCompatibilityControlsEqualityAndHashing`; retain same-comparer aggregation assertions. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestPairContainsUsesConfiguredComparer|FullyQualifiedName~TestCrossComparerArithmeticThrows|FullyQualifiedName~TestCrossComparerRelationsThrow|FullyQualifiedName~TestComparerCompatibilityControlsEqualityAndHashing"`; expect pair containment to ignore the configured comparer and cross-comparer operations to return inconsistent values instead of a documented failure.
+- [x] Delegate pair containment through `ICollection<KeyValuePair<TKey,TValue>>`, define comparer compatibility through comparer equality, reject binary arithmetic and every relational direction with `ArgumentException` naming the incompatible operand, keep incompatible equality false, and document the rule. Rerun the same command plus all Counter/DefaultDict tests; expect comparer-aware containment, symmetric failures, same-comparer aggregation, and equality/hash invariants to pass.
 
 #### Task 2 Repair N: Complete logger cleanup and publish nullable DisposableGroup additions
 
 **Files:** `Utility/Disposable.cs`, `Utility/Logging.cs`, `Test/Utility/UnitTestDisposable.cs`, `Test/Utility/UnitTestLogging.cs`
 
-- [ ] Add `TestDisposableGroupAddDeclaresNullableParameter` and `TestClearHandlersDisposesEveryHandlerAndAggregatesFailures`, using two throwing handlers with a later tracker and asserting failure order. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestDisposableGroupAddDeclaresNullableParameter|FullyQualifiedName~TestClearHandlersDisposesEveryHandlerAndAggregatesFailures"`; expect nullable metadata to be non-null and logger cleanup to stop on the first failure.
-- [ ] Change `DisposableGroup.Add` to `IDisposable?`; in `Logger.ClearHandlers`, snapshot and clear under the handler lock, dispose the snapshot without holding the shared collection lock, attempt every handler in order, and throw one `AggregateException` afterward. Update Chinese XML failure contracts and rerun the focused command plus all disposal/logging tests; expect complete cleanup and deterministic failures.
+- [x] Add `TestDisposableGroupAddDeclaresNullableParameter` and `TestClearHandlersDisposesEveryHandlerAndAggregatesFailures`, using two throwing handlers with a later tracker and asserting failure order. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestDisposableGroupAddDeclaresNullableParameter|FullyQualifiedName~TestClearHandlersDisposesEveryHandlerAndAggregatesFailures"`; expect nullable metadata to be non-null and logger cleanup to stop on the first failure.
+- [x] Change `DisposableGroup.Add` to `IDisposable?`; in `Logger.ClearHandlers`, snapshot and clear under the handler lock, dispose the snapshot without holding the shared collection lock, attempt every handler in order, and throw one `AggregateException` afterward. Update Chinese XML failure contracts and rerun the focused command plus all disposal/logging tests; expect complete cleanup and deterministic failures.
 
 #### Task 2 Repair O: Validate WaitUntil boundaries and cap polling delay
 
 **Files:** `Utility/TaskUtil.cs`, `Test/Utility/UnitTestTaskUtil.cs`
 
-- [ ] Add `TestWaitUntilRejectsInvalidArguments`, `TestWaitUntilCapsDelayToRemainingTimeout`, and `TestWaitUntilCancellationInterruptsActiveDelay`; cover null predicate, negative timeout, interval zero/-1, an `int.MaxValue` interval with a short timeout, and cancellation after the predicate signals entry. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestWaitUntilRejectsInvalidArguments|FullyQualifiedName~TestWaitUntilCapsDelayToRemainingTimeout|FullyQualifiedName~TestWaitUntilCancellationInterruptsActiveDelay"`; expect missing parameter validation, oversleep, and an uninterruptible active delay without the token path.
-- [ ] Validate arguments before polling, compute each delay as the smaller of interval and positive remaining timeout, and retain token propagation through the active delay. Document parameter and cancellation exceptions; rerun the focused command and all TaskUtil tests, expecting bounded normal timeout and prompt cancellation.
+- [x] Add `TestWaitUntilRejectsInvalidArguments`, `TestWaitUntilCapsDelayToRemainingTimeout`, and `TestWaitUntilCancellationInterruptsActiveDelay`; cover null predicate, negative timeout, interval zero/-1, an `int.MaxValue` interval with a short timeout, and cancellation after the predicate signals entry. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestWaitUntilRejectsInvalidArguments|FullyQualifiedName~TestWaitUntilCapsDelayToRemainingTimeout|FullyQualifiedName~TestWaitUntilCancellationInterruptsActiveDelay"`; expect missing parameter validation, oversleep, and an uninterruptible active delay without the token path.
+- [x] Validate arguments before polling, compute each delay as the smaller of interval and positive remaining timeout, and retain token propagation through the active delay. Document parameter and cancellation exceptions; rerun the focused command and all TaskUtil tests, expecting bounded normal timeout and prompt cancellation.
 
 #### Task 2 Repair P: Round-trip DateTimeOffset values invariantly
 
 **Files:** `Toolkit/ConfigTool.cs`, `Test/Toolkit/UnitTestIniConfigTool.cs`
 
-- [ ] Add `TestDateTimeOffsetRoundTripsAcrossCultures`, writing under `fr-FR` and reading under `en-US` while asserting ticks and offset. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestDateTimeOffsetRoundTripsAcrossCultures"`; expect the read to return its default because `Convert.ChangeType` cannot create `DateTimeOffset`.
-- [ ] Parse `DateTimeOffset` with invariant culture and round-trip styles, and document the actually supported typed conversions without claiming arbitrary conversion. Rerun the focused command and all Toolkit tests; expect exact ticks/offset and existing raw-string behavior to pass.
+- [x] Add `TestDateTimeOffsetRoundTripsAcrossCultures`, writing under `fr-FR` and reading under `en-US` while asserting ticks and offset. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestDateTimeOffsetRoundTripsAcrossCultures"`; expect the read to return its default because `Convert.ChangeType` cannot create `DateTimeOffset`.
+- [x] Parse `DateTimeOffset` with invariant culture and round-trip styles, and document the actually supported typed conversions without claiming arbitrary conversion. Rerun the focused command and all Toolkit tests; expect exact ticks/offset and existing raw-string behavior to pass.
 
 #### Task 2 Repair Q: Reject non-finite derived matrix and layout transforms
 
 **Files:** `Maths/Matrix.cs`, `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestMatrix2D.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
 
-- [ ] Add `TestInverseRejectsNonFiniteCandidate`, `TestOrientationRejectsNonFiniteAngle`, `TestLayoutRejectsDefaultOrNonFiniteOrientation`, `TestLayoutRejectsNonRepresentableReciprocal`, and `TestNegativeScaleMirrorsAndRoundTrips`; cover extreme finite matrices, `double.Epsilon` size, default orientation, non-finite angle, and finite negative reflection. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestInverseRejectsNonFiniteCandidate|FullyQualifiedName~TestOrientationRejectsNonFiniteAngle|FullyQualifiedName~TestLayoutRejectsDefaultOrNonFiniteOrientation|FullyQualifiedName~TestLayoutRejectsNonRepresentableReciprocal|FullyQualifiedName~TestNegativeScaleMirrorsAndRoundTrips"`; expect non-finite derived values to be accepted while the explicit negative-scale coverage already passes.
-- [ ] Validate inverse candidate components, finite orientation matrices/inverse/start angle at the appropriate constructor/layout boundaries, and finite reciprocals/derived transforms, while retaining negative mirroring. Document exact exceptions and rerun the focused command plus all matrix/hex tests; expect all selected tests to pass.
+- [x] Add `TestInverseRejectsNonFiniteCandidate`, `TestOrientationRejectsNonFiniteAngle`, `TestLayoutRejectsDefaultOrNonFiniteOrientation`, `TestLayoutRejectsNonRepresentableReciprocal`, and `TestNegativeScaleMirrorsAndRoundTrips`; cover extreme finite matrices, `double.Epsilon` size, default orientation, non-finite angle, and finite negative reflection. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestInverseRejectsNonFiniteCandidate|FullyQualifiedName~TestOrientationRejectsNonFiniteAngle|FullyQualifiedName~TestLayoutRejectsDefaultOrNonFiniteOrientation|FullyQualifiedName~TestLayoutRejectsNonRepresentableReciprocal|FullyQualifiedName~TestNegativeScaleMirrorsAndRoundTrips"`; expect non-finite derived values to be accepted while the explicit negative-scale coverage already passes.
+- [x] Validate inverse candidate components, finite orientation matrices/inverse/start angle at the appropriate constructor/layout boundaries, and finite reciprocals/derived transforms, while retaining negative mirroring. Document exact exceptions and rerun the focused command plus all matrix/hex tests; expect all selected tests to pass.
 
 #### Task 2 Repair R: Align XML contracts and FileUtil serialization failure behavior
 
 **Files:** `Utility/FileUtil.cs`, `Utility/SerializeUtil.cs`, `Utility/Logging.cs`, `Utility/MiscUtil.cs`, `Utility/TimeUtil.cs`, `Utility/Extensions/RandomExtension.cs`, `Test/Utility/UnitTestFileUtil.cs`, `Test/Documentation/UnitTestSourceTextQuality.cs`
 
-- [ ] Add `TestSaveAsJsonContainsSerializationFailures` using a cyclic object and asserting no exception/file, plus source-contract assertions for reviewed XML defects. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSaveAsJsonContainsSerializationFailures|FullyQualifiedName~TestSourceTextQuality"`; expect cyclic serialization to escape because it occurs before the try block and source checks to expose inaccurate/empty tags.
-- [ ] Move JSON serialization inside the SaveAsJson try block; correct Shuffle/Sample type-parameter and exception docs, MiscUtil/TimeUtil empty tags, JSON-null value-type behavior, and Logging parameter/failure contracts. Rerun the focused command, FileUtil/SerializeUtil tests, and source quality; expect behavior and docs to match with no compiler warnings.
+- [x] Add `TestSaveAsJsonContainsSerializationFailures` using a cyclic object and asserting no exception/file, plus source-contract assertions for reviewed XML defects. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSaveAsJsonContainsSerializationFailures|FullyQualifiedName~TestSourceTextQuality"`; expect cyclic serialization to escape because it occurs before the try block and source checks to expose inaccurate/empty tags.
+- [x] Move JSON serialization inside the SaveAsJson try block; correct Shuffle/Sample type-parameter and exception docs, MiscUtil/TimeUtil empty tags, JSON-null value-type behavior, and Logging parameter/failure contracts. Rerun the focused command, FileUtil/SerializeUtil tests, and source quality; expect behavior and docs to match with no compiler warnings.
 
 #### Task 2 Repair S: Validate HexRound representability explicitly
 
 **Files:** `Maths/HexagonGrid.cs`, `Test/Maths/UnitTestHexagonGrid.cs`
 
-- [ ] Add `TestHexRoundRejectsUnrepresentableFiniteCoordinates`, passing extreme finite fractional coordinates that satisfy the cube sum and expecting a documented deterministic exception before integer conversion. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestHexRoundRejectsUnrepresentableFiniteCoordinates"`; expect conversion to produce implementation-defined integer results or a later unrelated failure.
-- [ ] Validate finite rounded coordinates are within `int` range and the corrected cube coordinate remains representable before casting; throw `OverflowException` for an unrepresentable result and document it. Rerun the focused command plus all HexRound/line/layout tests; expect deterministic rejection and unchanged normal rounding.
+- [x] Add `TestHexRoundRejectsUnrepresentableFiniteCoordinates`, passing extreme finite fractional coordinates that satisfy the cube sum and expecting a documented deterministic exception before integer conversion. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestHexRoundRejectsUnrepresentableFiniteCoordinates"`; expect conversion to produce implementation-defined integer results or a later unrelated failure.
+- [x] Validate finite rounded coordinates are within `int` range and the corrected cube coordinate remains representable before casting; throw `OverflowException` for an unrepresentable result and document it. Rerun the focused command plus all HexRound/line/layout tests; expect deterministic rejection and unchanged normal rounding.
 
 #### Task 2 Repair T: Reject incompatible comparers before mutating Counter instances
 
 **Files:** `Collections/Counter.cs`, `Test/Collections/UnitTestCounter.cs`
 
-- [ ] Add `TestUpdateRejectsIncompatibleComparerBeforeMutation` and `TestSubtractRejectsIncompatibleComparerBeforeMutation`, using ordinal and ordinal-ignore-case counters whose first potential write would change existing state. Assert `ArgumentException` names `other` and the receiver remains exactly unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestUpdateRejectsIncompatibleComparerBeforeMutation|FullyQualifiedName~TestSubtractRejectsIncompatibleComparerBeforeMutation"`; expect both tests to fail because the mutating methods currently merge incompatible comparer domains.
-- [ ] Call the existing comparer compatibility guard before either method begins iteration and document the Chinese XML exception contract. Rerun the focused command plus all Counter tests; expect incompatible calls to fail before mutation while compatible same-comparer updates and subtraction remain green.
+- [x] Add `TestUpdateRejectsIncompatibleComparerBeforeMutation` and `TestSubtractRejectsIncompatibleComparerBeforeMutation`, using ordinal and ordinal-ignore-case counters whose first potential write would change existing state. Assert `ArgumentException` names `other` and the receiver remains exactly unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestUpdateRejectsIncompatibleComparerBeforeMutation|FullyQualifiedName~TestSubtractRejectsIncompatibleComparerBeforeMutation"`; expect both tests to fail because the mutating methods currently merge incompatible comparer domains.
+- [x] Call the existing comparer compatibility guard before either method begins iteration and document the Chinese XML exception contract. Rerun the focused command plus all Counter tests; expect incompatible calls to fail before mutation while compatible same-comparer updates and subtraction remain green.
 
 #### Task 2 Repair U: Dispose removed logger handlers outside the shared lock
 
 **Files:** `Utility/Logging.cs`, `Test/Utility/UnitTestLogging.cs`
 
-- [ ] Add `TestRemoveHandlerDisposesOutsideLoggerLock`, whose disposal callback starts a coordinated task that must acquire the same logger lock and records whether it completes during the bounded callback window. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestRemoveHandlerDisposesOutsideLoggerLock"`; expect failure because `RemoveHandler` currently retains `_handlersLock` throughout the external callback.
-- [ ] Detach the handler under `_handlersLock`, release the lock, and dispose only when removal succeeded. Preserve direct disposal-exception propagation and missing-handler no-op behavior, retain accurate Chinese XML documentation, then rerun the focused command plus all logging tests; expect the coordinated lock acquisition to complete without deadlock or timeout.
+- [x] Add `TestRemoveHandlerDisposesOutsideLoggerLock`, whose disposal callback starts a coordinated task that must acquire the same logger lock and records whether it completes during the bounded callback window. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestRemoveHandlerDisposesOutsideLoggerLock"`; expect failure because `RemoveHandler` currently retains `_handlersLock` throughout the external callback.
+- [x] Detach the handler under `_handlersLock`, release the lock, and dispose only when removal succeeded. Preserve direct disposal-exception propagation and missing-handler no-op behavior, retain accurate Chinese XML documentation, then rerun the focused command plus all logging tests; expect the coordinated lock acquisition to complete without deadlock or timeout.
 
 ### Task 3: Patterns
 
@@ -375,7 +375,7 @@ Request review for the exact Git range, resolve Critical and Important feedback,
 - Consumes: Collections and Utility behavior plus hierarchy/lifecycle conventions.
 - Produces: verified pattern implementations, deterministic state transitions, and one reviewable commit.
 
-- [ ] **Step 1: Run the Patterns baseline**
+- [x] **Step 1: Run the Patterns baseline**
 
 ```powershell
 dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleFramework.Test.Patterns"
@@ -383,15 +383,15 @@ dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~SimpleF
 
 Expected: all Patterns tests pass before repairs.
 
-- [ ] **Step 2: Review implementation and tests exhaustively**
+- [x] **Step 2: Review implementation and tests exhaustively**
 
 Trace singleton construction, service replacement and removal, pool duplicate returns and reset behavior, message subscription mutation during dispatch, Blackboard parent lookup and lock usage, state entry/exit ordering, hierarchical transitions, reentrancy, invalid transitions, exception paths, hot-loop allocations, XML docs, and modern syntax opportunities.
 
-- [ ] **Step 3: Repair findings using appended TDD subtasks**
+- [x] **Step 3: Repair findings using appended TDD subtasks**
 
 Use deterministic tests for reentrancy and concurrency; never use timing sleeps as proof of ordering. Keep lock scope and transition order explicit in both code and Chinese documentation.
 
-- [ ] **Step 4: Record, verify, commit, and review round 3**
+- [x] **Step 4: Record, verify, commit, and review round 3**
 
 ```powershell
 dotnet test .\Test\Test.csproj --no-restore
@@ -407,203 +407,203 @@ Request review for the round range, resolve Critical and Important feedback, rer
 
 **Files:** `Patterns/Singleton.cs`, `Test/Patterns/UnitTestSingleton.cs`
 
-- [ ] Add `TestInitializationFailureDoesNotPublishInstance`, using a singleton whose first `Initialize` call throws and whose second succeeds; assert the first access throws, the second returns an initialized instance, and two instances were constructed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestSingleton.TestInitializationFailureDoesNotPublishInstance"`; expect failure because the first, uninitialized instance remains cached.
-- [ ] Initialize a local candidate before publishing it under the singleton lock, leaving `_instance` null when initialization throws. Rerun the focused command; expect the retry to construct and publish one initialized instance.
+- [x] Add `TestInitializationFailureDoesNotPublishInstance`, using a singleton whose first `Initialize` call throws and whose second succeeds; assert the first access throws, the second returns an initialized instance, and two instances were constructed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestSingleton.TestInitializationFailureDoesNotPublishInstance"`; expect failure because the first, uninitialized instance remains cached.
+- [x] Initialize a local candidate before publishing it under the singleton lock, leaving `_instance` null when initialization throws. Rerun the focused command; expect the retry to construct and publish one initialized instance.
 
 #### Task 3 Repair B: Reject duplicate object-pool returns
 
 **Files:** `Patterns/ObjectPool.cs`, `Test/Patterns/UnitTestObjectPool.cs`
 
-- [ ] Add `TestDuplicateReturnIsRejectedWithoutDuplicatingObject`, returning one object twice, expecting `InvalidOperationException`, then asserting the pool contains and lends that object only once. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestObjectPool.TestDuplicateReturnIsRejectedWithoutDuplicatingObject"`; expect failure because the duplicate return succeeds and increments the count to two.
-- [ ] Track pooled references with a reference-identity `HashSet<T>`, reject an already-pooled reference before callbacks, roll membership back if return callbacks fail, and remove membership on get/clear. Rerun the focused command; expect one rejected duplicate and one reusable object.
+- [x] Add `TestDuplicateReturnIsRejectedWithoutDuplicatingObject`, returning one object twice, expecting `InvalidOperationException`, then asserting the pool contains and lends that object only once. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestObjectPool.TestDuplicateReturnIsRejectedWithoutDuplicatingObject"`; expect failure because the duplicate return succeeds and increments the count to two.
+- [x] Track pooled references with a reference-identity `HashSet<T>`, reject an already-pooled reference before callbacks, roll membership back if return callbacks fail, and remove membership on get/clear. Rerun the focused command; expect one rejected duplicate and one reusable object.
 
 #### Task 3 Repair C: Make message mutation safe across reentrant publication and exceptions
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestHandlerCanUnsubscribeBeforeReentrantPublish`, where the first handler disposes itself and publishes recursively while a second handler records both messages; assert no exception, the removed handler sees only the outer message, and the remaining handler sees inner then outer. Add `TestSubscriptionMutationIsAppliedWhenHandlerThrows`, where a handler disposes itself then throws and is absent on the next publish. Run both through `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestHandlerCanUnsubscribeBeforeReentrantPublish|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscriptionMutationIsAppliedWhenHandlerThrows"`; expect the reentrant test to fail from active-list mutation, while the exception-path characterization already passes because the next publication flushes pending removal.
-- [ ] Track publication depth, never apply pending mutations while any publication frame is iterating, skip handlers pending removal, and apply pending changes in the outermost `finally`. Rerun the focused command; expect deterministic ordering and exception-safe cleanup.
+- [x] Add `TestHandlerCanUnsubscribeBeforeReentrantPublish`, where the first handler disposes itself and publishes recursively while a second handler records both messages; assert no exception, the removed handler sees only the outer message, and the remaining handler sees inner then outer. Add `TestSubscriptionMutationIsAppliedWhenHandlerThrows`, where a handler disposes itself then throws and is absent on the next publish. Run both through `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestHandlerCanUnsubscribeBeforeReentrantPublish|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscriptionMutationIsAppliedWhenHandlerThrows"`; expect the reentrant test to fail from active-list mutation, while the exception-path characterization already passes because the next publication flushes pending removal.
+- [x] Track publication depth, never apply pending mutations while any publication frame is iterating, skip handlers pending removal, and apply pending changes in the outermost `finally`. Rerun the focused command; expect deterministic ordering and exception-safe cleanup.
 
 #### Task 3 Repair D: Preserve buffered-channel state after disposal
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer`, publish an initial value, dispose, attempt a second publish, and assert `ObjectDisposedException` plus the original buffered value. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer"`; expect failure because the buffer changes before the base disposed guard runs.
-- [ ] Expose the disposed guard to derived channels and invoke it before updating buffered state. Rerun the focused command; expect the exception without mutation.
+- [x] Add `TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer`, publish an initial value, dispose, attempt a second publish, and assert `ObjectDisposedException` plus the original buffered value. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestDisposedBufferedChannelRejectsPublishWithoutChangingBuffer"`; expect failure because the buffer changes before the base disposed guard runs.
+- [x] Expose the disposed guard to derived channels and invoke it before updating buffered state. Rerun the focused command; expect the exception without mutation.
 
 #### Task 3 Repair E: Reject states and transitions owned by another machine
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Change `TestAddNullState` to expect `ArgumentNullException`; add `TestInitialStateMustBelongToMachine` and `TestTransitionStatesMustBelongToMachine`, asserting assignments/transitions involving unregistered or foreign-owned states throw `InvalidOperationException`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddNullState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestInitialStateMustBelongToMachine|FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionStatesMustBelongToMachine"`; expect failures because null is dereferenced and ownership is unchecked.
-- [ ] Guard null state input, prevent a state from joining multiple machines, validate non-null initial/source states and target states belong to the receiving machine, and document each exception contract. Rerun the focused command; expect all invalid operations to be rejected before state changes.
+- [x] Change `TestAddNullState` to expect `ArgumentNullException`; add `TestInitialStateMustBelongToMachine` and `TestTransitionStatesMustBelongToMachine`, asserting assignments/transitions involving unregistered or foreign-owned states throw `InvalidOperationException`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddNullState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestInitialStateMustBelongToMachine|FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionStatesMustBelongToMachine"`; expect failures because null is dereferenced and ownership is unchecked.
+- [x] Guard null state input, prevent a state from joining multiple machines, validate non-null initial/source states and target states belong to the receiving machine, and document each exception contract. Rerun the focused command; expect all invalid operations to be rejected before state changes.
 
 #### Task 3 Repair F: Exit hierarchical states from leaf to root
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestNestedStatesExitChildBeforeParent`, recording callbacks while deactivating a two-level active hierarchy and asserting `child-exit` precedes `parent-exit`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestNestedStatesExitChildBeforeParent"`; expect the current parent-first order.
-- [ ] Deactivate the child state machine before invoking the parent state's exit callback, while retaining parent-first entry. Rerun the focused command; expect leaf-to-root exit order.
+- [x] Add `TestNestedStatesExitChildBeforeParent`, recording callbacks while deactivating a two-level active hierarchy and asserting `child-exit` precedes `parent-exit`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestNestedStatesExitChildBeforeParent"`; expect the current parent-first order.
+- [x] Deactivate the child state machine before invoking the parent state's exit callback, while retaining parent-first entry. Rerun the focused command; expect leaf-to-root exit order.
 
 #### Task 3 Repair G: Remove per-dispatch transition-list allocation
 
 **Files:** `Patterns/StateMachine.cs`
 
-- [ ] After Repairs E and F are green, replace the `Where(...).ToList()` transition search with a direct ordered loop that selects the same first matching transition. This is behavior-neutral and is protected by the existing transition, AnyState, duplicate-transition, and workflow tests.
-- [ ] Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine"`; expect all state-machine tests to pass with unchanged first-match semantics.
+- [x] After Repairs E and F are green, replace the `Where(...).ToList()` transition search with a direct ordered loop that selects the same first matching transition. This is behavior-neutral and is protected by the existing transition, AnyState, duplicate-transition, and workflow tests.
+- [x] Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine"`; expect all state-machine tests to pass with unchanged first-match semantics.
 
 #### Task 3 Repair H: Reject null service registrations at the public boundary
 
 **Files:** `Patterns/ServiceLocator.cs`, `Test/Patterns/UnitTestServiceLocator.cs`
 
-- [ ] Add `TestRegisterRejectsNullService`, passing `null!` to `Register<TestService>` and expecting `ArgumentNullException` naming `service`; then assert lookup still reports the service as missing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestServiceLocator.TestRegisterRejectsNullService"`; expect failure because the null value is stored and returned as though it were a service.
-- [ ] Add a release-safe null guard before mutating the service dictionary and document the exception contract. Rerun the focused command; expect immediate rejection and unchanged locator state.
+- [x] Add `TestRegisterRejectsNullService`, passing `null!` to `Register<TestService>` and expecting `ArgumentNullException` naming `service`; then assert lookup still reports the service as missing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestServiceLocator.TestRegisterRejectsNullService"`; expect failure because the null value is stored and returned as though it were a service.
+- [x] Add a release-safe null guard before mutating the service dictionary and document the exception contract. Rerun the focused command; expect immediate rejection and unchanged locator state.
 
 #### Task 3 Repair I: Allow a message handler to dispose its channel safely
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestHandlerCanDisposeChannelDuringPublish`, with a first handler that disposes the channel and a second handler that records delivery; assert publication does not throw, the second handler is not called, and the channel is disposed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestHandlerCanDisposeChannelDuringPublish"`; expect failure because disposal clears the list currently being enumerated.
-- [ ] Mark the channel disposed immediately but defer clearing the active handler list until the outermost publication frame exits; stop delivery once disposal is observed. Rerun the focused command; expect safe termination with no later handler invoked.
+- [x] Add `TestHandlerCanDisposeChannelDuringPublish`, with a first handler that disposes the channel and a second handler that records delivery; assert publication does not throw, the second handler is not called, and the channel is disposed. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestHandlerCanDisposeChannelDuringPublish"`; expect failure because disposal clears the list currently being enumerated.
+- [x] Mark the channel disposed immediately but defer clearing the active handler list until the outermost publication frame exits; stop delivery once disposal is observed. Rerun the focused command; expect safe termination with no later handler invoked.
 
 #### Task 3 Repair J: Reject transitions reentered from state lifecycle callbacks
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestExitCallbackCannotReenterTransition`, where an exit callback catches the exception from dispatching a second transition and records it; assert the outer transition reaches its intended target and the nested target is never entered. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestExitCallbackCannotReenterTransition"`; expect failure because the nested transition succeeds before being silently overwritten.
-- [ ] Track the state-change lifecycle scope and make `Dispatch` throw `InvalidOperationException` while entry or exit callbacks are running, resetting the guard in `finally`; document the reentrancy contract. Rerun the focused command; expect the nested transition to be rejected without corrupting the outer transition.
+- [x] Add `TestExitCallbackCannotReenterTransition`, where an exit callback catches the exception from dispatching a second transition and records it; assert the outer transition reaches its intended target and the nested target is never entered. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestExitCallbackCannotReenterTransition"`; expect failure because the nested transition succeeds before being silently overwritten.
+- [x] Track the state-change lifecycle scope and make `Dispatch` throw `InvalidOperationException` while entry or exit callbacks are running, resetting the guard in `finally`; document the reentrancy contract. Rerun the focused command; expect the nested transition to be rejected without corrupting the outer transition.
 
 #### Task 3 Review Repair K: Reject activation changes reentered from lifecycle callbacks
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestTransitionExitCannotDeactivateMachine` and `TestDeactivationExitCannotReactivateMachine`. In each exit callback, capture the `InvalidOperationException` from reentrant `SetActive`; assert the outer operation completes atomically, with one exit callback and a consistent `IsActive`/`CurrentState` pair. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionExitCannotDeactivateMachine|FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitCannotReactivateMachine"`; expect failures because `SetActive` currently mutates lifecycle state without consulting the transition guard.
-- [ ] Check the lifecycle guard at the start of `SetActive`, before equality checks or mutation, and wrap both activation and deactivation lifecycle callbacks in the same `try/finally` guard used by transitions. Rerun the focused command; expect reentrant calls to fail before mutation while outer operations finish in a consistent state.
+- [x] Add `TestTransitionExitCannotDeactivateMachine` and `TestDeactivationExitCannotReactivateMachine`. In each exit callback, capture the `InvalidOperationException` from reentrant `SetActive`; assert the outer operation completes atomically, with one exit callback and a consistent `IsActive`/`CurrentState` pair. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionExitCannotDeactivateMachine|FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitCannotReactivateMachine"`; expect failures because `SetActive` currently mutates lifecycle state without consulting the transition guard.
+- [x] Check the lifecycle guard at the start of `SetActive`, before equality checks or mutation, and wrap both activation and deactivation lifecycle callbacks in the same `try/finally` guard used by transitions. Rerun the focused command; expect reentrant calls to fail before mutation while outer operations finish in a consistent state.
 
 #### Task 3 Review Repair L: Validate child states before hierarchy mutation
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestAddNullChildDoesNotCreateHierarchy`, expecting `ArgumentNullException` naming `subState` and no child state machine, and `TestAddForeignChildPreservesOriginalHierarchy`, attempting to attach an already-owned nested child elsewhere and asserting its owner, depth, original-parent event propagation, and target parent remain unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddNullChildDoesNotCreateHierarchy|FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddForeignChildPreservesOriginalHierarchy"`; expect failures because the method creates hierarchy state or rewrites the parent reference before validation.
-- [ ] Validate null and ownership before creating `ChildrenStateMachine` or assigning `_parentStateRef`; then attach the child only after `StateMachine.AddState` succeeds. Document parameters and exceptions in Chinese. Rerun the focused command; expect both failures to leave hierarchy and propagation unchanged.
+- [x] Add `TestAddNullChildDoesNotCreateHierarchy`, expecting `ArgumentNullException` naming `subState` and no child state machine, and `TestAddForeignChildPreservesOriginalHierarchy`, attempting to attach an already-owned nested child elsewhere and asserting its owner, depth, original-parent event propagation, and target parent remain unchanged. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddNullChildDoesNotCreateHierarchy|FullyQualifiedName~Test.Patterns.TestStateMachine.TestAddForeignChildPreservesOriginalHierarchy"`; expect failures because the method creates hierarchy state or rewrites the parent reference before validation.
+- [x] Validate null and ownership before creating `ChildrenStateMachine` or assigning `_parentStateRef`; then attach the child only after `StateMachine.AddState` succeeds. Document parameters and exceptions in Chinese. Rerun the focused command; expect both failures to leave hierarchy and propagation unchanged.
 
 #### Task 3 Review Repair M: Prove object-pool return rollback on callback failure
 
 **Files:** `Patterns/ObjectPool.cs`, `Test/Patterns/UnitTestObjectPool.cs`
 
-- [ ] Add `TestConfiguredOnReturnFailureCanRetry` and `TestListenerOnReturnFailureCanRetry`, asserting a failed return leaves `Count` at zero and permits the same reference to be returned successfully after the callback stops throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestObjectPool.TestConfiguredOnReturnFailureCanRetry|FullyQualifiedName~Test.Patterns.TestObjectPool.TestListenerOnReturnFailureCanRetry"`; characterize the current implementation without calling a passing run RED.
-- [ ] Temporarily isolate the regression by removing membership rollback from the catch path, run the same focused command and require both tests to fail as duplicate returns, restore the rollback, then rerun and require both tests to pass. Commit no production change unless the characterization reveals a defect.
+- [x] Add `TestConfiguredOnReturnFailureCanRetry` and `TestListenerOnReturnFailureCanRetry`, asserting a failed return leaves `Count` at zero and permits the same reference to be returned successfully after the callback stops throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestObjectPool.TestConfiguredOnReturnFailureCanRetry|FullyQualifiedName~Test.Patterns.TestObjectPool.TestListenerOnReturnFailureCanRetry"`; characterize the current implementation without calling a passing run RED.
+- [x] Temporarily isolate the regression by removing membership rollback from the catch path, run the same focused command and require both tests to fail as duplicate returns, restore the rollback, then rerun and require both tests to pass. Commit no production change unless the characterization reveals a defect.
 
 #### Task 3 Review Repair N: Correct state-machine XML ownership contracts
 
 **Files:** `Patterns/StateMachine.cs`
 
-- [ ] Move the `toState`, event-name, and ownership exception documentation from `AddEventHandler` to `AddTransition`; remove the nonexistent parameter reference and give `AddEventHandler`, `SetActive`, and touched child-state APIs accurate Chinese parameter, return, and exception contracts.
-- [ ] Run the Release solution build and source-quality fixture; expect zero warnings/errors and the source-quality test to pass.
+- [x] Move the `toState`, event-name, and ownership exception documentation from `AddEventHandler` to `AddTransition`; remove the nonexistent parameter reference and give `AddEventHandler`, `SetActive`, and touched child-state APIs accurate Chinese parameter, return, and exception contracts.
+- [x] Run the Release solution build and source-quality fixture; expect zero warnings/errors and the source-quality test to pass.
 
 #### Task 3 Final Repair O: Make activation and deactivation exception-atomic
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestDeactivationExitExceptionPreservesActiveState`, `TestUncaughtReentrantActivationPreservesActiveState`, and `TestActivationEnterExceptionPreservesInactiveState`. Assert the original exception instance propagates, failed deactivation retains `IsActive == true` and the original `CurrentState`, failed activation retains `IsActive == false` and null `CurrentState`, callback counts are exact, and a later lifecycle call proves the guard reset. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitExceptionPreservesActiveState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestUncaughtReentrantActivationPreservesActiveState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestActivationEnterExceptionPreservesInactiveState"`; expect all three to fail because lifecycle fields are currently mutated before callbacks complete.
-- [ ] Commit activation/deactivation fields only after successful callbacks or restore their prior values when activation entry fails; keep the shared reentrancy guard checked before mutation and reset in `finally`. Document direct callback exception propagation and post-failure field state in Chinese XML. Rerun the focused command; expect exact exception identity and consistent final fields for all three paths.
+- [x] Add `TestDeactivationExitExceptionPreservesActiveState`, `TestUncaughtReentrantActivationPreservesActiveState`, and `TestActivationEnterExceptionPreservesInactiveState`. Assert the original exception instance propagates, failed deactivation retains `IsActive == true` and the original `CurrentState`, failed activation retains `IsActive == false` and null `CurrentState`, callback counts are exact, and a later lifecycle call proves the guard reset. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitExceptionPreservesActiveState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestUncaughtReentrantActivationPreservesActiveState|FullyQualifiedName~Test.Patterns.TestStateMachine.TestActivationEnterExceptionPreservesInactiveState"`; expect all three to fail because lifecycle fields are currently mutated before callbacks complete.
+- [x] Commit activation/deactivation fields only after successful callbacks or restore their prior values when activation entry fails; keep the shared reentrancy guard checked before mutation and reset in `finally`. Document direct callback exception propagation and post-failure field state in Chinese XML. Rerun the focused command; expect exact exception identity and consistent final fields for all three paths.
 
 #### Task 3 Final Repair P: Roll back failed buffered replay subscriptions
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestBufferedReplayFailureDoesNotLeakSubscription`, buffering one value, subscribing a handler that throws the same exception during replay, then publishing again and asserting the failed handler is not invoked. Also add `TestBufferedReplayFailureDuringPublishDoesNotLeakPendingSubscription` to exercise the same rollback while the channel is dispatching. Run the first test with `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestBufferedReplayFailureDoesNotLeakSubscription"`; expect failure because `base.Subscribe` leaves the handler pending when replay throws. After the repair, run both tests and expect no leaked ordinary or in-dispatch pending registration.
-- [ ] Catch replay failure, dispose the subscription token to cancel pending or active registration, and rethrow without wrapping so exception identity is preserved. Rerun the focused command; expect one replay invocation, no later delivery, and the original exception instance.
+- [x] Add `TestBufferedReplayFailureDoesNotLeakSubscription`, buffering one value, subscribing a handler that throws the same exception during replay, then publishing again and asserting the failed handler is not invoked. Also add `TestBufferedReplayFailureDuringPublishDoesNotLeakPendingSubscription` to exercise the same rollback while the channel is dispatching. Run the first test with `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestBufferedReplayFailureDoesNotLeakSubscription"`; expect failure because `base.Subscribe` leaves the handler pending when replay throws. After the repair, run both tests and expect no leaked ordinary or in-dispatch pending registration.
+- [x] Catch replay failure, dispose the subscription token to cancel pending or active registration, and rethrow without wrapping so exception identity is preserved. Rerun the focused command; expect one replay invocation, no later delivery, and the original exception instance.
 
 #### Task 3 Failure-State Repair Q: Fail closed after state lifecycle callback errors
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Update the prior deactivation exception tests to require inactive/null fail-closed fields, and add `TestHierarchicalDeactivationFailureClosesParentAndChild` plus `TestTransitionTargetChildEnterFailureClosesHierarchy`. Assert original exception identity, coherent parent/child active/current pairs, guard reset, and explicit reactivation after callbacks stop throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitExceptionFailsClosed|FullyQualifiedName~Test.Patterns.TestStateMachine.TestUncaughtReentrantActivationFailsClosed|FullyQualifiedName~Test.Patterns.TestStateMachine.TestHierarchicalDeactivationFailureClosesParentAndChild|FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionTargetChildEnterFailureClosesHierarchy"`; expect failures because deactivation currently restores active/current fields and transition entry failure leaves the target installed.
-- [ ] Make `SetActive` and `ChangeToState` set inactive/null on any entry or exit callback failure, reset the guard in `finally`, and rethrow the original exception. Retain activation failure's existing inactive/null behavior and document fail-closed semantics in Chinese. Rerun the focused command; expect every failed hierarchy to be inactive/null and recover only through an explicit later activation.
+- [x] Update the prior deactivation exception tests to require inactive/null fail-closed fields, and add `TestHierarchicalDeactivationFailureClosesParentAndChild` plus `TestTransitionTargetChildEnterFailureClosesHierarchy`. Assert original exception identity, coherent parent/child active/current pairs, guard reset, and explicit reactivation after callbacks stop throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestDeactivationExitExceptionFailsClosed|FullyQualifiedName~Test.Patterns.TestStateMachine.TestUncaughtReentrantActivationFailsClosed|FullyQualifiedName~Test.Patterns.TestStateMachine.TestHierarchicalDeactivationFailureClosesParentAndChild|FullyQualifiedName~Test.Patterns.TestStateMachine.TestTransitionTargetChildEnterFailureClosesHierarchy"`; expect failures because deactivation currently restores active/current fields and transition entry failure leaves the target installed.
+- [x] Make `SetActive` and `ChangeToState` set inactive/null on any entry or exit callback failure, reset the guard in `finally`, and rethrow the original exception. Retain activation failure's existing inactive/null behavior and document fail-closed semantics in Chinese. Rerun the focused command; expect every failed hierarchy to be inactive/null and recover only through an explicit later activation.
 
 #### Task 3 Failure-State Repair R: Roll back state ownership when setup fails
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestRootSetupFailureDoesNotPublishOwnership` and `TestChildSetupFailureDoesNotMutateHierarchy`, using the same exception instance and retry flags. Assert failed states have no owner, cannot be transition targets, retain depth/event propagation, do not create a child hierarchy, and can be added successfully after setup stops throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestRootSetupFailureDoesNotPublishOwnership|FullyQualifiedName~Test.Patterns.TestStateMachine.TestChildSetupFailureDoesNotMutateHierarchy"`; expect failures because root setup leaves list/owner state published and child setup leaks its child-machine owner.
-- [ ] Preserve setup-time access to `StateMachine`, but remove the state from the machine and clear its owner when setup throws; publish parent/hierarchy references only after child setup succeeds. Rethrow without wrapping and rerun the focused command; expect clean retryable state after both failures.
+- [x] Add `TestRootSetupFailureDoesNotPublishOwnership` and `TestChildSetupFailureDoesNotMutateHierarchy`, using the same exception instance and retry flags. Assert failed states have no owner, cannot be transition targets, retain depth/event propagation, do not create a child hierarchy, and can be added successfully after setup stops throwing. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestStateMachine.TestRootSetupFailureDoesNotPublishOwnership|FullyQualifiedName~Test.Patterns.TestStateMachine.TestChildSetupFailureDoesNotMutateHierarchy"`; expect failures because root setup leaves list/owner state published and child setup leaks its child-machine owner.
+- [x] Preserve setup-time access to `StateMachine`, but remove the state from the machine and clear its owner when setup throws; publish parent/hierarchy references only after child setup succeeds. Rethrow without wrapping and rerun the focused command; expect clean retryable state after both failures.
 
 #### Task 3 Failure-State Repair S: Give each message subscription token real ownership
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestFailedDuplicateBufferedReplayKeepsOriginalSubscription`, where the first buffered subscription of handler `h` succeeds and a duplicate replay throws before the publish boundary; assert rollback of the failed attempt does not remove the first registration. Add `TestSubscribeRejectsNullHandler` for base and buffered channels, asserting `ArgumentNullException` names `handler`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestFailedDuplicateBufferedReplayKeepsOriginalSubscription|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscribeRejectsNullHandler"`; expect duplicate rollback to remove the earlier pending registration and null handling to lack the explicit public guard.
-- [ ] Reject null at the base boundary; when a handler is already effectively subscribed, leave mutation state unchanged and return a no-op token. Return an owning token only when that call creates or restores a registration, so buffered replay rollback removes only its own registration. Document the boundary and rerun the focused command; expect original duplicate registration and pending semantics to survive.
+- [x] Add `TestFailedDuplicateBufferedReplayKeepsOriginalSubscription`, where the first buffered subscription of handler `h` succeeds and a duplicate replay throws before the publish boundary; assert rollback of the failed attempt does not remove the first registration. Add `TestSubscribeRejectsNullHandler` for base and buffered channels, asserting `ArgumentNullException` names `handler`. Run `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~Test.Patterns.TestMessageChannel.TestFailedDuplicateBufferedReplayKeepsOriginalSubscription|FullyQualifiedName~Test.Patterns.TestMessageChannel.TestSubscribeRejectsNullHandler"`; expect duplicate rollback to remove the earlier pending registration and null handling to lack the explicit public guard.
+- [x] Reject null at the base boundary; when a handler is already effectively subscribed, leave mutation state unchanged and return a no-op token. Return an owning token only when that call creates or restores a registration, so buffered replay rollback removes only its own registration. Document the boundary and rerun the focused command; expect original duplicate registration and pending semantics to survive.
 
 #### Task 3 Ownership Closure Repair T: Bind subscription tokens to registration generations
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestStaleSubscriptionTokenDoesNotCancelNewRegistration`: subscribe handler `h`, explicitly unsubscribe it, subscribe `h` again, dispose the first token, publish, then dispose the second token and publish again. Require the first disposal to leave the newer registration active and the second disposal to remove only that registration. Run its exact fully-qualified filter and expect failure because tokens currently unsubscribe by handler identity only.
-- [ ] Give every actually created active or pending registration a monotonically increasing identifier. Make owning-token disposal remove only the matching handler and identifier; keep duplicate/effective subscriptions non-owning and preserve deferred mutation plus nested publication semantics. Rerun the focused test and affected message-channel tests.
+- [x] Add `TestStaleSubscriptionTokenDoesNotCancelNewRegistration`: subscribe handler `h`, explicitly unsubscribe it, subscribe `h` again, dispose the first token, publish, then dispose the second token and publish again. Require the first disposal to leave the newer registration active and the second disposal to remove only that registration. Run its exact fully-qualified filter and expect failure because tokens currently unsubscribe by handler identity only.
+- [x] Give every actually created active or pending registration a monotonically increasing identifier. Make owning-token disposal remove only the matching handler and identifier; keep duplicate/effective subscriptions non-owning and preserve deferred mutation plus nested publication semantics. Rerun the focused test and affected message-channel tests.
 
 #### Task 3 Ownership Closure Repair U: Make subscription lifetime explicitly controlled
 
 **Files:** `Patterns/MessageChannel.cs`, `Test/Patterns/UnitTestMessageChannel.cs`
 
-- [ ] Add `TestCollectedSubscriptionTokenDoesNotUnsubscribeHandler` using a no-inline helper, `WeakReference`, and forced collection/finalization to prove a dropped token is collected while publication still invokes its handler. Add `TestSubscriptionImplementationIsNotPublicApi` to prevent callers manufacturing a token for an unowned registration. Run both exact filters and expect failure from finalizer-driven unsubscription and the exported `DisposableSubscription<T>` type.
-- [ ] Remove finalizer-driven token disposal; only explicit token disposal or channel subscription APIs may mutate registration state. Hide the concrete token implementation while retaining the public `IDisposable` return contract, and document explicit token lifetime in Chinese. Rerun the focused tests.
+- [x] Add `TestCollectedSubscriptionTokenDoesNotUnsubscribeHandler` using a no-inline helper, `WeakReference`, and forced collection/finalization to prove a dropped token is collected while publication still invokes its handler. Add `TestSubscriptionImplementationIsNotPublicApi` to prevent callers manufacturing a token for an unowned registration. Run both exact filters and expect failure from finalizer-driven unsubscription and the exported `DisposableSubscription<T>` type.
+- [x] Remove finalizer-driven token disposal; only explicit token disposal or channel subscription APIs may mutate registration state. Hide the concrete token implementation while retaining the public `IDisposable` return contract, and document explicit token lifetime in Chinese. Rerun the focused tests.
 
 #### Task 3 Ownership Closure Repair V: Isolate setup from state-machine lifecycle mutation
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestSetupCannotActivateOrDispatchAndFailureIsRetryable`, whose setup can access its owner, configures a transition/handler and child hierarchy, verifies `SetActive(true)` and `Dispatch` are rejected before mutation, then throws. Require inactive/null lifecycle fields, cleared owner/list/initial/transition/hierarchy state, reset guards, and a successful retry after failure is disabled. Run its exact filter and expect failure because setup currently permits activation and dispatch and failed setup retains hierarchy.
-- [ ] Track setup depth independently from transition/lifecycle reentrancy. Reject `SetActive` and `Dispatch` at setup entry before logging or mutation, retain setup-time transition and handler configuration, and roll back hierarchy created by a failing setup together with existing ownership/list/initial/transition cleanup. Rerun the focused test and all state-machine tests.
+- [x] Add `TestSetupCannotActivateOrDispatchAndFailureIsRetryable`, whose setup can access its owner, configures a transition/handler and child hierarchy, verifies `SetActive(true)` and `Dispatch` are rejected before mutation, then throws. Require inactive/null lifecycle fields, cleared owner/list/initial/transition/hierarchy state, reset guards, and a successful retry after failure is disabled. Run its exact filter and expect failure because setup currently permits activation and dispatch and failed setup retains hierarchy.
+- [x] Track setup depth independently from transition/lifecycle reentrancy. Reject `SetActive` and `Dispatch` at setup entry before logging or mutation, retain setup-time transition and handler configuration, and roll back hierarchy created by a failing setup together with existing ownership/list/initial/transition cleanup. Rerun the focused test and all state-machine tests.
 
 #### Task 3 Ownership Closure Repair W: Enforce explicit null contracts
 
 **Files:** `Patterns/MessageChannel.cs`, `Patterns/ObjectPool.cs`, `Test/Patterns/UnitTestMessageChannel.cs`, `Test/Patterns/UnitTestObjectPool.cs`
 
-- [ ] Add `TestUnsubscribeRejectsNullHandler` and `TestCreateFuncCannotBeNull`, asserting `ArgumentNullException` with parameters `handler` and `createFunc`. Run their exact filters and expect failure because dictionary validation currently reports `key` and the pool constructor throws `ArgumentException`.
-- [ ] Validate both public boundaries explicitly and add accurate Chinese XML exception contracts. Rerun the focused tests.
+- [x] Add `TestUnsubscribeRejectsNullHandler` and `TestCreateFuncCannotBeNull`, asserting `ArgumentNullException` with parameters `handler` and `createFunc`. Run their exact filters and expect failure because dictionary validation currently reports `key` and the pool constructor throws `ArgumentException`.
+- [x] Validate both public boundaries explicitly and add accurate Chinese XML exception contracts. Rerun the focused tests.
 
 #### Task 3 Hierarchy Closure Repair X: Make setup isolation and rollback recursive
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestSetupFailureRecursivelyRestoresExistingHierarchy`, starting with a pre-existing child machine and state. During root setup, catch the expected descendant activation guard, add a grandchild below the existing child, mutate child-machine initial state, transition, handler, and `TriggerUpdateWhenStateChange`, then throw one original exception. Assert exact exception identity; inactive/null lifecycle state throughout the hierarchy; detached grandchild ownership, parent, depth, and propagation; exact pre-existing configuration restoration; no leaked transition/handler/list entry; reset guards; and successful retry. Run its exact fully-qualified filter and expect failure because setup guards and snapshots currently stop at the current machine and immediate hierarchy.
-- [ ] Give child machines an owner-state link and consult ancestor setup scopes before lifecycle mutation. Replace shallow setup rollback with focused recursive machine/state snapshots that restore pre-existing and newly-created descendant hierarchy, lifecycle fields, initial state, transitions, handlers, and `TriggerUpdateWhenStateChange`, while preserving successful setup configuration. Rerun the focused test and all state-machine tests.
+- [x] Add `TestSetupFailureRecursivelyRestoresExistingHierarchy`, starting with a pre-existing child machine and state. During root setup, catch the expected descendant activation guard, add a grandchild below the existing child, mutate child-machine initial state, transition, handler, and `TriggerUpdateWhenStateChange`, then throw one original exception. Assert exact exception identity; inactive/null lifecycle state throughout the hierarchy; detached grandchild ownership, parent, depth, and propagation; exact pre-existing configuration restoration; no leaked transition/handler/list entry; reset guards; and successful retry. Run its exact fully-qualified filter and expect failure because setup guards and snapshots currently stop at the current machine and immediate hierarchy.
+- [x] Give child machines an owner-state link and consult ancestor setup scopes before lifecycle mutation. Replace shallow setup rollback with focused recursive machine/state snapshots that restore pre-existing and newly-created descendant hierarchy, lifecycle fields, initial state, transitions, handlers, and `TriggerUpdateWhenStateChange`, while preserving successful setup configuration. Rerun the focused test and all state-machine tests.
 
 #### Task 3 Hierarchy Closure Repair Y: Fail closed recursively after update and lifecycle errors
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestTransitionTargetUpdateFailureRecursivelyClosesHierarchy`, transitioning to a target with an active child/grandchild hierarchy and `TriggerUpdateWhenStateChange == true`, whose immediate target update throws a retained exception. Assert exact exception identity, inactive/null fields for every entered machine, reset guards, and explicit recovery when throwing is disabled. Run its exact fully-qualified filter and expect failure because only the root catch is currently failed closed.
-- [ ] Add a callback-free recursive fail-close helper and use it consistently from activation, transition, and update exception catches. It must clear active/current lifecycle fields and guards for every reachable descendant without invoking more enter/exit/update callbacks, then rethrow the original exception unchanged. Rerun the focused test and all state-machine tests.
+- [x] Add `TestTransitionTargetUpdateFailureRecursivelyClosesHierarchy`, transitioning to a target with an active child/grandchild hierarchy and `TriggerUpdateWhenStateChange == true`, whose immediate target update throws a retained exception. Assert exact exception identity, inactive/null fields for every entered machine, reset guards, and explicit recovery when throwing is disabled. Run its exact fully-qualified filter and expect failure because only the root catch is currently failed closed.
+- [x] Add a callback-free recursive fail-close helper and use it consistently from activation, transition, and update exception catches. It must clear active/current lifecycle fields and guards for every reachable descendant without invoking more enter/exit/update callbacks, then rethrow the original exception unchanged. Rerun the focused test and all state-machine tests.
 
 #### Task 3 Hierarchy Closure Repair Z: Clarify duplicate subscription handle ownership
 
 **Files:** `Patterns/MessageChannel.cs`
 
-- [ ] Update base and buffered `Subscribe` XML so the return contract explicitly states an already-effective duplicate subscription may return a non-owning no-op handle. Run the Release build and source-quality fixture.
+- [x] Update base and buffered `Subscribe` XML so the return contract explicitly states an already-effective duplicate subscription may return a non-owning no-op handle. Run the Release build and source-quality fixture.
 
 #### Task 3 Setup Transaction Repair AA: Recursively detach removed setup subtrees
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestSetupFailureRecursivelyDetachesNewSubtree`, whose ancestor setup adds a temporary state whose own setup successfully adds a child and deeper descendant before the ancestor throws one retained exception. Assert exact exception identity; null ownership for all three new states; depth one and no event propagation for every detached node; inactive/null child machines; no leaked transitions or membership; and a clean successful retry. Run its exact fully-qualified filter and expect failure because setup rollback clears only the removed temporary state's direct ownership and parent link.
-- [ ] Before clearing any removed state's direct owner/parent, recursively detach every state in its `ChildrenStateMachine`; make `DetachAllStates` apply the same descendant-first cleanup. Define failed setup cleanup as removal of all newly-added subtree membership, transitions, lifecycle state, ownership, and parent propagation links while leaving pre-existing hierarchy objects reusable. Rerun the focused test and all state-machine tests.
+- [x] Add `TestSetupFailureRecursivelyDetachesNewSubtree`, whose ancestor setup adds a temporary state whose own setup successfully adds a child and deeper descendant before the ancestor throws one retained exception. Assert exact exception identity; null ownership for all three new states; depth one and no event propagation for every detached node; inactive/null child machines; no leaked transitions or membership; and a clean successful retry. Run its exact fully-qualified filter and expect failure because setup rollback clears only the removed temporary state's direct ownership and parent link.
+- [x] Before clearing any removed state's direct owner/parent, recursively detach every state in its `ChildrenStateMachine`; make `DetachAllStates` apply the same descendant-first cleanup. Define failed setup cleanup as removal of all newly-added subtree membership, transitions, lifecycle state, ownership, and parent propagation links while leaving pre-existing hierarchy objects reusable. Rerun the focused test and all state-machine tests.
 
 #### Task 3 Setup Transaction Repair AB: Reject updates throughout an active setup hierarchy
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestSetupCannotUpdateRootOrActiveDescendant`, keeping a root and pre-existing descendant active while another root state is being set up. Invoke both machines' public `Update` methods from setup, capture `InvalidOperationException`, and assert neither update callback ran; then fail and retry setup and prove normal root/descendant update cascading is preserved after the guard resets. Run its exact fully-qualified filter and expect failure because `Update` currently reaches active state callbacks without consulting setup state.
-- [ ] Check `IsSetupInHierarchy()` at the first line of public `Update`, before active/current-state access or callback execution, and document the setup exception contract in Chinese. Rerun the focused test and all state-machine tests.
+- [x] Add `TestSetupCannotUpdateRootOrActiveDescendant`, keeping a root and pre-existing descendant active while another root state is being set up. Invoke both machines' public `Update` methods from setup, capture `InvalidOperationException`, and assert neither update callback ran; then fail and retry setup and prove normal root/descendant update cascading is preserved after the guard resets. Run its exact fully-qualified filter and expect failure because `Update` currently reaches active state callbacks without consulting setup state.
+- [x] Check `IsSetupInHierarchy()` at the first line of public `Update`, before active/current-state access or callback execution, and document the setup exception contract in Chinese. Rerun the focused test and all state-machine tests.
 
 #### Task 3 Setup Transaction Repair AC: Snapshot all state-owned setup configuration
 
 **Files:** `Patterns/StateMachine.cs`, `Test/Patterns/UnitTestStateMachine.cs`
 
-- [ ] Add `TestSetupFailureRestoresStateOwnedConfiguration`, starting with a named state, an existing state event handler, and configured setup/enter/update/exit callbacks. During failed setup replace/add handlers, rename the state, replace all callbacks, and throw one retained exception; assert the original name, handlers, and callbacks are restored exactly, failed handlers/callbacks are absent, retry invokes the original setup callback, and successful retry handler configuration remains. Run its exact fully-qualified filter and expect failure because setup snapshots omit every state-owned mutable configuration field.
-- [ ] Add a state configuration snapshot containing `_name`, a clone of `_eventHandlers`, `_onSetupCallback`, `_onEnterCallback`, `_onUpdateCallback`, and `_onExitCallback`; capture/restore it for the directly added state and every recursively snapshotted pre-existing state. Keep ownership, parent, and child-machine topology in the existing hierarchy snapshot path. Rerun the focused test and all state-machine tests.
+- [x] Add `TestSetupFailureRestoresStateOwnedConfiguration`, starting with a named state, an existing state event handler, and configured setup/enter/update/exit callbacks. During failed setup replace/add handlers, rename the state, replace all callbacks, and throw one retained exception; assert the original name, handlers, and callbacks are restored exactly, failed handlers/callbacks are absent, retry invokes the original setup callback, and successful retry handler configuration remains. Run its exact fully-qualified filter and expect failure because setup snapshots omit every state-owned mutable configuration field.
+- [x] Add a state configuration snapshot containing `_name`, a clone of `_eventHandlers`, `_onSetupCallback`, `_onEnterCallback`, `_onUpdateCallback`, and `_onExitCallback`; capture/restore it for the directly added state and every recursively snapshotted pre-existing state. Keep ownership, parent, and child-machine topology in the existing hierarchy snapshot path. Rerun the focused test and all state-machine tests.
 
 #### Task 3 Lifecycle Update Closure Repair AD: Reject updates during lifecycle callbacks
 
@@ -826,7 +826,7 @@ Request review for the round range, resolve Critical and Important feedback, rer
 - Consumes: all repaired module APIs and round records.
 - Produces: coherent naming and documentation, concise modern syntax, a smaller high-value test suite where safely possible, and one reviewable commit.
 
-- [ ] **Step 1: Enumerate public declarations and documentation risks**
+- [x] **Step 1: Enumerate public declarations and documentation risks**
 
 ```powershell
 rg -n "^public |^\s+public " -g '*.cs' -g '!Test/**' -g '!**/bin/**' -g '!**/obj/**'
@@ -835,19 +835,19 @@ rg -n "!;|!\)|!\]|default!|#pragma warning disable|TODO|FIXME|NotImplementedExce
 
 Expected: concrete inventories for manual comparison; every match receives a decision in the round record.
 
-- [ ] **Step 2: Review cross-module consistency**
+- [x] **Step 2: Review cross-module consistency**
 
 Check public naming, Try/Get/Require semantics, nullable annotations, exception consistency, cancellation parameter placement, disposal shape, event subscription shape, collection exposure, Chinese XML summaries/parameters/returns/exceptions, README examples, and use of collection expressions, primary constructors only where clear, pattern matching, switch expressions, property patterns, target-typed construction, ranges, expression bodies, and `using` declarations.
 
-- [ ] **Step 3: Simplify tests only with preserved contract coverage**
+- [x] **Step 3: Simplify tests only with preserved contract coverage**
 
 Identify duplicate tests by matching setup, operation, and asserted external behavior. Delete a test only when another named test covers the same contract and boundary; record both test names and the retained protection. Consolidate repeated setup into an existing fixture helper only when the helper makes intent clearer. Do not delete regression, error-path, ordering, concurrency, or boundary tests merely to reduce count.
 
-- [ ] **Step 4: Repair findings using appended TDD subtasks where behavior changes**
+- [x] **Step 4: Repair findings using appended TDD subtasks where behavior changes**
 
 API changes and refactors follow RED → GREEN → REFACTOR. Documentation, syntax-equivalent rewrites, and proven duplicate-test deletions use the existing suite plus source-quality checks.
 
-- [ ] **Step 5: Record, verify, commit, and review round 6**
+- [x] **Step 5: Record, verify, commit, and review round 6**
 
 ```powershell
 dotnet test .\SimpleFramework.sln --no-restore --configuration Debug
@@ -889,6 +889,35 @@ Expected: the complete suite and source-quality test pass, Release has zero warn
 **Interfaces:**
 - Consumes: all six module/cross-cutting rounds and independent reviewer dispositions.
 - Produces: requirement-by-requirement release evidence and the final review commit.
+
+#### Task 7 Repair A: Preserve caller and disposal cancellation after an in-flight UDP receive
+
+**Files:** `Net/Discovery/NetDiscovery.cs`, `Test/Net/NetDiscoveryStatsTests.cs`
+
+- [x] Add `UdpDiscoveryScan_CallerCancellationAfterReceiveStarts_Throws` and `NetDiscoveryScan_DisposeAfterUdpReceiveStarts_Throws`, using a minimal internal receive-start gate on the real UDP backend and no sleep. Run their exact filter; expect both to fail because the backend converts linked cancellation into a normal empty/partial result and `NetDiscovery.ScanCoreAsync` does not recheck its linked token.
+- [x] After the backend await and before consuming packets, call `linkedCancellation.Token.ThrowIfCancellationRequested()`. Retain duration-only expiry as a normal result, keep the receive gate internal, and rerun the focused tests plus `NetDiscoveryStatsTests`.
+
+#### Task 7 Repair B: Expose cancellation and channel selection on public typed sends
+
+**Files:** `Net/Core/GameNet.cs`, `Net/Messaging/NetMessenger.cs`, `Test/Net/NetMessagingTests.cs`, `Test/Net/NetSessionTests.cs`
+
+- [x] Add compile-and-call coverage for ordinary, explicit-channel, and named-token calls on both public surfaces; add deterministic gated single-send cases for `GameNet` and `NetMessenger` that cancel after transport send starts, assert the existing structured `TransportFailed` result, and prove the per-peer reservation is released by a successful retry. Add a broadcast case that cancels the first target and proves no later target is attempted. Run their exact filter; expect compilation failure because the public overloads expose neither channel nor token.
+- [x] Change each public typed send to end in `NetChannel channel = NetChannel.Reliable, CancellationToken token = default`, thread both values through messenger helpers, reservations, GameNet packet delegates, and transport sends without introducing `CancellationToken.None`, and stop broadcast traversal once cancellation is observed. Update accurate Chinese XML parameter/return/cancellation-result contracts, rerun the focused tests, then `NetMessagingTests|NetSessionTests`.
+- [x] Add `NetMessengerBroadcast_TransportIgnoringCancellationStillReturnsStructuredFailure`, using a gated first-target send that ignores its token, cancelling after the send starts, and asserting `TransportFailed` plus no second-target attempt. Run its exact filter; expect failure because traversal stops but currently returns `Ok` when the transport reports success.
+- [x] Check cancellation before traversal and after each awaited target; when no earlier send failure exists, map observed caller cancellation to `TransportFailed` while retaining the first real failure. Rerun the exact test and the complete messaging/session fixtures.
+
+#### Task 7 Repair C: Scan only the top-level inbound packet Kind
+
+**Files:** `Net/Core/GameNet.cs`, `Test/Net/NetMessagingTests.cs`
+
+- [x] Add `InboundKindProbe_LargePayloadAvoidsFullEnvelopeAllocation`, warming the probe and measuring thread allocations for a large payload, plus correctness cases for top-level property order, nested `Kind`, unknown values, and malformed JSON. Run their exact filter; expect the allocation case to fail because `JsonSerializer.Deserialize<NetPacket>` materializes the base64 payload while probing Kind.
+- [x] Replace the probe with a local `Utf8JsonReader` scan restricted to the root object, reuse known Kind constants, preserve unknown/malformed routing semantics, and rerun the focused tests plus `NetMessagingTests|NetSessionTests`. Record warmed before/after allocation counts.
+
+#### Task 7 Test Repair D: Synchronize the late-flow response assertion
+
+**Files:** `Test/Net/NetFlowTests.cs`
+
+- [x] Replace the fixed delay in `Flow_LateResponseAfterCompletion_IsIgnored` with a condition-based wait until server diagnostics prove the late response was processed; then assert the completed result remains unchanged and `PendingFlowIds` remains empty. Run the exact test and the complete `NetFlowTests` fixture.
 
 - [ ] **Step 1: Request a full-range independent review**
 
