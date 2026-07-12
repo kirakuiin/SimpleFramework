@@ -1,13 +1,15 @@
 # Round 6: Cross-Cutting API, Documentation, Syntax, and Test Simplification
 
-## Scope and Baseline
+## Files Reviewed
+
+### Scope and Baseline
 
 - Required starting HEAD: `cc226dc80717429ca359efdd58e7d9ddc4a812cf`; the worktree was clean.
 - Reviewed all 75 tracked production C# files (17,291 physical lines), all 40 tracked files under `Test/` (17,624 physical lines), all 10 tracked project files, root/module README and USAGE files, and `docs/domain-lifecycle.md`.
 - Baseline command `dotnet test .\SimpleFramework.sln --no-restore --configuration Debug` passed 751 tests with 0 failures and 0 skips.
 - LOC command/definition: `git ls-files '*.cs'`, excluding `Test/` for production and selecting `Test/` for tests, then sum `(Get-Content file).Count`; generated `bin/` and `obj/` files are not tracked and are excluded.
 
-## Required Inventories and Exhaustive Decisions
+### Required Inventories and Exhaustive Decisions
 
 The two exact Step 1 commands were run from the repository root. The public-declaration inventory returned 1,061 textual matches. Every match was reviewed in its containing type, including public members nested in non-public implementation types. The complete path:line/declaration/disposition/reason-code evidence is in [the public inventory](./2026-07-10-round-6-public-inventory.md); the following table is its module summary:
 
@@ -34,7 +36,42 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 - Utility (2): `[MaybeNull] out T` file-load failure paths assign `default(T)` as documented. Retained.
 - Tests (84): per-file counts were reviewed across all 25 matching test files. They consist of deliberate null inputs for argument-boundary tests, NUnit setup fields initialized in `SetUp`, reflection results asserted before use, nullable event payload assertions, and generic test fixtures. The sole pragma is `CS8602` in `UnitTestStateMachine.cs`, narrowly justified because NUnit runtime assertions do not narrow compiler flow. No broad warning disable or production pragma exists; all were retained.
 
-## Cross-Module Findings and Changes
+## Contracts Checked
+
+- Public API naming, nullability, exception, lifecycle, ownership, cancellation-token placement, async disposal, read-only exposure, and Chinese XML contracts were compared across all modules and against their tests and documentation.
+- All project files were checked for target framework, nullable/implicit-using policy, references, conditional Godot compilation, and test packaging consistency.
+- All 40 tracked test files were checked for externally observable contract coverage, duplicate setup/operation/assertion shapes, boundary and regression value, deterministic async behavior, and simplification opportunities.
+- Practical performance was checked alongside readability: repeated-operation allocation, unnecessary async state machines, collection exposure, and avoidable syntax overhead were considered without introducing unmeasured hot-path redesigns.
+
+## Findings and Decisions
+
+- One Important API-consistency issue was found: both public one-shot `NetDiscovery.ScanAsync<TMetadata>` overloads hid the cancellation path already supported by the implementation. It required the focused API repair recorded below.
+- No other public declaration, project contract, risk-pattern match, documentation surface, or test-simplification candidate justified a behavior change after exhaustive review; retained cases and their reasons are recorded below and in the two inventories.
+
+### Test Simplification Review
+
+All 40 tracked test files were reviewed by fixture, setup, operation, and externally asserted contract. The complete per-file contract families, candidate comparisons and decisions are in [the test inventory](./2026-07-10-round-6-test-inventory.md); its tracked-path reconciliation has zero set difference. No test was deleted: no pair had identical setup/operation/observable contract while also lacking boundary, error, ordering, concurrency, or regression value.
+
+- Framework registration tests that look symmetric protect distinct System/Model/Utility lifecycle ownership and release ordering.
+- ECS `Update`/delta-time, real/buffered entity, and stale/foreign handle pairs protect different overload and identity contracts.
+- Patterns lifecycle tests target distinct setup/enter/update/exit failure phases; message-channel tests distinguish active/pending/buffered subscription ownership.
+- Net dispose/error/cancellation tests often repeat setup but protect different public entry points, state transitions, races, or transport failure phases.
+- Utility string/byte serialization and file JSON/binary tests protect distinct allocation and I/O paths.
+
+No helper extraction made intent clearer than the local setup. Final test count increases only for the new public API contract test.
+
+### Retained Cross-Cutting Decisions
+
+- `Get`/`TryGet`/`Require` is used where absence is a normal query distinction. `ServiceLocator.Get` and other single-shape APIs retain their documented `KeyNotFoundException`/validation behavior rather than gaining unused variants.
+- Cancellation tokens remain optional and last. Final-review gated transport tests demonstrated blocking waits in typed sends, so `GameNet` and `NetMessenger` typed send/broadcast APIs now expose channel selection followed by an optional token while retaining structured `NetSendResult` cancellation semantics.
+- CPU/local ownership types use `IDisposable`; transports, discovery, browser, and `GameNet` use `IAsyncDisposable` because cleanup awaits active work. No sync-over-async bridge was introduced.
+- Core returns `IUnRegister`, Patterns returns standard `IDisposable`, and Net exposes .NET events. These shapes match their ownership models; unifying names alone would be disruptive.
+- Read-only query/registry/peer/diagnostic surfaces use cached wrappers or snapshots. Mutable collection views exist only on dictionary-compatible collection types where they are part of the implemented interface contract.
+- No network-security expansion, architecture rewrite, project move, new dependency, or unmeasured hot-path redesign was introduced.
+
+## Changes
+
+### Cross-Module Findings and Changes
 
 - Important API consistency: `NetDiscovery` already linked backend scans to caller/disposal cancellation internally, but both public one-shot `ScanAsync<TMetadata>` overloads forced `CancellationToken.None`. The ordinary overload is now `(TimeSpan duration, CancellationToken token = default)` and the explicit-schema overload is `(uint metadataSchemaId, TimeSpan duration, CancellationToken token = default)`. Distinct first parameter types remove overload ambiguity while keeping cancellation optional and last; both forward to the existing linked path. The internal implementation was named `ScanCoreAsync` and the trivial public forwarding methods no longer create unnecessary async state machines.
 - Documentation: root README described removed Net types (`ITransport`, `ProtocolHandler`, `ConnectionModel`, and related APIs), attributed tag ownership to ECS entities, and documented a nonexistent Godot multiplayer transport. It now describes the current `GameNet`, ECS handle/World model, command buffer, and actual GDExt surface; the nullable Core example now uses `RequireModel`.
@@ -45,7 +82,9 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 - Empty `Collections`, `Maths`, and `Utility` module README files make no stale API claims. ECS README/USAGE and Net README examples were checked against current signatures and remain valid.
 - API shape: a real compile-and-call regression proves ordinary, explicit-schema, cancellation-token, and `(duration, default)` calls are unambiguous. The explicit-schema overload intentionally moved `metadataSchemaId` first; this repository is unpublished and has no external consumers, so source/binary compatibility with the intermediate duration-first schema signature is not a constraint.
 
-## Evidence Reproduction
+## Verification
+
+### Evidence Reproduction
 
 - Public total: run the exact public command and inspect `$LASTEXITCODE`; assigning its output to `$matches`, `$matches.Count` is 1,061. Normalize each matched path with `-replace '\\','/'`, map root files to Core and first-directory paths to their module (with `FrameworkImpl` separate), then `Group-Object`; this reproduces the table totals, whose sum is 1,061.
 - Round 7 final reconciliation rebuilt every affected `GameNet`, `NetDiscovery`, `NetMessenger`, and `NetStats` ledger row from the exact current source location and declaration. The total remains 1,061 (Net 422), with 1,061 unique source locations and zero source/ledger differences; the typed-send and browser-refresh rows identify their final-review contract repairs.
@@ -53,7 +92,7 @@ The risk inventory returned 118 matches: 34 production and 84 test matches. Ther
 - Scope manifests: `(git ls-files '*.cs' | Where-Object { $_ -notlike 'Test/*' }).Count` is 75; `(git ls-files 'Test/*.cs').Count` is 40; `(git ls-files '*.csproj').Count` is 10. Documentation scope is exactly `README.md`, `Collections/README.md`, `ECS/README.md`, `ECS/USAGE.md`, `Maths/README.md`, `Net/README.md`, `Patterns/README.md`, `Utility/README.md`, and `docs/domain-lifecycle.md`. The public appendix reconciles all 1,061 source locations with zero set difference.
 - LOC: for each tracked C# path, sum `(Get-Content $path).Count`, selecting or excluding `Test/` as stated in Scope and Baseline. For the baseline, enumerate the same paths from `git ls-tree -r --name-only cc226dc80717429ca359efdd58e7d9ddc4a812cf` and count `git show "cc226dc80717429ca359efdd58e7d9ddc4a812cf:$path"`; this reproduces 17,291 production and 17,624 test lines.
 
-## TDD Evidence
+### TDD Evidence
 
 Repair A was appended to tracked Task 6 before production editing.
 
@@ -67,28 +106,7 @@ Repair B was appended after takeover identified the intermediate overload shape 
 - Valid RED: `DiscoveryScan_PublicApiIsUnambiguousAndForwardsCancellation` failed compilation with CS1503 because the desired schema-first calls did not match the duration-first schema overload. The same compiler run showed `(duration, default)` already selected the exact two-parameter cancellation overload rather than producing CS0121.
 - GREEN: the exact filter passed 1/1 after the minimal schema parameter reorder and internal browser-call update. The test executes ordinary and explicit-schema zero-duration scans, then proves both overloads propagate a pre-cancelled token as `OperationCanceledException`.
 
-## Test Simplification Review
-
-All 40 tracked test files were reviewed by fixture, setup, operation, and externally asserted contract. The complete per-file contract families, candidate comparisons and decisions are in [the test inventory](./2026-07-10-round-6-test-inventory.md); its tracked-path reconciliation has zero set difference. No test was deleted: no pair had identical setup/operation/observable contract while also lacking boundary, error, ordering, concurrency, or regression value.
-
-- Framework registration tests that look symmetric protect distinct System/Model/Utility lifecycle ownership and release ordering.
-- ECS `Update`/delta-time, real/buffered entity, and stale/foreign handle pairs protect different overload and identity contracts.
-- Patterns lifecycle tests target distinct setup/enter/update/exit failure phases; message-channel tests distinguish active/pending/buffered subscription ownership.
-- Net dispose/error/cancellation tests often repeat setup but protect different public entry points, state transitions, races, or transport failure phases.
-- Utility string/byte serialization and file JSON/binary tests protect distinct allocation and I/O paths.
-
-No helper extraction made intent clearer than the local setup. Final test count increases only for the new public API contract test.
-
-## Retained Cross-Cutting Decisions
-
-- `Get`/`TryGet`/`Require` is used where absence is a normal query distinction. `ServiceLocator.Get` and other single-shape APIs retain their documented `KeyNotFoundException`/validation behavior rather than gaining unused variants.
-- Cancellation tokens remain optional and last. Final-review gated transport tests demonstrated blocking waits in typed sends, so `GameNet` and `NetMessenger` typed send/broadcast APIs now expose channel selection followed by an optional token while retaining structured `NetSendResult` cancellation semantics.
-- CPU/local ownership types use `IDisposable`; transports, discovery, browser, and `GameNet` use `IAsyncDisposable` because cleanup awaits active work. No sync-over-async bridge was introduced.
-- Core returns `IUnRegister`, Patterns returns standard `IDisposable`, and Net exposes .NET events. These shapes match their ownership models; unifying names alone would be disruptive.
-- Read-only query/registry/peer/diagnostic surfaces use cached wrappers or snapshots. Mutable collection views exist only on dictionary-compatible collection types where they are part of the implemented interface contract.
-- No network-security expansion, architecture rewrite, project move, new dependency, or unmeasured hot-path redesign was introduced.
-
-## Final Counts and Verification
+### Final Counts and Verification
 
 The same physical-line command was used for baseline and final comparison; test count comes from the VSTest summary, not textual `[Test]` counting.
 
@@ -103,4 +121,10 @@ The same physical-line command was used for baseline and final comparison; test 
 - `dotnet test .\Test\Test.csproj --no-restore --filter "FullyQualifiedName~TestSourceTextQuality"`: 1 passed, 0 failed.
 - `git diff --check`: exit 0; only line-ending conversion notices were emitted.
 
-Complete diff self-review confirmed each token remains optional and last, ordinary and schema-first calls compile without ambiguity, cancellation reaches the existing linked core, XML describes actual behavior, README examples use real constructors/methods, and no unrelated file entered scope. No known API concern remains from the intermediate overload shape. No independent reviewer was dispatched, as explicitly required.
+Complete diff self-review confirmed each token remains optional and last, ordinary and schema-first calls compile without ambiguity, cancellation reaches the existing linked core, XML describes actual behavior, README examples use real constructors/methods, and no unrelated file entered scope. No known API concern remains from the intermediate overload shape.
+
+## Independent Review
+
+- The main agent dispatched the independent `round6_crosscut_reviewer` after the complete Round 6 range `cc226dc..1d00f6e` and both exhaustive inventories were available. The reviewer reported no Critical, Important, or Minor issue and approved the round.
+- The earlier instruction that an individual inventory/evidence substep must not dispatch its own reviewer did not waive the round-level independent review required by the plan; the final round-level review was performed separately by the main agent.
+- No reviewer feedback required a correction commit. The later independent full-branch audit also accepted the reconciled Round 6 inventories and contracts; its separate final-branch findings were repaired in Round 7 rather than attributed retroactively to Round 6.
