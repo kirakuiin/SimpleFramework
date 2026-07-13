@@ -29,6 +29,8 @@ var sessionDomain = GameDomain.Create();
 sessionDomain.UnInitialize();
 ```
 
+`Domain` 不是线程安全的，应由同一线程（通常是游戏或应用主线程）创建、访问和释放。后台任务可以执行独立计算或 I/O，但在注册组件、发送事件、执行命令/查询或释放 Domain 前，应由应用自己的调度机制回到 Domain 所属线程。
+
 组件注册与必需查找:
 
 ```csharp

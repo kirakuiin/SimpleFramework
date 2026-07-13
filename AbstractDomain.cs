@@ -5,6 +5,10 @@ namespace SimpleFramework;
 /// <summary>
 /// 域的抽象实现，提供父子域、组件注册和事件分发能力。
 /// </summary>
+/// <remarks>
+/// Domain 不是线程安全的。实例应由同一线程（通常是游戏或应用主线程）创建、访问和释放；
+/// 调用方负责在调用 Domain API 前将后台工作调度回该线程。
+/// </remarks>
 public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, new()
 {
     private readonly EventBus _eventBus = new();
@@ -26,6 +30,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 获取单例域实例；不存在时会创建并初始化。
     /// </summary>
+    /// <remarks>首次创建和后续访问都必须发生在 Domain 所属线程。</remarks>
     public static T Instance => _domain ??= Create();
     
     /// <summary>
@@ -36,6 +41,7 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     /// <summary>
     /// 创建一个独立的域实例，并立即完成初始化。
     /// </summary>
+    /// <remarks>返回的实例应始终由创建它的线程访问和释放。</remarks>
     /// <returns>新的域实例。</returns>
     public static T Create()
     {
