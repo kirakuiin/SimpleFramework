@@ -10,9 +10,4 @@
       <ProjectReference Include="..\Utility\Utility.csproj" />
     </ItemGroup>
 
-    <ItemGroup Condition="'$(GODOT)' == 'true'">
-        <PackageReference Include="GodotSharp" Version="4.2.0" />
-        <PackageReference Include="GodotSharpEditor" Version="4.2.0" Condition="'$(Configuration)' == 'Debug'" />
-    </ItemGroup>
-
 </Project>
