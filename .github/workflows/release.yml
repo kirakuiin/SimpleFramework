@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore ./SimpleFramework.sln
+
+      - name: Build (Release)
+        run: dotnet build ./SimpleFramework.sln --configuration Release --no-restore
+
+      - name: Test (Release)
+        run: dotnet test ./SimpleFramework.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results-${{ matrix.os }}
+          path: Test/TestResults/test-results.trx
+          if-no-files-found: warn
+
+  release:
+    name: Publish GitHub Release
+    needs: build-and-test
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Validate tag and compute version
+        id: metadata
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag must use SemVer form such as v1.2.3 or v1.2.3-beta.1." >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          short_sha=${GITHUB_SHA:0:7}
+          is_prerelease=false
+          if [[ "$version" == *-* ]]; then
+            is_prerelease=true
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore ./SimpleFramework.sln
+
+      - name: Pack release
+        run: >-
+          dotnet pack ./SimpleFramework.sln
+          --configuration Release
+          --no-restore
+          --include-symbols
+          -p:SymbolPackageFormat=snupkg
+          -p:PackageOutputPath=${{ github.workspace }}/artifacts/packages
+          -p:PackageVersion=${{ steps.metadata.outputs.version }}
+          -p:ContinuousIntegrationBuild=true
+          -p:RepositoryCommit=${{ github.sha }}
+
+      - name: Write release metadata
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          git show -s --format='Commit: %H%nShort commit: %h%nAuthor: %an <%ae>%nAuthored at: %aI%nCommitter: %cn <%ce>%nCommitted at: %cI%nSubject: %s%n%nBody:%n%b' > artifacts/commit-info.txt
+          {
+            echo
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Tag: ${GITHUB_REF_NAME}"
+            echo "Package version: ${{ steps.metadata.outputs.version }}"
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> artifacts/commit-info.txt
+
+          (
+            cd artifacts
+            zip -r "SimpleFramework-${{ steps.metadata.outputs.version }}.zip" packages commit-info.txt
+            sha256sum packages/* "SimpleFramework-${{ steps.metadata.outputs.version }}.zip" > SHA256SUMS.txt
+          )
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          release_options=(
+            --repo "${GITHUB_REPOSITORY}"
+            --title "SimpleFramework ${GITHUB_REF_NAME}"
+            --generate-notes
+            --verify-tag
+          )
+
+          if [[ "${{ steps.metadata.outputs.is_prerelease }}" == "true" ]]; then
+            release_options+=(--prerelease)
+          fi
+
+          gh release create "${GITHUB_REF_NAME}" \
+            artifacts/packages/*.nupkg \
+            artifacts/packages/*.snupkg \
+            "artifacts/SimpleFramework-${{ steps.metadata.outputs.version }}.zip" \
+            artifacts/commit-info.txt \
+            artifacts/SHA256SUMS.txt \
+            "${release_options[@]}"

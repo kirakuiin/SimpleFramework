@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore ./SimpleFramework.sln
+
+      - name: Build (Release)
+        run: dotnet build ./SimpleFramework.sln --configuration Release --no-restore
+
+      - name: Test (Release)
+        run: dotnet test ./SimpleFramework.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: Test/TestResults/test-results.trx
+          if-no-files-found: warn
+
+  package:
+    name: Package commit
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Compute package metadata
+        id: metadata
+        shell: bash
+        run: |
+          base_version=$(dotnet msbuild ./SimpleFramework.csproj -nologo -getProperty:Version | tail -n 1 | tr -d '\r')
+          short_sha=${GITHUB_SHA:0:7}
+          package_version="${base_version}-ci.${GITHUB_RUN_NUMBER}.g${short_sha}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore ./SimpleFramework.sln
+
+      - name: Pack
+        run: >-
+          dotnet pack ./SimpleFramework.sln
+          --configuration Release
+          --no-restore
+          --include-symbols
+          -p:SymbolPackageFormat=snupkg
+          -p:PackageOutputPath=${{ github.workspace }}/artifacts/packages
+          -p:PackageVersion=${{ steps.metadata.outputs.package_version }}
+          -p:ContinuousIntegrationBuild=true
+          -p:RepositoryCommit=${{ github.sha }}
+
+      - name: Write commit information
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          git show -s --format='Commit: %H%nShort commit: %h%nAuthor: %an <%ae>%nAuthored at: %aI%nCommitter: %cn <%ce>%nCommitted at: %cI%nSubject: %s%n%nBody:%n%b' > artifacts/commit-info.txt
+          {
+            echo
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Branch or tag: ${GITHUB_REF_NAME}"
+            echo "Package version: ${{ steps.metadata.outputs.package_version }}"
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> artifacts/commit-info.txt
+
+      - name: Upload commit packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleFramework-${{ steps.metadata.outputs.short_sha }}
+          path: |
+            artifacts/packages/*.nupkg
+            artifacts/packages/*.snupkg
+            artifacts/commit-info.txt
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
