@@ -18,16 +18,16 @@ public class TestFramework
     private const int IntVal = 3;
     private const int AnoVal = 4;
     private const string StrVal = "hello";
-    
+
     [SetUp]
     public void Setup()
     {
         _aDomain = ADomain.Instance;
-        
+
         _aDomain.RegisterModel(new Model(StrVal));
         _aDomain.RegisterSystem(new System());
         _aDomain.RegisterUtility(new Utility(IntVal));
-        
+
         _control = new Control();
     }
 
@@ -38,7 +38,7 @@ public class TestFramework
         BDomain.Instance.UnInitialize();
         DDomain.Instance.UnInitialize();
     }
-    
+
     [Test]
     public void TestModelExists()
     {
@@ -51,7 +51,7 @@ public class TestFramework
     {
         Assert.AreEqual(_aDomain.GetUtility<Utility>()!.Value, _control.SendCommand());
     }
-    
+
     [Test]
     public void TestQuery()
     {
@@ -129,7 +129,7 @@ public class TestFramework
     {
         _control.UnRegister.UnRegister();
         _aDomain.GetModel<Model>()!.Value.Value = "find";
-        
+
         Assert.IsNull(_control.Old);
         Assert.IsNull(_control.New);
     }
@@ -167,11 +167,11 @@ public class TestFramework
     public void TestRegister()
     {
         var system = _aDomain.GetSystem<System>()!;
-        
+
         Assert.AreEqual(System.InitVal, system.Value);
 
         _aDomain.GetModel<Model>()!.Notify();
-        
+
         Assert.AreNotEqual(System.InitVal, system.Value);
     }
 
@@ -179,16 +179,16 @@ public class TestFramework
     public void TestParentExists()
     {
         BDomain.Instance.SetParent(ADomain.Instance);
-        
+
         Assert.AreEqual(IntVal, BDomain.Instance.GetUtility<Utility>()!.Value);
     }
-    
+
     [Test]
     public void TestParentOverride()
     {
         BDomain.Instance.SetParent(ADomain.Instance);
         BDomain.Instance.RegisterUtility(new Utility(AnoVal));
-        
+
         Assert.AreEqual(AnoVal, BDomain.Instance.GetUtility<Utility>()!.Value);
     }
 
@@ -328,19 +328,19 @@ public class TestFramework
         Assert.That(exception!.ParamName, Is.EqualTo("instance"));
         Assert.IsNull(container.Get<IUtility>());
     }
-    
+
     [Test]
     public void TestSetParentLifeCycle()
     {
         DDomain.Instance.SetParent(PDomain.Instance);
         PDomain.Instance.RegisterUtility(new Utility(IntVal));
-        
+
         D1Domain.Instance.SetParent(DDomain.Instance);
         D2Domain.Instance.SetParent(DDomain.Instance);
         DDomain.Instance.RegisterModel(new Model("hello world"));
-        
+
         DDomain.Instance.UnInitialize();
-        
+
         Assert.IsNotNull(PDomain.GetInstance());
         Assert.IsNull(DDomain.GetInstance());
         Assert.IsNotNull(D1Domain.GetInstance());
@@ -381,15 +381,15 @@ public class TestFramework
         {
             Assert.AreEqual(0, receiver.Value);
             Assert.AreEqual(0, receiver2.Value);
-        
+
             var value = 3;
             EventBus.Global.Send(value);
-        
+
             Assert.AreEqual(value, receiver.Value);
             Assert.AreEqual(value, receiver2.Value);
-        
+
             receiverUnregister.UnRegister();
-        
+
             value = 4;
             EventBus.Global.Send(value);
             Assert.AreNotEqual(value, receiver.Value);
@@ -552,6 +552,157 @@ public class TestFramework
         created.UnInitialize();
 
         Assert.AreSame(singleton, ADomain.GetInstance());
+    }
+
+    [Test]
+    public void TestUnconfiguredDomainCreationApiRemainsDeclaredOnGenericLayer()
+    {
+        var domainType = typeof(AbstractDomain<>);
+        const BindingFlags declaredPublicStatic =
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+        Assert.IsNotNull(domainType.GetProperty(nameof(ADomain.Instance), declaredPublicStatic));
+        Assert.IsNotNull(domainType.GetMethod(nameof(ADomain.GetInstance), declaredPublicStatic));
+        Assert.IsNotNull(
+            domainType.GetMethod(
+                nameof(ADomain.Create),
+                declaredPublicStatic,
+                binder: null,
+                types: Type.EmptyTypes,
+                modifiers: null));
+        Assert.IsTrue(domainType.GetGenericArguments()[0].GenericParameterAttributes
+            .HasFlag(GenericParameterAttributes.DefaultConstructorConstraint));
+    }
+
+    [Test]
+    public void TestConfiguredDomainProvidesConfigurationBeforeComponentInitialization()
+    {
+        var domain = ConfiguredTestDomain.Create("configured");
+
+        Assert.AreEqual("configured", domain.ConfigurationObservedByInit);
+        Assert.AreEqual(
+            "configured",
+            domain.RequireModel<ConfigurationObservingModel>().ObservedConfiguration);
+        Assert.That(
+            domain.ReadConfigurationAfterInitialization,
+            Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("Domain configuration is only available during initialization."));
+
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void TestConfiguredDomainHasNoFrameworkSingletonOrParameterlessCreationApi()
+    {
+        var domainType = typeof(ConfiguredTestDomain);
+        const BindingFlags publicStatic = BindingFlags.Public | BindingFlags.Static;
+
+        Assert.IsNull(domainType.GetProperty("Instance", publicStatic));
+        Assert.IsNull(domainType.GetMethod("GetInstance", publicStatic));
+        Assert.IsNull(
+            domainType.GetMethod(
+                "Create",
+                publicStatic,
+                binder: null,
+                types: Type.EmptyTypes,
+                modifiers: null));
+        Assert.IsEmpty(domainType.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+    }
+
+    [Test]
+    public void TestConfiguredDomainCannotInitializeTwice()
+    {
+        var domain = ConfiguredTestDomain.Create("configured");
+
+        var exception = Assert.Throws<InvalidOperationException>(domain.InitializeAgain);
+
+        Assert.That(exception!.Message, Is.EqualTo("Domain initialization can only run once."));
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void TestConfiguredDomainInitializationFailureReleasesEarlierComponents()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => FailingConfiguredDomain.Create(throwDuringCleanup: false));
+        var failedDomain = FailingConfiguredDomain.LastCreated!;
+
+        Assert.That(exception!.Message, Is.EqualTo("Configured initialization failed."));
+        Assert.AreEqual(1, failedDomain.EarlierModel.InitializeCount);
+        Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.IsNull(failedDomain.GetModel<ControllableLifecycleModel>());
+        Assert.DoesNotThrow(failedDomain.UnInitialize);
+    }
+
+    [Test]
+    public void TestConfiguredDomainPreservesInitializationAndCleanupFailures()
+    {
+        var exception = Assert.Throws<AggregateException>(
+            () => FailingConfiguredDomain.Create(throwDuringCleanup: true));
+        var flattened = exception!.Flatten().InnerExceptions;
+
+        Assert.IsTrue(flattened.Any(inner => inner.Message == "Configured initialization failed."));
+        Assert.IsTrue(flattened.Any(inner => inner.Message == "Replacement cleanup failed."));
+
+        var failedDomain = FailingConfiguredDomain.LastCreated!;
+        failedDomain.EarlierModel.ThrowOnUninitialize = false;
+        Assert.DoesNotThrow(failedDomain.UnInitialize);
+    }
+
+    [Test]
+    public void TestUnconfiguredDomainInitializationFailureCleansRegisteredState()
+    {
+        FailingUnconfiguredDomain.Configure(failInitialization: true, throwDuringCleanup: false);
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => FailingUnconfiguredDomain.Create());
+        var failedDomain = FailingUnconfiguredDomain.LastCreated!;
+
+        Assert.That(exception!.Message, Is.EqualTo("Configured initialization failed."));
+        Assert.AreEqual(1, failedDomain.EarlierModel.InitializeCount);
+        Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.IsNull(failedDomain.GetModel<ControllableLifecycleModel>());
+        Assert.DoesNotThrow(failedDomain.UnInitialize);
+    }
+
+    [Test]
+    public void TestUnconfiguredDomainPreservesInitializationAndCleanupFailures()
+    {
+        FailingUnconfiguredDomain.Configure(failInitialization: true, throwDuringCleanup: true);
+
+        var exception = Assert.Throws<AggregateException>(
+            () => FailingUnconfiguredDomain.Create());
+        var flattened = exception!.Flatten().InnerExceptions;
+
+        Assert.IsTrue(flattened.Any(inner => inner.Message == "Configured initialization failed."));
+        Assert.IsTrue(flattened.Any(inner => inner.Message == "Replacement cleanup failed."));
+
+        var failedDomain = FailingUnconfiguredDomain.LastCreated!;
+        Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.IsNull(failedDomain.GetModel<ControllableLifecycleModel>());
+        failedDomain.EarlierModel.ThrowOnUninitialize = false;
+        Assert.DoesNotThrow(failedDomain.UnInitialize);
+    }
+
+    [Test]
+    public void TestUnconfiguredSingletonFailureLeavesEmptySlotAndCanRetry()
+    {
+        FailingUnconfiguredDomain.Configure(failInitialization: true, throwDuringCleanup: false);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => _ = FailingUnconfiguredDomain.Instance);
+        var failedDomain = FailingUnconfiguredDomain.LastCreated!;
+
+        Assert.That(exception!.Message, Is.EqualTo("Configured initialization failed."));
+        Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.IsNull(FailingUnconfiguredDomain.GetInstance());
+
+        FailingUnconfiguredDomain.Configure(failInitialization: false, throwDuringCleanup: false);
+        var retry = FailingUnconfiguredDomain.Instance;
+
+        Assert.AreNotSame(failedDomain, retry);
+        Assert.AreSame(retry, FailingUnconfiguredDomain.GetInstance());
+        Assert.AreEqual(1, retry.EarlierModel.InitializeCount);
+        retry.UnInitialize();
     }
 
     [Test]
@@ -1128,18 +1279,142 @@ public class D2Domain : AbstractDomain<D2Domain>
     }
 }
 
+public sealed class ConfiguredTestDomain : AbstractConfiguredDomain<string>
+{
+    private ConfiguredTestDomain(string configuration)
+        : base(configuration)
+    {
+    }
+
+    public string? ConfigurationObservedByInit { get; private set; }
+
+    public static ConfiguredTestDomain Create(string configuration)
+    {
+        var domain = new ConfiguredTestDomain(configuration);
+        domain.Initialize();
+        return domain;
+    }
+
+    public void InitializeAgain()
+    {
+        Initialize();
+    }
+
+    public string ReadConfigurationAfterInitialization()
+    {
+        return Configuration;
+    }
+
+    protected override void Init()
+    {
+        ConfigurationObservedByInit = Configuration;
+        RegisterModel(new ConfigurationObservingModel(Configuration));
+    }
+}
+
+public sealed class FailingConfiguredDomain : AbstractConfiguredDomain<bool>
+{
+    private FailingConfiguredDomain(bool throwDuringCleanup)
+        : base(throwDuringCleanup)
+    {
+        EarlierModel = new ControllableLifecycleModel
+        {
+            ThrowOnUninitialize = throwDuringCleanup
+        };
+    }
+
+    public static FailingConfiguredDomain? LastCreated { get; private set; }
+
+    public ControllableLifecycleModel EarlierModel { get; }
+
+    public static FailingConfiguredDomain Create(bool throwDuringCleanup)
+    {
+        var domain = new FailingConfiguredDomain(throwDuringCleanup);
+        LastCreated = domain;
+        domain.Initialize();
+        return domain;
+    }
+
+    protected override void Init()
+    {
+        RegisterModel(EarlierModel);
+        RegisterModel(new ConfiguredFailingInitializeModel());
+    }
+}
+
+public sealed class FailingUnconfiguredDomain : AbstractDomain<FailingUnconfiguredDomain>
+{
+    private static bool _failInitialization = true;
+    private static bool _throwDuringCleanup;
+
+    public FailingUnconfiguredDomain()
+    {
+        EarlierModel = new ControllableLifecycleModel
+        {
+            ThrowOnUninitialize = _throwDuringCleanup
+        };
+        LastCreated = this;
+    }
+
+    public static FailingUnconfiguredDomain? LastCreated { get; private set; }
+
+    public ControllableLifecycleModel EarlierModel { get; }
+
+    public static void Configure(bool failInitialization, bool throwDuringCleanup)
+    {
+        GetInstance()?.UnInitialize();
+        _failInitialization = failInitialization;
+        _throwDuringCleanup = throwDuringCleanup;
+        LastCreated = null;
+    }
+
+    protected override void Init()
+    {
+        RegisterModel(EarlierModel);
+        if (_failInitialization)
+        {
+            RegisterModel(new ConfiguredFailingInitializeModel());
+        }
+    }
+}
+
+public sealed class ConfigurationObservingModel : AbstractModel
+{
+    private readonly string _configuration;
+
+    public ConfigurationObservingModel(string configuration)
+    {
+        _configuration = configuration;
+    }
+
+    public string? ObservedConfiguration { get; private set; }
+
+    protected override void OnInitialize()
+    {
+        ObservedConfiguration = _configuration;
+    }
+}
+
+public sealed class ConfiguredFailingInitializeModel : AbstractModel
+{
+    protected override void OnInitialize()
+    {
+        throw new InvalidOperationException("Configured initialization failed.");
+    }
+}
+
 
 public class Control : IController
 {
     public IDomain Domain => ADomain.Instance;
-    
+
     public IUnRegister UnRegister { get; private set; }
 
     public Control()
     {
         UnRegister = this.GetModel<Model>()!.Value.Register(OnValueChanged);
     }
-    
+
     public string? Old { get; private set; }
     public string? New { get; private set; }
 
@@ -1164,7 +1439,7 @@ public class System : AbstractSystem
 {
     public const string InitVal = "init";
     public string Value { get; private set; } = default!;
-    
+
     protected override void OnInitialize()
     {
         Value = InitVal;
@@ -1180,7 +1455,7 @@ public class System : AbstractSystem
 public class Model : AbstractModel
 {
     public BindableProperty<string> Value { get; }
-    
+
     public Model(string init)
     {
         Value = new BindableProperty<string>
@@ -1193,7 +1468,7 @@ public class Model : AbstractModel
     {
         this.SendEvent(new EventA(Value.Value));
     }
-    
+
     protected override void OnInitialize()
     {
     }
@@ -1450,7 +1725,7 @@ public class UtilityModelLifecycleTrap : IUtility, IModel
 public class EventA
 {
     public string Value { get; private set; }
-    
+
     public EventA(string val)
     {
         Value = val;
@@ -1463,7 +1738,7 @@ public class Utility : IUtility
     {
         Value = init;
     }
-    
+
     public int Value { get; private set; }
 }
 
@@ -1517,7 +1792,7 @@ public class Query : AbstractQuery<string>
 public class GlobalEventReceiver : IOnGlobalEvent<int>
 {
     public int Value { get; private set; }
-    
+
     public void OnEvent(int @event)
     {
         Value = @event;

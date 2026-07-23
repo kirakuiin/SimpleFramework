@@ -1,24 +1,23 @@
+using System.Runtime.ExceptionServices;
 using SimpleFramework.FrameworkImpl;
 
 namespace SimpleFramework;
 
 /// <summary>
-/// 域的抽象实现，提供父子域、组件注册和事件分发能力。
+/// 域的实例级抽象实现，提供初始化、父子域、组件注册、事件分发和资源释放能力。
 /// </summary>
 /// <remarks>
 /// Domain 不是线程安全的。实例应由同一线程（通常是游戏或应用主线程）创建、访问和释放；
 /// 调用方负责在调用 Domain API 前将后台工作调度回该线程。
 /// </remarks>
-public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, new()
+public abstract class AbstractDomain : IDomain
 {
     private readonly EventBus _eventBus = new();
 
     private readonly Container _container = new();
-    
-    private static T? _domain;
 
     private WeakReference<IDomain>? _parent;
-    
+
     private readonly List<IDomain> _children = new();
 
     private readonly HashSet<Type> _constructableKeys = new();
@@ -26,34 +25,58 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     private bool _isUninitializing;
 
     private bool _isReleasingComponent;
-    
+
+    private bool _initializationStarted;
+
     /// <summary>
-    /// 获取单例域实例；不存在时会创建并初始化。
+    /// 执行一次性域初始化；派生类型应在其受控创建入口中调用。
     /// </summary>
-    /// <remarks>首次创建和后续访问都必须发生在 Domain 所属线程。</remarks>
-    public static T Instance => _domain ??= Create();
-    
-    /// <summary>
-    /// 获取当前单例域实例；不存在时返回 <see langword="null"/>。
-    /// </summary>
-    public static T? GetInstance() => _domain;
-    
-    /// <summary>
-    /// 创建一个独立的域实例，并立即完成初始化。
-    /// </summary>
-    /// <remarks>返回的实例应始终由创建它的线程访问和释放。</remarks>
-    /// <returns>新的域实例。</returns>
-    public static T Create()
+    /// <remarks>
+    /// 初始化失败时会清理已经注册的域资源。若清理也失败，抛出的聚合异常同时保留初始化和清理失败。
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">同一实例已经开始过初始化。</exception>
+    /// <exception cref="AggregateException">初始化与失败清理同时抛出异常。</exception>
+    protected void Initialize()
     {
-        var domain = new T();
-        domain.Init();
-        return domain;
+        if (_initializationStarted)
+        {
+            throw new InvalidOperationException("Domain initialization can only run once.");
+        }
+
+        _initializationStarted = true;
+        try
+        {
+            Init();
+            OnInitialized();
+        }
+        catch (Exception initializationException)
+        {
+            try
+            {
+                UnInitialize();
+            }
+            catch (Exception cleanupException)
+            {
+                throw new AggregateException(
+                    "Domain initialization and cleanup both failed.",
+                    initializationException,
+                    cleanupException);
+            }
+
+            ExceptionDispatchInfo.Capture(initializationException).Throw();
+            throw;
+        }
     }
 
     /// <summary>
     /// 初始化新创建的域。
     /// </summary>
     protected abstract void Init();
+
+    /// <summary>
+    /// 在 <see cref="Init"/> 成功完成后执行派生创建策略的收尾逻辑。
+    /// </summary>
+    protected virtual void OnInitialized() { }
 
     /// <inheritdoc />
     public void UnInitialize()
@@ -98,9 +121,14 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
             _constructableKeys.Clear();
             _eventBus.Clear();
             SetParent(null);
-            if (ReferenceEquals(_domain, this))
+
+            try
             {
-                _domain = null;
+                OnDomainCleared();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
             }
 
             try
@@ -122,11 +150,16 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
             throw new AggregateException(exceptions);
         }
     }
-    
+
+    /// <summary>
+    /// 在域内容清理完成、域释放回调执行前更新派生创建策略持有的状态。
+    /// </summary>
+    protected virtual void OnDomainCleared() { }
+
     /// <summary>
     /// 在子域、生命周期组件和本地事件清理完成后释放域自身资源。
     /// </summary>
-    protected virtual void UnInit() {}
+    protected virtual void UnInit() { }
 
     /// <inheritdoc />
     public IDomain? Parent => _parent?.TryGetTarget(out var parent) == true ? parent : null;
@@ -183,13 +216,13 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
     public void AddChild(IDomain child)
     {
         child.SetParent(this);
-        
+
         // 防止重复添加
         if (_children.Any(existingChild => ReferenceEquals(existingChild, child)))
         {
             return;
         }
-        
+
         _children.Add(child);
     }
 
@@ -538,4 +571,92 @@ public abstract class AbstractDomain<T> : IDomain where T : AbstractDomain<T>, n
 
     /// <inheritdoc />
     public override string ToString() => _container.ToString();
+}
+
+/// <summary>
+/// 保留无参创建与可选单例访问策略的传统域基类。
+/// </summary>
+/// <typeparam name="T">具有公共无参构造函数的具体域类型。</typeparam>
+public abstract class AbstractDomain<T> : AbstractDomain where T : AbstractDomain<T>, new()
+{
+    private static T? _domain;
+
+    /// <summary>
+    /// 获取单例域实例；不存在时会创建并初始化。
+    /// </summary>
+    /// <remarks>首次创建和后续访问都必须发生在 Domain 所属线程。</remarks>
+    public static T Instance => _domain ??= Create();
+
+    /// <summary>
+    /// 获取当前单例域实例；不存在时返回 <see langword="null"/>。
+    /// </summary>
+    public static T? GetInstance() => _domain;
+
+    /// <summary>
+    /// 创建一个独立的域实例，并立即完成初始化。
+    /// </summary>
+    /// <remarks>返回的实例应始终由创建它的线程访问和释放。</remarks>
+    /// <returns>新的域实例。</returns>
+    public static T Create()
+    {
+        var domain = new T();
+        domain.Initialize();
+        return domain;
+    }
+
+    /// <inheritdoc />
+    protected override void OnDomainCleared()
+    {
+        if (ReferenceEquals(_domain, this))
+        {
+            _domain = null;
+        }
+    }
+}
+
+/// <summary>
+/// 要求派生域在构造期接收配置、并由受控工厂显式启动初始化的域基类。
+/// </summary>
+/// <typeparam name="TConfiguration">初始化前只读可用的配置类型。</typeparam>
+public abstract class AbstractConfiguredDomain<TConfiguration> : AbstractDomain
+{
+    private TConfiguration? _configuration;
+    private bool _configurationAvailable = true;
+
+    /// <summary>
+    /// 保存派生域创建所需的配置；框架不会复制或修改该对象。
+    /// </summary>
+    /// <param name="configuration">必须在域初始化前提供的配置。</param>
+    /// <exception cref="ArgumentNullException"><paramref name="configuration"/> 为 <see langword="null"/>。</exception>
+    protected AbstractConfiguredDomain(TConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        _configuration = configuration;
+    }
+
+    /// <summary>
+    /// 获取构造期提供的域配置；该值只在 <see cref="AbstractDomain.Init"/> 执行期间可用。
+    /// </summary>
+    /// <exception cref="InvalidOperationException">域初始化已经完成。</exception>
+    protected TConfiguration Configuration => _configurationAvailable
+        ? _configuration!
+        : throw new InvalidOperationException("Domain configuration is only available during initialization.");
+
+    /// <inheritdoc />
+    protected sealed override void OnInitialized()
+    {
+        ClearConfiguration();
+    }
+
+    /// <inheritdoc />
+    protected sealed override void OnDomainCleared()
+    {
+        ClearConfiguration();
+    }
+
+    private void ClearConfiguration()
+    {
+        _configuration = default;
+        _configurationAvailable = false;
+    }
 }
