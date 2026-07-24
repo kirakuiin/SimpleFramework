@@ -83,7 +83,7 @@ public interface IConstructable
     void Initialize();
 
     /// <summary>
-    /// 释放组件持有的资源。
+    /// 释放组件持有的资源；组件初始化开始后即使失败也会调用，因此实现必须能处理部分初始化状态。
     /// </summary>
     void UnInitialize();
 }

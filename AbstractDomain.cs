@@ -154,11 +154,12 @@ public abstract class AbstractDomain : IDomain
     /// <summary>
     /// 在域内容清理完成、域释放回调执行前更新派生创建策略持有的状态。
     /// </summary>
-    protected virtual void OnDomainCleared() { }
+    private protected virtual void OnDomainCleared() { }
 
     /// <summary>
     /// 在子域、生命周期组件和本地事件清理完成后释放域自身资源。
     /// </summary>
+    /// <remarks><see cref="Init"/> 抛出后也会调用，因此实现必须能处理部分初始化状态。</remarks>
     protected virtual void UnInit() { }
 
     /// <inheritdoc />
@@ -307,12 +308,14 @@ public abstract class AbstractDomain : IDomain
         bool releasedPrevious)
         where TComponent : IDomainConfigurable, IConstructable
     {
+        var initializationStarted = false;
         try
         {
             component.SetDomain(this);
+            initializationStarted = true;
             component.Initialize();
         }
-        catch
+        catch (Exception initializationException)
         {
             var key = typeof(TComponent);
             if (previous is not null && !releasedPrevious)
@@ -329,6 +332,22 @@ public abstract class AbstractDomain : IDomain
                 _constructableKeys.Remove(key);
             }
 
+            if (initializationStarted)
+            {
+                try
+                {
+                    ReleaseComponent(component);
+                }
+                catch (Exception cleanupException)
+                {
+                    throw new AggregateException(
+                        "Component initialization and cleanup both failed.",
+                        initializationException,
+                        cleanupException);
+                }
+            }
+
+            ExceptionDispatchInfo.Capture(initializationException).Throw();
             throw;
         }
     }
@@ -605,7 +624,7 @@ public abstract class AbstractDomain<T> : AbstractDomain where T : AbstractDomai
     }
 
     /// <inheritdoc />
-    protected override void OnDomainCleared()
+    private protected sealed override void OnDomainCleared()
     {
         if (ReferenceEquals(_domain, this))
         {
@@ -649,7 +668,7 @@ public abstract class AbstractConfiguredDomain<TConfiguration> : AbstractDomain
     }
 
     /// <inheritdoc />
-    protected sealed override void OnDomainCleared()
+    private protected sealed override void OnDomainCleared()
     {
         ClearConfiguration();
     }

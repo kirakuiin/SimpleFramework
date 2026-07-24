@@ -575,6 +575,31 @@ public class TestFramework
     }
 
     [Test]
+    public void TestDomainCreationPolicyHooksCannotBeOverriddenByConsumers()
+    {
+        const BindingFlags nonPublicInstance = BindingFlags.NonPublic | BindingFlags.Instance;
+        var baseHook = typeof(AbstractDomain).GetMethod("OnDomainCleared", nonPublicInstance);
+        var unconfiguredHook = typeof(AbstractDomain<>).GetMethod(
+            "OnDomainCleared",
+            nonPublicInstance | BindingFlags.DeclaredOnly);
+        var configuredHook = typeof(AbstractConfiguredDomain<>).GetMethod(
+            "OnDomainCleared",
+            nonPublicInstance | BindingFlags.DeclaredOnly);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseHook, Is.Not.Null);
+            Assert.That(baseHook!.IsFamilyAndAssembly, Is.True);
+            Assert.That(unconfiguredHook, Is.Not.Null);
+            Assert.That(unconfiguredHook!.IsFamilyAndAssembly, Is.True);
+            Assert.That(unconfiguredHook.IsFinal, Is.True);
+            Assert.That(configuredHook, Is.Not.Null);
+            Assert.That(configuredHook!.IsFamilyAndAssembly, Is.True);
+            Assert.That(configuredHook.IsFinal, Is.True);
+        });
+    }
+
+    [Test]
     public void TestConfiguredDomainProvidesConfigurationBeforeComponentInitialization()
     {
         var domain = ConfiguredTestDomain.Create("configured");
@@ -630,6 +655,7 @@ public class TestFramework
         Assert.That(exception!.Message, Is.EqualTo("Configured initialization failed."));
         Assert.AreEqual(1, failedDomain.EarlierModel.InitializeCount);
         Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.AreEqual(1, failedDomain.FailingModel.UninitializeCount);
         Assert.IsNull(failedDomain.GetModel<ControllableLifecycleModel>());
         Assert.DoesNotThrow(failedDomain.UnInitialize);
     }
@@ -645,6 +671,7 @@ public class TestFramework
         Assert.IsTrue(flattened.Any(inner => inner.Message == "Replacement cleanup failed."));
 
         var failedDomain = FailingConfiguredDomain.LastCreated!;
+        Assert.AreEqual(1, failedDomain.FailingModel.UninitializeCount);
         failedDomain.EarlierModel.ThrowOnUninitialize = false;
         Assert.DoesNotThrow(failedDomain.UnInitialize);
     }
@@ -660,6 +687,7 @@ public class TestFramework
         Assert.That(exception!.Message, Is.EqualTo("Configured initialization failed."));
         Assert.AreEqual(1, failedDomain.EarlierModel.InitializeCount);
         Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.AreEqual(1, failedDomain.FailingModel.UninitializeCount);
         Assert.IsNull(failedDomain.GetModel<ControllableLifecycleModel>());
         Assert.DoesNotThrow(failedDomain.UnInitialize);
     }
@@ -678,6 +706,7 @@ public class TestFramework
 
         var failedDomain = FailingUnconfiguredDomain.LastCreated!;
         Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.AreEqual(1, failedDomain.FailingModel.UninitializeCount);
         Assert.IsNull(failedDomain.GetModel<ControllableLifecycleModel>());
         failedDomain.EarlierModel.ThrowOnUninitialize = false;
         Assert.DoesNotThrow(failedDomain.UnInitialize);
@@ -694,6 +723,7 @@ public class TestFramework
 
         Assert.That(exception!.Message, Is.EqualTo("Configured initialization failed."));
         Assert.AreEqual(1, failedDomain.EarlierModel.UninitializeCount);
+        Assert.AreEqual(1, failedDomain.FailingModel.UninitializeCount);
         Assert.IsNull(FailingUnconfiguredDomain.GetInstance());
 
         FailingUnconfiguredDomain.Configure(failInitialization: false, throwDuringCleanup: false);
@@ -772,6 +802,28 @@ public class TestFramework
         var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(model));
 
         Assert.That(exception!.Message, Is.EqualTo("Initialization failed."));
+        Assert.AreEqual(1, model.InitializeCount);
+        Assert.AreEqual(1, model.UninitializeCount);
+        Assert.IsNull(domain.GetModel<FailingInitializeModel>());
+        Assert.DoesNotThrow(domain.UnInitialize);
+    }
+
+    [Test]
+    public void TestRegisterModelPreservesInitializationAndCleanupFailures()
+    {
+        var domain = ADomain.Create();
+        var model = new FailingInitializeModel
+        {
+            ThrowOnUninitialize = true
+        };
+
+        var exception = Assert.Throws<AggregateException>(() => domain.RegisterModel(model));
+        var flattened = exception!.Flatten().InnerExceptions;
+
+        Assert.IsTrue(flattened.Any(inner => inner.Message == "Initialization failed."));
+        Assert.IsTrue(flattened.Any(inner => inner.Message == "Failed component cleanup failed."));
+        Assert.AreEqual(1, model.InitializeCount);
+        Assert.AreEqual(1, model.UninitializeCount);
         Assert.IsNull(domain.GetModel<FailingInitializeModel>());
         Assert.DoesNotThrow(domain.UnInitialize);
     }
@@ -1326,6 +1378,7 @@ public sealed class FailingConfiguredDomain : AbstractConfiguredDomain<bool>
     public static FailingConfiguredDomain? LastCreated { get; private set; }
 
     public ControllableLifecycleModel EarlierModel { get; }
+    public ConfiguredFailingInitializeModel FailingModel { get; } = new();
 
     public static FailingConfiguredDomain Create(bool throwDuringCleanup)
     {
@@ -1338,7 +1391,7 @@ public sealed class FailingConfiguredDomain : AbstractConfiguredDomain<bool>
     protected override void Init()
     {
         RegisterModel(EarlierModel);
-        RegisterModel(new ConfiguredFailingInitializeModel());
+        RegisterModel(FailingModel);
     }
 }
 
@@ -1359,6 +1412,7 @@ public sealed class FailingUnconfiguredDomain : AbstractDomain<FailingUnconfigur
     public static FailingUnconfiguredDomain? LastCreated { get; private set; }
 
     public ControllableLifecycleModel EarlierModel { get; }
+    public ConfiguredFailingInitializeModel FailingModel { get; } = new();
 
     public static void Configure(bool failInitialization, bool throwDuringCleanup)
     {
@@ -1373,7 +1427,7 @@ public sealed class FailingUnconfiguredDomain : AbstractDomain<FailingUnconfigur
         RegisterModel(EarlierModel);
         if (_failInitialization)
         {
-            RegisterModel(new ConfiguredFailingInitializeModel());
+            RegisterModel(FailingModel);
         }
     }
 }
@@ -1397,9 +1451,16 @@ public sealed class ConfigurationObservingModel : AbstractModel
 
 public sealed class ConfiguredFailingInitializeModel : AbstractModel
 {
+    public int UninitializeCount { get; private set; }
+
     protected override void OnInitialize()
     {
         throw new InvalidOperationException("Configured initialization failed.");
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
     }
 }
 
@@ -1520,9 +1581,23 @@ public class ControllableLifecycleModel : AbstractModel
 
 public class FailingInitializeModel : AbstractModel
 {
+    public bool ThrowOnUninitialize { get; set; }
+    public int InitializeCount { get; private set; }
+    public int UninitializeCount { get; private set; }
+
     protected override void OnInitialize()
     {
+        InitializeCount++;
         throw new InvalidOperationException("Initialization failed.");
+    }
+
+    protected override void OnUninitialize()
+    {
+        UninitializeCount++;
+        if (ThrowOnUninitialize)
+        {
+            throw new InvalidOperationException("Failed component cleanup failed.");
+        }
     }
 }
 

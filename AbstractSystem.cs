@@ -1,4 +1,4 @@
-﻿using SimpleFramework.FrameworkImpl;
+using SimpleFramework.FrameworkImpl;
 
 namespace SimpleFramework;
 
@@ -17,7 +17,7 @@ public abstract class AbstractSystem : ISystem
     }
 
     void IConstructable.Initialize() => OnInitialize();
-    
+
     void IConstructable.UnInitialize() => OnUninitialize();
 
     /// <summary>
@@ -26,7 +26,7 @@ public abstract class AbstractSystem : ISystem
     protected abstract void OnInitialize();
 
     /// <summary>
-    /// 释放系统持有的资源。
+    /// 释放系统持有的资源；<see cref="OnInitialize"/> 抛出后也可能调用，因此必须能处理部分初始化状态。
     /// </summary>
-    protected virtual void OnUninitialize() {}
+    protected virtual void OnUninitialize() { }
 }

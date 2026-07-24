@@ -40,6 +40,34 @@ var timeUtility = domain.RequireUtility<ITimeUtility>();
 
 Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。
 
+需要构造参数的 Domain 使用 `AbstractConfiguredDomain<TConfiguration>`，并通过非公开构造函数和静态工厂保证调用方只能取得完整初始化的实例：
+
+```csharp
+public sealed record MatchOptions(int Seed);
+
+public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
+{
+    private MatchDomain(MatchOptions options)
+        : base(options)
+    {
+    }
+
+    public static MatchDomain Create(MatchOptions options)
+    {
+        var domain = new MatchDomain(options);
+        domain.Initialize();
+        return domain;
+    }
+
+    protected override void Init()
+    {
+        RegisterModel(new MatchModel(Configuration.Seed));
+    }
+}
+```
+
+`Configuration` 只在 `Init()` 及同步组件初始化期间可用，之后框架会释放内部引用。Domain 或组件初始化失败时会自动清理已经开始生命周期的资源；清理回调必须支持部分初始化状态。初始化与清理同时失败时会通过 `AggregateException` 保留两类错误。完整约束见 [`docs/domain-lifecycle.md`](docs/domain-lifecycle.md)。
+
 属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例:
 
 ```csharp
