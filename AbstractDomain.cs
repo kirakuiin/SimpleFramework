@@ -829,15 +829,15 @@ public abstract class AbstractDomain<T> : AbstractDomain where T : AbstractDomai
     {
         get
         {
-            if (_domain is not null)
-            {
-                return _domain;
-            }
-
             if (_creationDepth > 0)
             {
                 throw new InvalidOperationException(
                     $"Cannot access {typeof(T).FullName}.Instance while the same Domain type is initializing.");
+            }
+
+            if (_domain is not null)
+            {
+                return _domain;
             }
 
             var domain = Create();

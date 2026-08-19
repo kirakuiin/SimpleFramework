@@ -34,6 +34,25 @@ public sealed class DomainLifecycleV11Tests
     }
 
     [Test]
+    public void IndependentCreateCannotAccessExistingSingletonDuringInitialization()
+    {
+        var singleton = ReentrantAccessDomain.Instance;
+        ReentrantAccessDomain.Reenter = true;
+
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() => ReentrantAccessDomain.Create());
+
+            Assert.That(exception!.Message, Does.Contain("while the same Domain type is initializing"));
+            Assert.AreSame(singleton, ReentrantAccessDomain.GetInstance());
+        }
+        finally
+        {
+            ReentrantAccessDomain.Reenter = false;
+        }
+    }
+
+    [Test]
     public void UninitializeDuringDomainInitializationFailsAndDisposesInstance()
     {
         var exception = Assert.Throws<InvalidOperationException>(() => UninitializingDomain.Create());
