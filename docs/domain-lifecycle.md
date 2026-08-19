@@ -1,40 +1,116 @@
-# Domain 生命周期契约
+# Domain 生命周期与组件注册契约
 
-## 线程模型
+## 状态与线程模型
 
-`Domain` 是单线程对象，不提供并发同步。创建、组件访问、父子关系、事件、命令、查询和 `UnInitialize()` 应在同一线程执行；该线程通常是游戏或应用主线程。后台任务完成后，调用方应先调度回 Domain 所属线程，再调用 Domain API。
+每个 Domain 实例只经历一次内部状态流转：`Created -> Initializing -> Active -> Uninitializing -> Disposed`。状态不属于公共 API；调用方只需要遵守各操作的阶段约束。
+
+Domain 是单线程对象，不提供并发同步。创建、组件访问、父子关系、事件、命令、查询和 `UnInitialize()` 应在同一线程执行，通常是游戏或应用主线程。
+
+`Disposed` 是实例的终态，不能重新注册组件或执行事件、命令、查询。`Get*`、`TryGet*`、`Require*`、`Parent`、`ToString()` 和重复 `UnInitialize()` 仍可调用；此时本地注册表和父引用已经清空。单例 Domain 释放后，下一次 `Instance` 会创建新实例，不会复活旧实例。
+
+同类型 Domain 初始化期间访问 `Instance` 会立即抛出 `InvalidOperationException`，不会暴露半初始化对象，也不会递归创建。
 
 ## 父子域
 
-`AddChild` 表示生命周期所有权。父域释放时会释放子域，并保持对子域的强引用。
+`AddChild` 同时表示生命周期所有权和查找继承：父域持有子域强引用，释放时先释放子域。
 
-`SetParent` 只表示查找继承。当前域找不到 `System`、`Model`、`Utility` 时，会继续从父域查找。
+`SetParent` 只表示查找继承，不建立生命周期所有权。当前域找不到 `System`、`Model` 或 `Utility` 时才继续查询父域。关系修改只能发生在 Domain 初始化本体或活动期，组件初始化和清理回调中禁止修改关系。
 
-## 组件生命周期
+## 分类、主键与查找
 
-`System` 和 `Model` 注册后由 `Domain` 初始化和释放。重复注册同一实例不会重复初始化。
+Domain 内部把注册项分成 `System`、`Model`、`Utility` 三个互不泄漏的分类。每个本地实例只有一个分类、一个主键：
 
-组件的 `Initialize()` 一旦开始，即使随后抛出异常，`Domain` 也会先撤销容器注册，再调用该失败组件自身的 `UnInitialize()`。因此组件清理逻辑必须能够处理部分初始化状态，只释放实际取得的资源。
+```csharp
+public interface IPlayer : IModel
+{
+}
 
-若组件初始化失败且组件清理也失败，调用方会收到同时保留两类错误的 `AggregateException`。更早成功注册的组件由外层 Domain 初始化回滚继续释放。
+var player = new Player();
 
-`Utility` 注册不纳入生命周期管理，即使运行时类型同时实现了 `System` 或 `Model` 接口。
+// 主键是 Player；仍可通过唯一可赋值接口解析。
+domain.RegisterModel(player);
+var byInterface = domain.RequireModel<IPlayer>();
 
-Domain 的 `Init()` 失败时会自动执行完整 `UnInitialize()`。派生 Domain 的 `UnInit()` 因而也必须能够处理 `Init()` 尚未完整成功的状态。初始化异常不会被清理异常替换；两者同时发生时通过 `AggregateException` 保留。
+// 需要明确的服务键时，直接选 IPlayer 作为唯一主键。
+domain.RegisterModelAs<IPlayer>(new NetworkPlayer());
+```
+
+`Register*As<T>` 中的 `T` 是唯一精确主键，不是附加别名。不要把同一实例再注册到具体类型、其他接口或其他分类。
+
+每次查找按以下顺序执行：
+
+1. 返回当前分类中的精确主键。
+2. 没有精确键时，扫描运行时类型可赋值给请求类型的本地实例。
+3. 没有本地候选项时才查询父 Domain。
+4. 只有一个本地候选项时返回它；多个候选项时抛出 `AmbiguousComponentException`。
+
+精确键始终可以消除可赋值歧义。本地歧义不会回退父域。异常提供 `RequestedType` 和只读 `CandidateKeys`，用于诊断冲突注册。
+
+公共 `FrameworkImpl.Container` 仍然只按精确键工作，不采用上述 Domain 解析规则。
+
+## System 与 Model 所有权
+
+System 和 Model 的实例生命周期由一个 Domain 独占。一旦组件初始化开始，该实例不能再注册到其他键、分类或 Domain；无论初始化和清理成功还是失败，清理后的实例都不能复用。需要重新注册时必须创建新实例。
+
+活动期替换同一主键时，Domain 先取消发布并完整释放旧组件，再发布和初始化新组件：
+
+- 旧组件清理失败：异常直接传播，键保持为空，新实例没有开始初始化，仍可用于之后的注册。
+- 新组件初始化失败：回滚新注册，键保持为空，旧实例不会恢复。
+
+查找过程中不会同时看到新旧两个实例。
+
+## Utility 所有权
+
+Utility 的生命周期始终由调用方管理。Domain 只保存和移除注册项，不调用其 `Initialize()` 或 `UnInitialize()`，即使运行时类型也实现了 `ISystem` 或 `IModel`。
+
+同一个 Utility 实例可以共享给多个 Domain，但在同一个 Domain 中仍只能占用一个分类和主键。
+
+## 初始化事务
+
+组件 `Initialize()` 中允许：
+
+- `Get*`、`TryGet*`、`Require*` 查找；
+- `SendQuery`；
+- 本地 `RegisterEvent`；
+- 向不存在且不在初始化链中的主键注册新 System、Model 或 Utility。
+
+组件 `Initialize()` 中禁止：
+
+- `SendCommand`；
+- `SendEvent`；
+- 取消已有的本地事件订阅；
+- `AddChild`、`RemoveChild`、`SetParent`；
+- 替换任何已有主键；
+- 重复注册同一实例；
+- 直接或间接形成初始化循环；
+- 调用 `Domain.UnInitialize()`。
+
+一次顶层组件注册会形成框架本地事务。外层初始化失败时，事务会撤销嵌套新增的注册项和本地事件订阅；已经开始初始化的 System/Model 会获得一次清理回调，Utility 只移除注册项。初始化和回滚清理同时失败时，以 `AggregateException` 保留全部错误。
+
+事务不覆盖任意 Utility 调用、`EventBus.Global`、I/O 或其他外部副作用。组件作者必须自行补偿这些行为。
+
+## 终止清理
+
+`UnInitialize()` 是终止操作。清理顺序固定为：
+
+1. `AddChild` 持有的子 Domain；
+2. System，按成功激活顺序逆序；
+3. Model，按成功激活顺序逆序；
+4. Utility 注册项、本地事件和父引用；
+5. Domain 自身的清理钩子与 `UnInit()`。
+
+每个生命周期组件会先从注册表取消发布，再执行 `UnInitialize()`。因此回调查不到自身，但仍能只读访问尚未轮到清理的依赖项。
+
+整个过程始终保持 `Uninitializing`，包括派生 Domain 的 `UnInit()`，所以清理回调无法重新填充组件或事件。单个清理失败不会中断后续阶段；框架收集全部错误、最终进入 `Disposed`，然后抛出一个 `AggregateException`。清理中的重入和释放后的重复 `UnInitialize()` 都是无操作。
 
 ## 配置化 Domain
 
-需要初始参数的 Domain 应继承 `AbstractConfiguredDomain<TConfiguration>`，使用非公开构造函数和受控静态工厂。工厂必须在返回实例前调用受保护的 `Initialize()`：
+需要初始参数的 Domain 应继承 `AbstractConfiguredDomain<TConfiguration>`，使用非公开构造函数和受控静态工厂：
 
 ```csharp
-public sealed record MatchOptions(int Seed);
-
 public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
 {
-    private MatchDomain(MatchOptions options)
-        : base(options)
-    {
-    }
+    private MatchDomain(MatchOptions options) : base(options) { }
 
     public static MatchDomain Create(MatchOptions options)
     {
@@ -50,18 +126,10 @@ public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
 }
 ```
 
-`Configuration` 只在 `Init()` 及其同步触发的组件初始化期间可用。初始化成功后，或者初始化失败并完成清理后，框架都会释放内部配置引用；运行期需要的值应由 Model 或 System 明确持有。
+`Configuration` 只在 `Init()` 及其同步触发的组件初始化期间可用。初始化成功或失败清理完成后，框架都会释放内部配置引用。
 
-配置化 Domain 不提供框架单例或无参创建入口。派生类型负责保持构造函数非公开，避免未初始化实例逃逸。工厂只会返回完整实例；失败时直接抛出初始化异常，清理也失败时抛出同时包含两者的 `AggregateException`。
+## 事件、命令和查询
 
-## 查找语义
+Domain 事件只在当前 Domain 生效，不沿父域传播。跨 Domain 通信必须显式使用 `EventBus.Global`。
 
-`Get*` 未找到时返回 `null`。`TryGet*` 用布尔值表达是否找到。`Require*` 未找到时抛出 `InvalidOperationException`。
-
-## 事件边界
-
-`Domain` 事件只在当前 `Domain` 内生效，不沿父域查找。需要跨 `Domain` 通信时显式使用 `EventBus.Global`。
-
-## 命令和查询
-
-`Command` 代表可能修改状态的操作。`Query` 代表只读查询。`Domain` 在执行前会把自身注入到 `Command` 或 `Query`。
+Command 代表可能修改状态的操作，只能在活动期执行。Query 代表只读查询，在 Domain/组件初始化和活动期可执行；清理和释放后禁止执行。

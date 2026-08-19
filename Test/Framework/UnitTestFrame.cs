@@ -195,10 +195,11 @@ public class TestFramework
     [Test]
     public void TestExplicitGenericUtilityRegistrationUsesInterfaceKey()
     {
-        ADomain.Instance.RegisterUtility<ITestUtility>(new InterfaceUtility(IntVal));
+        var utility = new InterfaceUtility(IntVal);
+        ADomain.Instance.RegisterUtility<ITestUtility>(utility);
 
-        Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
-        Assert.AreEqual(IntVal, ADomain.Instance.GetUtility<ITestUtility>()!.Value);
+        Assert.AreSame(utility, ADomain.Instance.GetUtility<InterfaceUtility>());
+        Assert.AreSame(utility, ADomain.Instance.GetUtility<ITestUtility>());
     }
 
     [Test]
@@ -265,7 +266,7 @@ public class TestFramework
 
         domain.RegisterSystemAs<ISystem>(system);
 
-        Assert.IsNull(domain.GetSystem<LifecycleSystem>());
+        Assert.AreSame(system, domain.GetSystem<LifecycleSystem>());
         Assert.AreSame(system, domain.GetSystem<ISystem>());
     }
 
@@ -277,17 +278,18 @@ public class TestFramework
 
         domain.RegisterModelAs<IModel>(model);
 
-        Assert.IsNull(domain.GetModel<LifecycleModel>());
+        Assert.AreSame(model, domain.GetModel<LifecycleModel>());
         Assert.AreSame(model, domain.GetModel<IModel>());
     }
 
     [Test]
     public void TestRegisterUtilityAsUsesServiceKey()
     {
-        ADomain.Instance.RegisterUtilityAs<ITestUtility>(new InterfaceUtility(IntVal));
+        var utility = new InterfaceUtility(IntVal);
+        ADomain.Instance.RegisterUtilityAs<ITestUtility>(utility);
 
-        Assert.IsNull(ADomain.Instance.GetUtility<InterfaceUtility>());
-        Assert.AreEqual(IntVal, ADomain.Instance.RequireUtility<ITestUtility>().Value);
+        Assert.AreSame(utility, ADomain.Instance.GetUtility<InterfaceUtility>());
+        Assert.AreSame(utility, ADomain.Instance.RequireUtility<ITestUtility>());
     }
 
     [Test]
@@ -523,12 +525,15 @@ public class TestFramework
             domain.RegisterEvent<EventA>(_ => localCalled = true);
 
             domain.UnInitialize();
-            domain.SendEvent(new EventA("local"));
-            ADomain.Instance.SendEvent(new EventA("recreated"));
+            Assert.Throws<InvalidOperationException>(() => domain.SendEvent(new EventA("local")));
+
+            var recreated = ADomain.Instance;
+            recreated.SendEvent(new EventA("recreated"));
             EventBus.Global.Send(1);
 
             Assert.IsFalse(localCalled);
             Assert.IsTrue(globalCalled);
+            recreated.UnInitialize();
         }
         finally
         {
@@ -769,7 +774,7 @@ public class TestFramework
     }
 
     [Test]
-    public void TestRegisterModelReplacementCleanupFailureKeepsPreviousRegistration()
+    public void TestRegisterModelReplacementCleanupFailureLeavesKeyEmpty()
     {
         var domain = ADomain.Create();
         var first = new ControllableLifecycleModel { ThrowOnUninitialize = true };
@@ -777,20 +782,17 @@ public class TestFramework
 
         domain.RegisterModel(first);
 
-        try
-        {
-            var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(replacement));
+        var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(replacement));
 
-            Assert.That(exception!.Message, Is.EqualTo("Replacement cleanup failed."));
-            Assert.AreSame(first, domain.GetModel<ControllableLifecycleModel>());
-            Assert.AreEqual(1, first.UninitializeCount);
-            Assert.AreEqual(0, replacement.InitializeCount);
-        }
-        finally
-        {
-            first.ThrowOnUninitialize = false;
-            domain.UnInitialize();
-        }
+        Assert.That(exception!.Message, Is.EqualTo("Replacement cleanup failed."));
+        Assert.IsNull(domain.GetModel<ControllableLifecycleModel>());
+        Assert.AreEqual(1, first.UninitializeCount);
+        Assert.AreEqual(0, replacement.InitializeCount);
+
+        domain.RegisterModel(replacement);
+        Assert.AreSame(replacement, domain.GetModel<ControllableLifecycleModel>());
+        Assert.AreEqual(1, replacement.InitializeCount);
+        domain.UnInitialize();
     }
 
     [Test]
@@ -840,7 +842,7 @@ public class TestFramework
         try
         {
             Assert.Throws<InvalidOperationException>(() => domain.RegisterModelAs<IModel>(replacement));
-            Assert.AreSame(first, domain.GetModel<IModel>());
+            Assert.IsNull(domain.GetModel<IModel>());
             Assert.AreEqual(0, first.NestedReplacement.InitializeCount);
             Assert.AreEqual(0, replacement.InitializeCount);
         }
@@ -880,37 +882,30 @@ public class TestFramework
     }
 
     [Test]
-    public void TestRegisterModelSameInstanceAcrossKeysLifecycleOnce()
+    public void TestRegisterModelSameInstanceAcrossKeysIsRejected()
     {
         var domain = ADomain.Create();
         var model = new LifecycleModel();
-        var replacement = new LifecycleModel();
-
         domain.RegisterModel(model);
-        domain.RegisterModelAs<IModel>(model);
+
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModelAs<IModel>(model));
 
         Assert.AreEqual(1, model.InitializeCount);
         Assert.AreEqual(0, model.UninitializeCount);
 
-        domain.RegisterModelAs<IModel>(replacement);
-
-        Assert.AreEqual(0, model.UninitializeCount);
-        Assert.AreEqual(1, replacement.InitializeCount);
-
         domain.UnInitialize();
 
         Assert.AreEqual(1, model.UninitializeCount);
-        Assert.AreEqual(1, replacement.UninitializeCount);
     }
 
     [Test]
-    public void TestRegisterSystemSameInstanceAcrossKeysLifecycleOnce()
+    public void TestRegisterSystemSameInstanceAcrossKeysIsRejected()
     {
         var domain = ADomain.Create();
         var system = new LifecycleSystem();
 
         domain.RegisterSystem(system);
-        domain.RegisterSystemAs<ISystem>(system);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterSystemAs<ISystem>(system));
 
         Assert.AreEqual(1, system.InitializeCount);
         Assert.AreEqual(0, system.UninitializeCount);
@@ -953,8 +948,8 @@ public class TestFramework
         Assert.IsNull(domain.GetModel<IModel>());
 
         var replacement = new LifecycleModel();
-        domain.RegisterModel(replacement);
-        Assert.AreEqual(1, replacement.InitializeCount);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(replacement));
+        Assert.AreEqual(0, replacement.InitializeCount);
     }
 
     [Test]
@@ -971,8 +966,8 @@ public class TestFramework
         Assert.IsNull(domain.GetModel<ThrowingOnUninitializeModel>());
 
         var replacement = new LifecycleModel();
-        domain.RegisterModel(replacement);
-        Assert.AreEqual(1, replacement.InitializeCount);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(replacement));
+        Assert.AreEqual(0, replacement.InitializeCount);
     }
 
     [Test]
@@ -989,27 +984,21 @@ public class TestFramework
     }
 
     [Test]
-    public void TestDualRoleComponentLifecycleAcrossSystemAndModelKeys()
+    public void TestDualRoleComponentCannotCrossSystemAndModelCategories()
     {
         var domain = ADomain.Create();
         var dualRole = new DualRoleComponent();
-        var replacementSystem = new LifecycleSystem();
-
         domain.RegisterSystemAs<ISystem>(dualRole);
-        domain.RegisterModelAs<IModel>(dualRole);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModelAs<IModel>(dualRole));
 
         Assert.AreEqual(1, dualRole.InitializeCount);
         Assert.AreEqual(0, dualRole.UninitializeCount);
-
-        domain.RegisterSystemAs<ISystem>(replacementSystem);
-
-        Assert.AreEqual(0, dualRole.UninitializeCount);
-        Assert.AreEqual(1, replacementSystem.InitializeCount);
+        Assert.AreSame(dualRole, domain.GetSystem<ISystem>());
+        Assert.IsNull(domain.GetModel<IModel>());
 
         domain.UnInitialize();
 
         Assert.AreEqual(1, dualRole.UninitializeCount);
-        Assert.AreEqual(1, replacementSystem.UninitializeCount);
     }
 
     [Test]
@@ -1026,40 +1015,37 @@ public class TestFramework
     }
 
     [Test]
-    public void TestUtilityConstructableBecomesManagedWhenRegisteredAsSystem()
+    public void TestUtilityConstructableCannotJoinAnotherLocalCategory()
     {
         var domain = ADomain.Create();
         var trap = new UtilityLifecycleTrap();
 
         domain.RegisterUtilityAs<IUtility>(trap);
-        domain.RegisterSystemAs<ISystem>(trap);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterSystemAs<ISystem>(trap));
 
-        Assert.AreEqual(1, trap.InitializeCount);
+        Assert.AreEqual(0, trap.InitializeCount);
         Assert.AreEqual(0, trap.UninitializeCount);
 
         domain.UnInitialize();
 
-        Assert.AreEqual(1, trap.UninitializeCount);
+        Assert.AreEqual(0, trap.UninitializeCount);
     }
 
     [Test]
-    public void TestUtilityReferenceDoesNotKeepReplacedSystemAlive()
+    public void TestUtilityCategoryDoesNotLeakIntoSystemCategory()
     {
         var domain = ADomain.Create();
         var trap = new UtilityLifecycleTrap();
-        var replacement = new LifecycleSystem();
-
         domain.RegisterUtilityAs<IUtility>(trap);
-        domain.RegisterSystemAs<ISystem>(trap);
-        domain.RegisterSystemAs<ISystem>(replacement);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterSystemAs<ISystem>(trap));
 
-        Assert.AreEqual(1, trap.InitializeCount);
-        Assert.AreEqual(1, trap.UninitializeCount);
-        Assert.AreEqual(1, replacement.InitializeCount);
+        Assert.AreSame(trap, domain.GetUtility<IUtility>());
+        Assert.IsNull(domain.GetSystem<ISystem>());
+        Assert.AreEqual(0, trap.InitializeCount);
     }
 
     [Test]
-    public void TestUtilityRegistrationUnderSameConcreteKeyReleasesManagedSystem()
+    public void TestUtilityAndSystemConcreteKeysAreCategoryIsolated()
     {
         var domain = ADomain.Create();
         var system = new UtilityLifecycleTrap();
@@ -1069,9 +1055,11 @@ public class TestFramework
         domain.RegisterUtility(utility);
 
         Assert.AreEqual(1, system.InitializeCount);
-        Assert.AreEqual(1, system.UninitializeCount);
+        Assert.AreEqual(0, system.UninitializeCount);
         Assert.AreEqual(0, utility.InitializeCount);
         Assert.AreEqual(0, utility.UninitializeCount);
+        Assert.AreSame(system, domain.GetSystem<UtilityLifecycleTrap>());
+        Assert.AreSame(utility, domain.GetUtility<UtilityLifecycleTrap>());
 
         domain.UnInitialize();
 

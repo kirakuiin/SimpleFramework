@@ -4,7 +4,7 @@ namespace SimpleFramework;
 
 /// <summary>
 /// 域类型。
-/// <para>最顶层的对象，用于存储容器。</para>
+/// <para>最顶层的对象，用于组织分类组件、父子查找、事件和一次性生命周期。</para>
 /// </summary>
 public interface IDomain
 {
@@ -13,6 +13,7 @@ public interface IDomain
     /// <para>当 System、Model、Utility 在当前作用域中无法找到时，会尝试去父作用域查找。</para>
     /// </summary>
     /// <param name="domain">父<see cref="IDomain"/></param>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
     void SetParent(IDomain? domain);
     
     /// <summary>
@@ -25,76 +26,87 @@ public interface IDomain
     /// <para>子Domain必然会被父Domain管理，共享生命周期</para>
     /// </summary>
     /// <param name="domain"></param>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
     void AddChild(IDomain domain);
     
     /// <summary>
     /// 移除一个子Domain 
     /// </summary>
     /// <param name="domain"></param>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
     void RemoveChild(IDomain domain);
     
     /// <summary>
     /// 注册系统。
+    /// <para>以泛型参数作为唯一主键，并由当前 Domain 独占管理实例生命周期。</para>
     /// </summary>
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="system"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterSystem<T>(T system) where T : ISystem;
 
     /// <summary>
     /// 以指定类型注册系统。
-    /// <para>System 注册会纳入生命周期管理。</para>
+    /// <para><typeparamref name="T"/> 是唯一精确主键，不是附加别名；System 注册会纳入生命周期管理。</para>
     /// </summary>
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="system"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterSystemAs<T>(T system) where T : ISystem;
     
     /// <summary>
     /// 注册模型。
+    /// <para>以泛型参数作为唯一主键，并由当前 Domain 独占管理实例生命周期。</para>
     /// </summary>
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="model"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterModel<T>(T model) where T : IModel;
 
     /// <summary>
     /// 以指定类型注册模型。
-    /// <para>Model 注册会纳入生命周期管理。</para>
+    /// <para><typeparamref name="T"/> 是唯一精确主键，不是附加别名；Model 注册会纳入生命周期管理。</para>
     /// </summary>
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="model"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="Exception">组件初始化或被替换组件的释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterModelAs<T>(T model) where T : IModel;
     
     /// <summary>
     /// 注册功能组件。
+    /// <para>Utility 生命周期始终由调用方管理，可在多个 Domain 共享。</para>
     /// </summary>
     /// <param name="utility"><see cref="IUtility"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="utility"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="Exception">替换生命周期组件时释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，或实例已经占用当前 Domain 的其他键/分类。</exception>
     void RegisterUtility<T>(T utility) where T : IUtility;
 
     /// <summary>
     /// 以指定类型注册功能组件。
-    /// <para>Utility 注册不会纳入生命周期管理。</para>
+    /// <para><typeparamref name="T"/> 是唯一精确主键，不是附加别名；Utility 注册不会纳入生命周期管理。</para>
     /// </summary>
     /// <param name="utility"><see cref="IUtility"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="utility"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="Exception">替换生命周期组件时释放失败；原始异常会直接传播，失败的新注册不会对查找可见。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，或实例已经占用当前 Domain 的其他键/分类。</exception>
     void RegisterUtilityAs<T>(T utility) where T : IUtility;
     
     /// <summary>
     /// 在域中获取系统。
+    /// <para>先匹配当前 System 分类的精确主键，再匹配唯一可赋值实例，最后回退父 Domain。</para>
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="ISystem"/></returns>
+    /// <exception cref="AmbiguousComponentException">当前 Domain 存在多个可赋值候选项且没有精确主键。</exception>
     T? GetSystem<T>() where T : class, ISystem;
 
     /// <summary>
@@ -115,9 +127,11 @@ public interface IDomain
     
     /// <summary>
     /// 在域中获取模型。
+    /// <para>先匹配当前 Model 分类的精确主键，再匹配唯一可赋值实例，最后回退父 Domain。</para>
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IModel"/></returns>
+    /// <exception cref="AmbiguousComponentException">当前 Domain 存在多个可赋值候选项且没有精确主键。</exception>
     T? GetModel<T>() where T : class, IModel;
 
     /// <summary>
@@ -138,9 +152,11 @@ public interface IDomain
     
     /// <summary>
     /// 在域中获取功能组件。
+    /// <para>先匹配当前 Utility 分类的精确主键，再匹配唯一可赋值实例，最后回退父 Domain。</para>
     /// </summary>
     /// <typeparam name="T"></typeparam>
     /// <returns><see cref="IUtility"/></returns>
+    /// <exception cref="AmbiguousComponentException">当前 Domain 存在多个可赋值候选项且没有精确主键。</exception>
     T? GetUtility<T>() where T : class, IUtility;
 
     /// <summary>
@@ -165,6 +181,7 @@ public interface IDomain
     /// <param name="onEvent"></param>
     /// <typeparam name="TEvent"></typeparam>
     /// <returns></returns>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在清理或已经释放。</exception>
     IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent);
     
     /// <summary>
@@ -172,12 +189,14 @@ public interface IDomain
     /// </summary>
     /// <param name="onEvent"></param>
     /// <typeparam name="TEvent"></typeparam>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或已经释放。</exception>
     void UnRegisterEvent<TEvent>(Action<TEvent> onEvent);
 
     /// <summary>
     /// 在域中发送一个事件。
     /// </summary>
     /// <typeparam name="TEvent"></typeparam>
+    /// <exception cref="InvalidOperationException">Domain 不处于活动状态，或正在组件初始化/清理。</exception>
     void SendEvent<TEvent>() where TEvent : new();
 
     /// <summary>
@@ -185,6 +204,7 @@ public interface IDomain
     /// </summary>
     /// <param name="event"></param>
     /// <typeparam name="TEvent"></typeparam>
+    /// <exception cref="InvalidOperationException">Domain 不处于活动状态，或正在组件初始化/清理。</exception>
     void SendEvent<TEvent>(TEvent @event);
 
     /// <summary>
@@ -192,6 +212,7 @@ public interface IDomain
     /// </summary>
     /// <param name="command"></param>
     /// <typeparam name="TCommand"></typeparam>
+    /// <exception cref="InvalidOperationException">Domain 不处于活动状态，或正在组件初始化/清理。</exception>
     void SendCommand<TCommand>(TCommand command) where TCommand : ICommand;
     
     /// <summary>
@@ -200,6 +221,7 @@ public interface IDomain
     /// <param name="command"></param>
     /// <typeparam name="TResult"></typeparam>
     /// <returns></returns>
+    /// <exception cref="InvalidOperationException">Domain 不处于活动状态，或正在组件初始化/清理。</exception>
     TResult SendCommand<TResult>(ICommand<TResult> command);
 
     /// <summary>
@@ -208,11 +230,14 @@ public interface IDomain
     /// <param name="query"></param>
     /// <typeparam name="TResult"></typeparam>
     /// <returns></returns>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在清理或已经释放。</exception>
     TResult SendQuery<TResult>(IQuery<TResult> query);
 
     /// <summary>
-    /// 释放域中资源；释放期间的重入调用不会重复执行生命周期回调。
+    /// 永久释放当前实例；释放期间的重入调用和释放后的重复调用不会重复执行生命周期回调。
+    /// <para>释放后只允许组件查找、<see cref="Parent"/>、<see cref="object.ToString"/> 和再次调用本方法。</para>
     /// </summary>
+    /// <exception cref="InvalidOperationException">Domain 或组件仍在初始化。</exception>
     /// <exception cref="AggregateException">一个或多个子域、生命周期组件或域释放回调失败；清理其余资源后聚合抛出。</exception>
     void UnInitialize();
 }

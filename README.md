@@ -31,12 +31,23 @@ sessionDomain.UnInitialize();
 
 `Domain` 不是线程安全的，应由同一线程（通常是游戏或应用主线程）创建、访问和释放。后台任务可以执行独立计算或 I/O，但在注册组件、发送事件、执行命令/查询或释放 Domain 前，应由应用自己的调度机制回到 Domain 所属线程。
 
-组件注册与必需查找:
+组件注册与必需查找：
 
 ```csharp
 domain.RegisterUtilityAs<ITimeUtility>(new TimeUtility());
 var timeUtility = domain.RequireUtility<ITimeUtility>();
 ```
+
+Domain 将 `System`、`Model`、`Utility` 分开存储。每个本地实例只有一个分类和一个主键；`Register*As<T>` 中的 `T` 是唯一精确主键，不是附加别名。没有精确键时，查找会返回唯一的可赋值实例，因此接口服务仍可直接从具体注册解析：
+
+```csharp
+public interface IPlayer : IModel { }
+
+domain.RegisterModel(new Player());
+var player = domain.RequireModel<IPlayer>();
+```
+
+存在多个可赋值候选项时会抛出 `AmbiguousComponentException`；可使用显式服务主键消除歧义。System/Model 实例由一个 Domain 独占且清理后不能复用；Utility 始终由调用方管理，可以跨 Domain 共享。
 
 Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。
 
@@ -66,7 +77,9 @@ public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
 }
 ```
 
-`Configuration` 只在 `Init()` 及同步组件初始化期间可用，之后框架会释放内部引用。Domain 或组件初始化失败时会自动清理已经开始生命周期的资源；清理回调必须支持部分初始化状态。初始化与清理同时失败时会通过 `AggregateException` 保留两类错误。完整约束见 [`docs/domain-lifecycle.md`](docs/domain-lifecycle.md)。
+`Configuration` 只在 `Init()` 及同步组件初始化期间可用，之后框架会释放内部引用。Domain 或组件初始化失败时会自动清理已经开始生命周期的资源；清理回调必须支持部分初始化状态。初始化与清理同时失败时会通过 `AggregateException` 保留两类错误。
+
+`UnInitialize()` 是终止操作。释放后的实例只保留查找和诊断能力，不能重新注册、发送事件或执行命令/查询。完整约束见 [`docs/domain-lifecycle.md`](docs/domain-lifecycle.md)，从旧注册语义升级请参阅 [`docs/migration-v1.1.md`](docs/migration-v1.1.md)。
 
 属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例:
 

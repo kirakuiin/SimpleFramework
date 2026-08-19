@@ -13,58 +13,45 @@ namespace SimpleFramework;
 public abstract class AbstractDomain : IDomain
 {
     private readonly EventBus _eventBus = new();
-
-    private readonly Container _container = new();
-
-    private WeakReference<IDomain>? _parent;
-
+    private readonly DomainComponentRegistry _registry = new();
     private readonly List<IDomain> _children = new();
 
-    private readonly HashSet<Type> _constructableKeys = new();
-
-    private bool _isUninitializing;
-
-    private bool _isReleasingComponent;
-
-    private bool _initializationStarted;
+    private WeakReference<IDomain>? _parent;
+    private DomainState _state = DomainState.Created;
+    private InitializationTransaction? _initializationTransaction;
+    private int _componentInitializationDepth;
+    private int _componentReleaseDepth;
 
     /// <summary>
     /// 执行一次性域初始化；派生类型应在其受控创建入口中调用。
     /// </summary>
     /// <remarks>
-    /// 初始化失败时会清理已经注册的域资源。若清理也失败，抛出的聚合异常同时保留初始化和清理失败。
+    /// 初始化失败时会清理已经注册的域资源并使当前实例永久进入已释放状态。
+    /// 若清理也失败，抛出的聚合异常同时保留初始化和清理失败。
     /// </remarks>
-    /// <exception cref="InvalidOperationException">同一实例已经开始过初始化。</exception>
+    /// <exception cref="InvalidOperationException">当前实例不处于首次创建状态。</exception>
     /// <exception cref="AggregateException">初始化与失败清理同时抛出异常。</exception>
     protected void Initialize()
     {
-        if (_initializationStarted)
+        if (_state != DomainState.Created)
         {
             throw new InvalidOperationException("Domain initialization can only run once.");
         }
 
-        _initializationStarted = true;
+        _state = DomainState.Initializing;
         try
         {
             Init();
             OnInitialized();
+            _state = DomainState.Active;
         }
         catch (Exception initializationException)
         {
-            try
-            {
-                UnInitialize();
-            }
-            catch (Exception cleanupException)
-            {
-                throw new AggregateException(
-                    "Domain initialization and cleanup both failed.",
-                    initializationException,
-                    cleanupException);
-            }
-
-            ExceptionDispatchInfo.Capture(initializationException).Throw();
-            throw;
+            var cleanupExceptions = CleanupCore();
+            ThrowWithCleanup(
+                "Domain initialization and cleanup both failed.",
+                initializationException,
+                cleanupExceptions);
         }
     }
 
@@ -81,70 +68,17 @@ public abstract class AbstractDomain : IDomain
     /// <inheritdoc />
     public void UnInitialize()
     {
-        if (_isUninitializing || _isReleasingComponent)
+        if (_componentReleaseDepth > 0 || _state is DomainState.Uninitializing or DomainState.Disposed)
         {
             return;
         }
 
-        var exceptions = new List<Exception>();
-
-        _isUninitializing = true;
-        try
+        if (_state == DomainState.Initializing || _componentInitializationDepth > 0)
         {
-            foreach (var child in _children.ToList())
-            {
-                try
-                {
-                    child.UnInitialize();
-                }
-                catch (Exception exception)
-                {
-                    exceptions.Add(exception);
-                }
-            }
-
-            _children.Clear();
-
-            foreach (var constructable in GetRegisteredConstructables())
-            {
-                try
-                {
-                    constructable.UnInitialize();
-                }
-                catch (Exception exception)
-                {
-                    exceptions.Add(exception);
-                }
-            }
-
-            _container.Clear();
-            _constructableKeys.Clear();
-            _eventBus.Clear();
-            SetParent(null);
-
-            try
-            {
-                OnDomainCleared();
-            }
-            catch (Exception exception)
-            {
-                exceptions.Add(exception);
-            }
-
-            try
-            {
-                UnInit();
-            }
-            catch (Exception exception)
-            {
-                exceptions.Add(exception);
-            }
-        }
-        finally
-        {
-            _isUninitializing = false;
+            throw new InvalidOperationException("Cannot uninitialize a Domain while it is initializing.");
         }
 
+        var exceptions = CleanupCore();
         if (exceptions.Count > 0)
         {
             throw new AggregateException(exceptions);
@@ -168,11 +102,13 @@ public abstract class AbstractDomain : IDomain
     /// <inheritdoc />
     public void SetParent(IDomain? parent)
     {
+        EnsureRelationshipMutationAllowed();
         if (ReferenceEquals(Parent, parent))
         {
             return;
         }
-        if (_CheckCycle(parent))
+
+        if (CheckCycle(parent))
         {
             var exception = new ArgumentException("Detect cycle reference!");
             Log.Error("ArgumentError!", exception);
@@ -180,46 +116,20 @@ public abstract class AbstractDomain : IDomain
         }
 
         var oldParent = Parent;
-
         _parent = parent is null ? null : new WeakReference<IDomain>(parent);
-
-        // 只有在真正改变父域且新父域不是旧父域时才调用 RemoveChild
-        // RemoveChild 会检查到子域的父域已经不是自己，从而避免递归
-        if (oldParent != null && !ReferenceEquals(oldParent, parent))
+        if (oldParent is not null && !ReferenceEquals(oldParent, parent))
         {
             oldParent.RemoveChild(this);
         }
     }
 
-    /// <summary>
-    /// 检查设置父域后是否会形成循环引用。
-    /// </summary>
-    /// <param name="domain">候选父域。</param>
-    /// <returns>会形成循环引用时返回 <see langword="true"/>。</returns>
-    private bool _CheckCycle(IDomain? domain)
-    {
-        if (domain is null) return false;
-        if (ReferenceEquals(this, domain)) return true;
-
-        // 检查当前域是否已经是目标域的父级或祖先
-        var current = domain.Parent;
-        while (current != null)
-        {
-            if (ReferenceEquals(this, current))
-                return true;
-            current = current.Parent;
-        }
-
-        return false;
-    }
-
     /// <inheritdoc />
     public void AddChild(IDomain child)
     {
+        EnsureRelationshipMutationAllowed();
+        ArgumentNullException.ThrowIfNull(child);
         child.SetParent(this);
-
-        // 防止重复添加
-        if (_children.Any(existingChild => ReferenceEquals(existingChild, child)))
+        if (_children.Any(existing => ReferenceEquals(existing, child)))
         {
             return;
         }
@@ -230,21 +140,16 @@ public abstract class AbstractDomain : IDomain
     /// <inheritdoc />
     public void RemoveChild(IDomain child)
     {
-        if (child == null) return;
-
-        // 遍历子域列表，找到匹配的子域并移除
-        for (var i = _children.Count - 1; i >= 0; i--)
+        EnsureRelationshipMutationAllowed();
+        ArgumentNullException.ThrowIfNull(child);
+        if (!RemoveChildReference(child))
         {
-            var existingChild = _children[i];
-            if (!ReferenceEquals(existingChild, child)) continue;
-            _children.RemoveAt(i);
+            return;
+        }
 
-            // 只有当子域的父域确实是当前域时才清空，避免递归调用
-            if (ReferenceEquals(existingChild.Parent, this))
-            {
-                existingChild.SetParent(null);
-            }
-            break;
+        if (ReferenceEquals(child.Parent, this))
+        {
+            child.SetParent(null);
         }
     }
 
@@ -254,7 +159,7 @@ public abstract class AbstractDomain : IDomain
 
     /// <inheritdoc />
     public void RegisterSystemAs<TSystem>(TSystem system) where TSystem : ISystem
-        => RegisterConstructable(system);
+        => RegisterLifecycle(ComponentCategory.System, typeof(TSystem), system);
 
     /// <inheritdoc />
     public void RegisterModel<TModel>(TModel model) where TModel : IModel
@@ -262,95 +167,7 @@ public abstract class AbstractDomain : IDomain
 
     /// <inheritdoc />
     public void RegisterModelAs<TModel>(TModel model) where TModel : IModel
-        => RegisterConstructable(model);
-
-    private void RegisterConstructable<TComponent>(TComponent component)
-        where TComponent : IDomainConfigurable, IConstructable
-    {
-        EnsureNotUninitializing();
-
-        ArgumentNullException.ThrowIfNull(component);
-
-        var key = typeof(TComponent);
-        var isAlreadyManaged = IsConstructableRegistered(component);
-        var wasLifecycleManagedKey = _constructableKeys.Contains(key);
-        var previous = _container.Get(key) is TComponent registered ? registered : default;
-        if (ReferenceEquals(previous, component))
-        {
-            _constructableKeys.Add(key);
-            if (!isAlreadyManaged)
-            {
-                InitializeAndRollbackOnFailure(component, previous, wasLifecycleManagedKey, false);
-            }
-
-            return;
-        }
-
-        var releasedPrevious = wasLifecycleManagedKey && previous is not null &&
-                               !IsConstructableRegistered(previous, key);
-        if (releasedPrevious)
-        {
-            ReleaseComponent(previous!);
-        }
-
-        _container.Register(component);
-        _constructableKeys.Add(key);
-        if (!isAlreadyManaged)
-        {
-            InitializeAndRollbackOnFailure(component, previous, wasLifecycleManagedKey, releasedPrevious);
-        }
-    }
-
-    private void InitializeAndRollbackOnFailure<TComponent>(
-        TComponent component,
-        TComponent? previous,
-        bool wasLifecycleManagedKey,
-        bool releasedPrevious)
-        where TComponent : IDomainConfigurable, IConstructable
-    {
-        var initializationStarted = false;
-        try
-        {
-            component.SetDomain(this);
-            initializationStarted = true;
-            component.Initialize();
-        }
-        catch (Exception initializationException)
-        {
-            var key = typeof(TComponent);
-            if (previous is not null && !releasedPrevious)
-            {
-                _container.Register(previous);
-            }
-            else
-            {
-                _container.Remove<TComponent>();
-            }
-
-            if (!wasLifecycleManagedKey || releasedPrevious)
-            {
-                _constructableKeys.Remove(key);
-            }
-
-            if (initializationStarted)
-            {
-                try
-                {
-                    ReleaseComponent(component);
-                }
-                catch (Exception cleanupException)
-                {
-                    throw new AggregateException(
-                        "Component initialization and cleanup both failed.",
-                        initializationException,
-                        cleanupException);
-                }
-            }
-
-            ExceptionDispatchInfo.Capture(initializationException).Throw();
-            throw;
-        }
-    }
+        => RegisterLifecycle(ComponentCategory.Model, typeof(TModel), model);
 
     /// <inheritdoc />
     public void RegisterUtility<TUtility>(TUtility utility) where TUtility : IUtility
@@ -359,199 +176,130 @@ public abstract class AbstractDomain : IDomain
     /// <inheritdoc />
     public void RegisterUtilityAs<TUtility>(TUtility utility) where TUtility : IUtility
     {
-        EnsureNotUninitializing();
+        EnsureRegistrationAllowed();
         ArgumentNullException.ThrowIfNull(utility);
 
         var key = typeof(TUtility);
-        var wasLifecycleManagedKey = _constructableKeys.Contains(key);
-        var oldUtility = _container.Get(key);
-        if (wasLifecycleManagedKey && oldUtility is IConstructable oldConstructable &&
-            !IsConstructableRegistered(oldConstructable, key))
+        var byInstance = _registry.GetByInstance(utility);
+        if (byInstance is not null)
         {
-            ReleaseComponent(oldConstructable);
-        }
-
-        _container.Register(utility);
-        _constructableKeys.Remove(key);
-    }
-
-    private void EnsureNotUninitializing()
-    {
-        if (_isUninitializing || _isReleasingComponent)
-        {
-            throw new InvalidOperationException("Cannot register components during lifecycle cleanup.");
-        }
-    }
-
-    private void ReleaseComponent(IConstructable component)
-    {
-        _isReleasingComponent = true;
-        try
-        {
-            component.UnInitialize();
-        }
-        finally
-        {
-            _isReleasingComponent = false;
-        }
-    }
-
-    private List<IConstructable> GetRegisteredConstructables()
-    {
-        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        var constructables = new List<IConstructable>();
-
-        AddRegisteredConstructables(typeof(ISystem), constructables, visited);
-        AddRegisteredConstructables(typeof(IModel), constructables, visited);
-
-        return constructables;
-    }
-
-    private void AddRegisteredConstructables(
-        Type lifecycleKeyType,
-        List<IConstructable> constructables,
-        HashSet<object> visited)
-    {
-        foreach (var key in _constructableKeys.Where(lifecycleKeyType.IsAssignableFrom))
-        {
-            if (_container.Get(key) is IConstructable constructable && visited.Add(constructable))
+            if (byInstance.Category == ComponentCategory.Utility &&
+                byInstance.PrimaryKey == key &&
+                _componentInitializationDepth == 0)
             {
-                constructables.Add(constructable);
+                return;
             }
-        }
-    }
 
-    private bool IsConstructableRegistered(IConstructable constructable, Type? excludedKey = null)
-    {
-        return _constructableKeys
-            .Where(key => key != excludedKey)
-            .Select(_container.Get)
-            .Any(component => ReferenceEquals(component, constructable));
+            throw CreateDuplicateInstanceException(byInstance);
+        }
+
+        var previous = _registry.GetExact(ComponentCategory.Utility, key);
+        if (previous is not null)
+        {
+            EnsureReplacementAllowed(ComponentCategory.Utility, key);
+            _registry.Unpublish(previous);
+        }
+
+        var entry = _registry.Publish(ComponentCategory.Utility, key, utility);
+        _initializationTransaction?.Enlist(entry);
     }
 
     /// <inheritdoc />
     public TSystem? GetSystem<TSystem>() where TSystem : class, ISystem
-    {
-        var result = _container.Get<TSystem>();
-        if (result != null) return result;
+        => Resolve<TSystem>(ComponentCategory.System, static parent => parent.GetSystem<TSystem>());
 
-        return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetSystem<TSystem>() : null;
-    }
-
-    /// <summary>
-    /// 尝试在域中获取系统。
-    /// </summary>
-    /// <param name="system">找到的系统；未找到时为 <see langword="null"/>。</param>
-    /// <typeparam name="TSystem">系统类型。</typeparam>
-    /// <returns>找到系统时返回 true。</returns>
+    /// <inheritdoc />
     public bool TryGetSystem<TSystem>(out TSystem? system) where TSystem : class, ISystem
     {
         system = GetSystem<TSystem>();
-        return system != null;
+        return system is not null;
     }
 
-    /// <summary>
-    /// 在域中获取系统，未找到时抛出异常。
-    /// </summary>
-    /// <typeparam name="TSystem">系统类型。</typeparam>
-    /// <returns><see cref="ISystem"/></returns>
-    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定系统。</exception>
+    /// <inheritdoc />
     public TSystem RequireSystem<TSystem>() where TSystem : class, ISystem
     {
-        var system = GetSystem<TSystem>();
-        if (system != null) return system;
-        throw new InvalidOperationException($"System not found: {typeof(TSystem).FullName} in {GetType().FullName}.");
+        return GetSystem<TSystem>() ?? throw new InvalidOperationException(
+            $"System not found: {typeof(TSystem).FullName} in {GetType().FullName}.");
     }
 
     /// <inheritdoc />
     public TModel? GetModel<TModel>() where TModel : class, IModel
-    {
-        var result = _container.Get<TModel>();
-        if (result != null) return result;
+        => Resolve<TModel>(ComponentCategory.Model, static parent => parent.GetModel<TModel>());
 
-        return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetModel<TModel>() : null;
-    }
-
-    /// <summary>
-    /// 尝试在域中获取模型。
-    /// </summary>
-    /// <param name="model">找到的模型；未找到时为 <see langword="null"/>。</param>
-    /// <typeparam name="TModel">模型类型。</typeparam>
-    /// <returns>找到模型时返回 true。</returns>
+    /// <inheritdoc />
     public bool TryGetModel<TModel>(out TModel? model) where TModel : class, IModel
     {
         model = GetModel<TModel>();
-        return model != null;
+        return model is not null;
     }
 
-    /// <summary>
-    /// 在域中获取模型，未找到时抛出异常。
-    /// </summary>
-    /// <typeparam name="TModel">模型类型。</typeparam>
-    /// <returns><see cref="IModel"/></returns>
-    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定模型。</exception>
+    /// <inheritdoc />
     public TModel RequireModel<TModel>() where TModel : class, IModel
     {
-        var model = GetModel<TModel>();
-        if (model != null) return model;
-        throw new InvalidOperationException($"Model not found: {typeof(TModel).FullName} in {GetType().FullName}.");
+        return GetModel<TModel>() ?? throw new InvalidOperationException(
+            $"Model not found: {typeof(TModel).FullName} in {GetType().FullName}.");
     }
 
     /// <inheritdoc />
     public TUtility? GetUtility<TUtility>() where TUtility : class, IUtility
-    {
-        var result = _container.Get<TUtility>();
-        if (result != null) return result;
+        => Resolve<TUtility>(ComponentCategory.Utility, static parent => parent.GetUtility<TUtility>());
 
-        return _parent?.TryGetTarget(out var parentDomain) == true ? parentDomain.GetUtility<TUtility>() : null;
-    }
-
-    /// <summary>
-    /// 尝试在域中获取功能组件。
-    /// </summary>
-    /// <param name="utility">找到的功能组件；未找到时为 <see langword="null"/>。</param>
-    /// <typeparam name="TUtility">功能组件类型。</typeparam>
-    /// <returns>找到功能组件时返回 true。</returns>
+    /// <inheritdoc />
     public bool TryGetUtility<TUtility>(out TUtility? utility) where TUtility : class, IUtility
     {
         utility = GetUtility<TUtility>();
-        return utility != null;
+        return utility is not null;
     }
 
-    /// <summary>
-    /// 在域中获取功能组件，未找到时抛出异常。
-    /// </summary>
-    /// <typeparam name="TUtility">功能组件类型。</typeparam>
-    /// <returns><see cref="IUtility"/></returns>
-    /// <exception cref="InvalidOperationException">当前域及其父域中不存在指定功能组件。</exception>
+    /// <inheritdoc />
     public TUtility RequireUtility<TUtility>() where TUtility : class, IUtility
     {
-        var utility = GetUtility<TUtility>();
-        if (utility != null) return utility;
-        throw new InvalidOperationException($"Utility not found: {typeof(TUtility).FullName} in {GetType().FullName}.");
+        return GetUtility<TUtility>() ?? throw new InvalidOperationException(
+            $"Utility not found: {typeof(TUtility).FullName} in {GetType().FullName}.");
     }
 
     /// <inheritdoc />
-    public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.Register(onEvent);
+    public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent)
+    {
+        EnsureEventRegistrationAllowed();
+        ArgumentNullException.ThrowIfNull(onEvent);
+        var unRegister = _eventBus.Register(onEvent);
+        _initializationTransaction?.Enlist(unRegister);
+        return unRegister;
+    }
 
     /// <inheritdoc />
-    public void UnRegisterEvent<TEvent>(Action<TEvent> onEvent) => _eventBus.UnRegister(onEvent);
+    public void UnRegisterEvent<TEvent>(Action<TEvent> onEvent)
+    {
+        EnsureEventUnregistrationAllowed();
+        ArgumentNullException.ThrowIfNull(onEvent);
+        _eventBus.UnRegister(onEvent);
+    }
 
     /// <inheritdoc />
-    public void SendEvent<TEvent>() where TEvent : new() => _eventBus.Send<TEvent>();
+    public void SendEvent<TEvent>() where TEvent : new()
+    {
+        EnsureActiveExecution("send local events");
+        _eventBus.Send<TEvent>();
+    }
 
     /// <inheritdoc />
-    public void SendEvent<TEvent>(TEvent @event) => _eventBus.Send(@event);
+    public void SendEvent<TEvent>(TEvent @event)
+    {
+        EnsureActiveExecution("send local events");
+        _eventBus.Send(@event);
+    }
 
     /// <inheritdoc />
-    public void SendCommand<TCommand>(TCommand command) where TCommand : ICommand =>
+    public void SendCommand<TCommand>(TCommand command) where TCommand : ICommand
+    {
+        EnsureActiveExecution("send commands");
         ExecuteCommand(command);
+    }
 
     /// <summary>
     /// 注入当前域并执行无返回值命令；派生域可重写调度过程。
     /// </summary>
-    /// <param name="command">要执行的命令。</param>
-    /// <typeparam name="TCommand">命令类型。</typeparam>
     protected virtual void ExecuteCommand<TCommand>(TCommand command) where TCommand : ICommand
     {
         command.SetDomain(this);
@@ -559,14 +307,15 @@ public abstract class AbstractDomain : IDomain
     }
 
     /// <inheritdoc />
-    public TResult SendCommand<TResult>(ICommand<TResult> command) => ExecuteCommand(command);
+    public TResult SendCommand<TResult>(ICommand<TResult> command)
+    {
+        EnsureActiveExecution("send commands");
+        return ExecuteCommand(command);
+    }
 
     /// <summary>
     /// 注入当前域并执行带返回值命令；派生域可重写调度过程。
     /// </summary>
-    /// <param name="command">要执行的命令。</param>
-    /// <typeparam name="TResult">命令结果类型。</typeparam>
-    /// <returns>命令执行结果。</returns>
     protected virtual TResult ExecuteCommand<TResult>(ICommand<TResult> command)
     {
         command.SetDomain(this);
@@ -574,14 +323,15 @@ public abstract class AbstractDomain : IDomain
     }
 
     /// <inheritdoc />
-    public TResult SendQuery<TResult>(IQuery<TResult> query) => ExecuteQuery(query);
+    public TResult SendQuery<TResult>(IQuery<TResult> query)
+    {
+        EnsureQueryAllowed();
+        return ExecuteQuery(query);
+    }
 
     /// <summary>
     /// 注入当前域并执行查询；派生域可重写调度过程。
     /// </summary>
-    /// <param name="query">要执行的查询。</param>
-    /// <typeparam name="TResult">查询结果类型。</typeparam>
-    /// <returns>查询结果。</returns>
     protected virtual TResult ExecuteQuery<TResult>(IQuery<TResult> query)
     {
         query.SetDomain(this);
@@ -589,7 +339,478 @@ public abstract class AbstractDomain : IDomain
     }
 
     /// <inheritdoc />
-    public override string ToString() => _container.ToString();
+    public override string ToString() => _registry.ToString();
+
+    private void RegisterLifecycle(ComponentCategory category, Type key, IDomainConfigurable component)
+    {
+        EnsureRegistrationAllowed();
+        ArgumentNullException.ThrowIfNull(component);
+        if (component is not IConstructable constructable)
+        {
+            throw new ArgumentException("Lifecycle component must implement IConstructable.", nameof(component));
+        }
+
+        var byInstance = _registry.GetByInstance(component);
+        if (byInstance is not null)
+        {
+            if (byInstance.Category == category &&
+                byInstance.PrimaryKey == key &&
+                _componentInitializationDepth == 0)
+            {
+                return;
+            }
+
+            throw CreateDuplicateInstanceException(byInstance);
+        }
+
+        var previous = _registry.GetExact(category, key);
+        if (previous is not null)
+        {
+            EnsureReplacementAllowed(category, key);
+            ReleaseEntry(previous);
+        }
+
+        var ownsTransaction = _initializationTransaction is null;
+        if (ownsTransaction)
+        {
+            _initializationTransaction = new InitializationTransaction();
+        }
+
+        try
+        {
+            InitializeEntry(category, key, component, constructable);
+        }
+        catch (Exception initializationException)
+        {
+            if (!ownsTransaction)
+            {
+                ExceptionDispatchInfo.Capture(initializationException).Throw();
+            }
+
+            var rollbackExceptions = Rollback(_initializationTransaction!);
+            ThrowWithCleanup(
+                "Component initialization and rollback both failed.",
+                initializationException,
+                rollbackExceptions);
+        }
+        finally
+        {
+            if (ownsTransaction)
+            {
+                _initializationTransaction = null;
+            }
+        }
+    }
+
+    private void InitializeEntry(
+        ComponentCategory category,
+        Type key,
+        IDomainConfigurable configurable,
+        IConstructable constructable)
+    {
+        LifecycleOwnershipTracker.Reserve(configurable, _registry.OwnershipToken, category, key);
+
+        DomainComponentEntry? entry = null;
+        var initializationStarted = false;
+        try
+        {
+            entry = _registry.Publish(category, key, configurable);
+            _initializationTransaction!.Enlist(entry);
+            configurable.SetDomain(this);
+            LifecycleOwnershipTracker.BeginInitialization(configurable, _registry.OwnershipToken);
+            initializationStarted = true;
+
+            _componentInitializationDepth++;
+            try
+            {
+                constructable.Initialize();
+            }
+            finally
+            {
+                _componentInitializationDepth--;
+            }
+
+            LifecycleOwnershipTracker.MarkActive(configurable, _registry.OwnershipToken);
+            _registry.MarkActive(entry);
+            _initializationTransaction.MarkActivated(entry);
+        }
+        catch (Exception initializationException)
+        {
+            var cleanupExceptions = new List<Exception>();
+            if (entry is not null)
+            {
+                _registry.Unpublish(entry);
+                _initializationTransaction!.Forget(entry);
+            }
+
+            if (initializationStarted)
+            {
+                ReleaseStartedComponent(configurable, constructable, cleanupExceptions);
+            }
+            else
+            {
+                LifecycleOwnershipTracker.CancelReservation(configurable, _registry.OwnershipToken);
+            }
+
+            ThrowWithCleanup(
+                "Component initialization and cleanup both failed.",
+                initializationException,
+                cleanupExceptions);
+        }
+    }
+
+    private List<Exception> Rollback(InitializationTransaction transaction)
+    {
+        var exceptions = new List<Exception>();
+        foreach (var entry in transaction.ActivatedEntries.Reverse())
+        {
+            if (!_registry.IsPublished(entry))
+            {
+                continue;
+            }
+
+            try
+            {
+                ReleaseEntry(entry);
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+        }
+
+        foreach (var entry in transaction.Entries.Reverse())
+        {
+            if (entry.Category == ComponentCategory.Utility && _registry.IsPublished(entry))
+            {
+                _registry.Unpublish(entry);
+            }
+        }
+
+        foreach (var unRegister in transaction.EventSubscriptions.Reverse())
+        {
+            try
+            {
+                unRegister.UnRegister();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+        }
+
+        return exceptions;
+    }
+
+    private void ReleaseEntry(DomainComponentEntry entry)
+    {
+        _registry.Unpublish(entry);
+        var exceptions = new List<Exception>();
+        ReleaseStartedComponent(entry.Instance, (IConstructable)entry.Instance, exceptions);
+        if (exceptions.Count == 1)
+        {
+            ExceptionDispatchInfo.Capture(exceptions[0]).Throw();
+        }
+
+        if (exceptions.Count > 1)
+        {
+            throw new AggregateException(exceptions);
+        }
+    }
+
+    private void ReleaseStartedComponent(
+        object instance,
+        IConstructable constructable,
+        List<Exception> exceptions)
+    {
+        var releaseStarted = false;
+        try
+        {
+            LifecycleOwnershipTracker.BeginRelease(instance, _registry.OwnershipToken);
+            releaseStarted = true;
+            _componentReleaseDepth++;
+            try
+            {
+                constructable.UnInitialize();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+            finally
+            {
+                _componentReleaseDepth--;
+            }
+        }
+        finally
+        {
+            if (releaseStarted)
+            {
+                LifecycleOwnershipTracker.MarkReleased(instance, _registry.OwnershipToken);
+            }
+        }
+    }
+
+    private List<Exception> CleanupCore()
+    {
+        var exceptions = new List<Exception>();
+        _state = DomainState.Uninitializing;
+        try
+        {
+            foreach (var child in _children.ToArray())
+            {
+                try
+                {
+                    child.UnInitialize();
+                }
+                catch (Exception exception)
+                {
+                    exceptions.Add(exception);
+                }
+            }
+
+            _children.Clear();
+            ReleaseCategory(ComponentCategory.System, exceptions);
+            ReleaseCategory(ComponentCategory.Model, exceptions);
+            _registry.ClearUtilities();
+            _registry.Clear();
+            _eventBus.Clear();
+            DetachParent(exceptions);
+
+            try
+            {
+                OnDomainCleared();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+
+            try
+            {
+                UnInit();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+        }
+        finally
+        {
+            _initializationTransaction = null;
+            _state = DomainState.Disposed;
+        }
+
+        return exceptions;
+    }
+
+    private void ReleaseCategory(ComponentCategory category, List<Exception> exceptions)
+    {
+        foreach (var entry in _registry.GetReverseActivationOrder(category))
+        {
+            try
+            {
+                ReleaseEntry(entry);
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
+            }
+        }
+    }
+
+    private void DetachParent(List<Exception> exceptions)
+    {
+        var oldParent = Parent;
+        _parent = null;
+        if (oldParent is null)
+        {
+            return;
+        }
+
+        if (oldParent is AbstractDomain parentDomain)
+        {
+            parentDomain.RemoveChildReference(this);
+            return;
+        }
+
+        try
+        {
+            oldParent.RemoveChild(this);
+        }
+        catch (Exception exception)
+        {
+            exceptions.Add(exception);
+        }
+    }
+
+    private bool RemoveChildReference(IDomain child)
+    {
+        for (var index = _children.Count - 1; index >= 0; index--)
+        {
+            if (!ReferenceEquals(_children[index], child))
+            {
+                continue;
+            }
+
+            _children.RemoveAt(index);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool CheckCycle(IDomain? domain)
+    {
+        if (domain is null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(this, domain))
+        {
+            return true;
+        }
+
+        var current = domain.Parent;
+        while (current is not null)
+        {
+            if (ReferenceEquals(this, current))
+            {
+                return true;
+            }
+
+            current = current.Parent;
+        }
+
+        return false;
+    }
+
+    private TComponent? Resolve<TComponent>(
+        ComponentCategory category,
+        Func<IDomain, TComponent?> resolveParent)
+        where TComponent : class
+    {
+        if (_registry.Resolve(category, typeof(TComponent)) is TComponent result)
+        {
+            return result;
+        }
+
+        return Parent is { } parent ? resolveParent(parent) : null;
+    }
+
+    private void EnsureRegistrationAllowed()
+    {
+        if (_componentReleaseDepth > 0 || _state is not (DomainState.Initializing or DomainState.Active))
+        {
+            throw new InvalidOperationException($"Cannot register components while Domain is {_state}.");
+        }
+    }
+
+    private void EnsureReplacementAllowed(ComponentCategory category, Type key)
+    {
+        if (_componentInitializationDepth > 0)
+        {
+            throw new InvalidOperationException(
+                $"Cannot replace {category} key {key.FullName} during component initialization.");
+        }
+    }
+
+    private void EnsureRelationshipMutationAllowed()
+    {
+        if (_componentInitializationDepth > 0 ||
+            _componentReleaseDepth > 0 ||
+            _state is not (DomainState.Initializing or DomainState.Active))
+        {
+            throw new InvalidOperationException($"Cannot change Domain relationships while Domain is {_state}.");
+        }
+    }
+
+    private void EnsureEventRegistrationAllowed()
+    {
+        if (_componentReleaseDepth > 0 || _state is not (DomainState.Initializing or DomainState.Active))
+        {
+            throw new InvalidOperationException($"Cannot register local events while Domain is {_state}.");
+        }
+    }
+
+    private void EnsureEventUnregistrationAllowed()
+    {
+        if (_componentInitializationDepth > 0 || _state is DomainState.Created or DomainState.Disposed)
+        {
+            throw new InvalidOperationException($"Cannot unregister local events while Domain is {_state}.");
+        }
+    }
+
+    private void EnsureActiveExecution(string operation)
+    {
+        if (_state != DomainState.Active || _componentInitializationDepth > 0 || _componentReleaseDepth > 0)
+        {
+            throw new InvalidOperationException($"Cannot {operation} while Domain is {_state}.");
+        }
+    }
+
+    private void EnsureQueryAllowed()
+    {
+        if (_componentReleaseDepth > 0 || _state is not (DomainState.Initializing or DomainState.Active))
+        {
+            throw new InvalidOperationException($"Cannot send queries while Domain is {_state}.");
+        }
+    }
+
+    private InvalidOperationException CreateDuplicateInstanceException(DomainComponentEntry existing)
+    {
+        return new InvalidOperationException(
+            $"Component instance is already registered as {existing.Category} with key " +
+            $"{existing.PrimaryKey.FullName}.");
+    }
+
+    private static void ThrowWithCleanup(
+        string message,
+        Exception original,
+        IReadOnlyCollection<Exception> cleanupExceptions)
+    {
+        if (cleanupExceptions.Count == 0)
+        {
+            ExceptionDispatchInfo.Capture(original).Throw();
+        }
+
+        throw new AggregateException(message, new[] { original }.Concat(cleanupExceptions));
+    }
+
+    private enum DomainState
+    {
+        Created,
+        Initializing,
+        Active,
+        Uninitializing,
+        Disposed
+    }
+
+    private sealed class InitializationTransaction
+    {
+        private readonly List<DomainComponentEntry> _entries = new();
+        private readonly List<DomainComponentEntry> _activatedEntries = new();
+        private readonly List<IUnRegister> _eventSubscriptions = new();
+
+        public IReadOnlyList<DomainComponentEntry> Entries => _entries;
+
+        public IReadOnlyList<DomainComponentEntry> ActivatedEntries => _activatedEntries;
+
+        public IReadOnlyList<IUnRegister> EventSubscriptions => _eventSubscriptions;
+
+        public void Enlist(DomainComponentEntry entry) => _entries.Add(entry);
+
+        public void Enlist(IUnRegister unRegister) => _eventSubscriptions.Add(unRegister);
+
+        public void MarkActivated(DomainComponentEntry entry) => _activatedEntries.Add(entry);
+
+        public void Forget(DomainComponentEntry entry)
+        {
+            _entries.Remove(entry);
+            _activatedEntries.Remove(entry);
+        }
+    }
 }
 
 /// <summary>
@@ -599,12 +820,31 @@ public abstract class AbstractDomain : IDomain
 public abstract class AbstractDomain<T> : AbstractDomain where T : AbstractDomain<T>, new()
 {
     private static T? _domain;
+    private static int _creationDepth;
 
     /// <summary>
     /// 获取单例域实例；不存在时会创建并初始化。
     /// </summary>
-    /// <remarks>首次创建和后续访问都必须发生在 Domain 所属线程。</remarks>
-    public static T Instance => _domain ??= Create();
+    public static T Instance
+    {
+        get
+        {
+            if (_domain is not null)
+            {
+                return _domain;
+            }
+
+            if (_creationDepth > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot access {typeof(T).FullName}.Instance while the same Domain type is initializing.");
+            }
+
+            var domain = Create();
+            _domain = domain;
+            return domain;
+        }
+    }
 
     /// <summary>
     /// 获取当前单例域实例；不存在时返回 <see langword="null"/>。
@@ -614,13 +854,25 @@ public abstract class AbstractDomain<T> : AbstractDomain where T : AbstractDomai
     /// <summary>
     /// 创建一个独立的域实例，并立即完成初始化。
     /// </summary>
-    /// <remarks>返回的实例应始终由创建它的线程访问和释放。</remarks>
-    /// <returns>新的域实例。</returns>
     public static T Create()
     {
-        var domain = new T();
-        domain.Initialize();
-        return domain;
+        if (_creationDepth > 0)
+        {
+            throw new InvalidOperationException(
+                $"Cannot create {typeof(T).FullName} while the same Domain type is initializing.");
+        }
+
+        _creationDepth++;
+        try
+        {
+            var domain = new T();
+            domain.Initialize();
+            return domain;
+        }
+        finally
+        {
+            _creationDepth--;
+        }
     }
 
     /// <inheritdoc />
@@ -645,8 +897,6 @@ public abstract class AbstractConfiguredDomain<TConfiguration> : AbstractDomain
     /// <summary>
     /// 保存派生域创建所需的配置；框架不会复制或修改该对象。
     /// </summary>
-    /// <param name="configuration">必须在域初始化前提供的配置。</param>
-    /// <exception cref="ArgumentNullException"><paramref name="configuration"/> 为 <see langword="null"/>。</exception>
     protected AbstractConfiguredDomain(TConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -656,7 +906,6 @@ public abstract class AbstractConfiguredDomain<TConfiguration> : AbstractDomain
     /// <summary>
     /// 获取构造期提供的域配置；该值只在 <see cref="AbstractDomain.Init"/> 执行期间可用。
     /// </summary>
-    /// <exception cref="InvalidOperationException">域初始化已经完成。</exception>
     protected TConfiguration Configuration => _configurationAvailable
         ? _configuration!
         : throw new InvalidOperationException("Domain configuration is only available during initialization.");
