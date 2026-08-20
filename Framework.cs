@@ -11,6 +11,7 @@ public interface IDomain
     /// <summary>
     /// 设置当前域的父作用域。
     /// <para>当 System、Model、Utility 在当前作用域中无法找到时，会尝试去父作用域查找。</para>
+    /// <para>切换会先完成旧父域关系的移除；若该步骤失败，不会提交新的父引用。</para>
     /// </summary>
     /// <param name="domain">父<see cref="IDomain"/></param>
     /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
@@ -43,7 +44,7 @@ public interface IDomain
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="system"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，初始化期间发生重复键/循环注册，或同步执行期间尝试替换已有生命周期键。</exception>
     /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterSystem<T>(T system) where T : ISystem;
 
@@ -54,7 +55,7 @@ public interface IDomain
     /// <param name="system"><see cref="ISystem"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="system"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，初始化期间发生重复键/循环注册，或同步执行期间尝试替换已有生命周期键。</exception>
     /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterSystemAs<T>(T system) where T : ISystem;
     
@@ -65,7 +66,7 @@ public interface IDomain
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="model"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，初始化期间发生重复键/循环注册，或同步执行期间尝试替换已有生命周期键。</exception>
     /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterModel<T>(T model) where T : IModel;
 
@@ -76,7 +77,7 @@ public interface IDomain
     /// <param name="model"><see cref="IModel"/></param>
     /// <typeparam name="T"></typeparam>
     /// <exception cref="ArgumentNullException"><paramref name="model"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，或初始化期间发生重复键/循环注册。</exception>
+    /// <exception cref="InvalidOperationException">当前生命周期阶段不允许注册，实例已被管理，初始化期间发生重复键/循环注册，或同步执行期间尝试替换已有生命周期键。</exception>
     /// <exception cref="Exception">组件初始化、回滚或被替换组件的释放失败；失败后该键保持为空。</exception>
     void RegisterModelAs<T>(T model) where T : IModel;
     
@@ -177,10 +178,11 @@ public interface IDomain
     
     /// <summary>
     /// 在域中注册一个事件回调。
+    /// <para>订阅归 Domain/调用方管理；不会因无关生命周期组件替换而自动取消。</para>
     /// </summary>
     /// <param name="onEvent"></param>
     /// <typeparam name="TEvent"></typeparam>
-    /// <returns></returns>
+    /// <returns>可提前取消订阅的句柄；句柄的 <see cref="IUnRegister.UnRegister"/> 与 <see cref="IDisposable.Dispose"/> 遵循 Domain 的事件注销阶段限制。</returns>
     /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在清理或已经释放。</exception>
     IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent);
     
@@ -237,7 +239,7 @@ public interface IDomain
     /// 永久释放当前实例；释放期间的重入调用和释放后的重复调用不会重复执行生命周期回调。
     /// <para>释放后只允许组件查找、<see cref="Parent"/>、<see cref="object.ToString"/> 和再次调用本方法。</para>
     /// </summary>
-    /// <exception cref="InvalidOperationException">Domain 或组件仍在初始化。</exception>
+    /// <exception cref="InvalidOperationException">当前 Domain 或标准所有权子树仍在组件初始化/释放、清理回调，或本地事件、Command、Query 的同步执行尚未返回。</exception>
     /// <exception cref="AggregateException">一个或多个子域、生命周期组件或域释放回调失败；清理其余资源后聚合抛出。</exception>
     void UnInitialize();
 }
@@ -252,7 +254,7 @@ public interface IController : ISystemAccessible, IModelAccessible, IUtilityAcce
 /// <summary>
 /// 代表一个横跨多个实体的数据模型。
 /// </summary>
-public interface ISystem : IDomainConfigurable, IModelAccessible,
+public interface ISystem : IDomainBindable, IModelAccessible,
     IUtilityAccessible, IEventRegistrable, IEventTransmittable, IConstructable
 {
 }
@@ -260,7 +262,7 @@ public interface ISystem : IDomainConfigurable, IModelAccessible,
 /// <summary>
 /// 代表一个单一的数据模型。
 /// </summary>
-public interface IModel : IDomainConfigurable, IUtilityAccessible,
+public interface IModel : IDomainBindable, IUtilityAccessible,
     IEventTransmittable, IConstructable
 {
 }
@@ -302,7 +304,7 @@ public interface ICommand<out TResult> : IDomainConfigurable,
 }
 
 /// <summary>
-/// 一个查询也代表一个面向对象的回调，但它保证不会修改任何数据。
+/// 一个查询也代表一个面向对象的回调，约定上不修改数据。
 /// </summary>
 public interface IQuery<out TResult> : IDomainConfigurable,
     ISystemAccessible, IModelAccessible, IQueryTransmittable

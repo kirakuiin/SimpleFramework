@@ -125,6 +125,149 @@ public class TestFramework
     }
 
     [Test]
+    public void TestBindableSequentialWritesNotifyInOrder()
+    {
+        var property = new BindableProperty<int>(1);
+        var changes = new List<string>();
+        property.Register((previous, current) => changes.Add($"{previous}->{current}"));
+
+        property.Value = 2;
+        property.Value = 3;
+
+        CollectionAssert.AreEqual(new[] { "1->2", "2->3" }, changes);
+    }
+
+    [Test]
+    public void TestBindableRejectsDifferentValueReentrancyBeforeMutation()
+    {
+        var property = new BindableProperty<int>(1);
+        property.Register((_, _) => property.Value = 3);
+
+        Assert.Throws<InvalidOperationException>(() => property.Value = 2);
+
+        Assert.AreEqual(2, property.Value);
+    }
+
+    [Test]
+    public void TestBindableAllowsComparerEqualReentrantWrite()
+    {
+        var property = new BindableProperty<int>(1);
+        var notifications = 0;
+        property.Register((_, current) =>
+        {
+            notifications++;
+            property.Value = current;
+        });
+
+        Assert.DoesNotThrow(() => property.Value = 2);
+
+        Assert.AreEqual(2, property.Value);
+        Assert.AreEqual(1, notifications);
+    }
+
+    [Test]
+    public void TestBindableRejectsDifferentSilentReentrantWriteBeforeMutation()
+    {
+        var property = new BindableProperty<int>(0);
+        Exception? nestedFailure = null;
+        var observedValue = -1;
+        var observedChange = string.Empty;
+        property.Register((_, _) =>
+        {
+            try
+            {
+                property.SetValueWithoutNotify(2);
+            }
+            catch (Exception exception)
+            {
+                nestedFailure = exception;
+            }
+        });
+        property.Register((previous, current) =>
+        {
+            observedValue = property.Value;
+            observedChange = $"{previous}->{current}";
+        });
+
+        property.Value = 1;
+
+        Assert.That(nestedFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreEqual(1, property.Value);
+        Assert.AreEqual(1, observedValue);
+        Assert.AreEqual("0->1", observedChange);
+    }
+
+    [Test]
+    public void TestBindableAllowsComparerEqualSilentReentrantWrite()
+    {
+        var property = new BindableProperty<int>(0)
+            .WithComparer((previous, current) => Math.Abs(previous - current) < 2);
+        Exception? nestedFailure = null;
+        property.Register((_, _) =>
+        {
+            try
+            {
+                property.SetValueWithoutNotify(3);
+            }
+            catch (Exception exception)
+            {
+                nestedFailure = exception;
+            }
+        });
+
+        property.Value = 2;
+
+        Assert.IsNull(nestedFailure);
+        Assert.AreEqual(2, property.Value);
+    }
+
+    [Test]
+    public void TestBindableSilentWriteUsesComparer()
+    {
+        var property = new BindableProperty<int>(10)
+            .WithComparer((previous, current) => Math.Abs(previous - current) < 5);
+
+        property.SetValueWithoutNotify(12);
+
+        Assert.AreEqual(10, property.Value);
+    }
+
+    [Test]
+    public void TestBindableListenerFailureDoesNotLeaveReentrancyGuardSet()
+    {
+        var property = new BindableProperty<int>(1);
+        var shouldThrow = true;
+        property.Register((_, _) =>
+        {
+            if (shouldThrow)
+            {
+                shouldThrow = false;
+                throw new InvalidOperationException("listener failed");
+            }
+        });
+
+        Assert.Throws<InvalidOperationException>(() => property.Value = 2);
+        Assert.DoesNotThrow(() => property.Value = 3);
+
+        Assert.AreEqual(3, property.Value);
+    }
+
+    [Test]
+    public void TestBindableAllowsUnrelatedPropertyNotification()
+    {
+        var source = new BindableProperty<int>(1);
+        var target = new BindableProperty<int>(0);
+        var targetNotifications = 0;
+        source.Register((_, current) => target.Value = current);
+        target.Register((_, _) => targetNotifications++);
+
+        Assert.DoesNotThrow(() => source.Value = 2);
+
+        Assert.AreEqual(2, target.Value);
+        Assert.AreEqual(1, targetNotifications);
+    }
+
+    [Test]
     public void TestUnRegister()
     {
         _control.UnRegister.UnRegister();
@@ -1725,7 +1868,7 @@ public class DualRoleComponent : ISystem, IModel
     public int InitializeCount { get; private set; }
     public int UninitializeCount { get; private set; }
 
-    public void SetDomain(IDomain domain)
+    public void BindDomain(IDomain domain)
     {
         Domain = domain;
     }
@@ -1747,7 +1890,7 @@ public class UtilityLifecycleTrap : IUtility, ISystem
     public int InitializeCount { get; private set; }
     public int UninitializeCount { get; private set; }
 
-    public void SetDomain(IDomain domain)
+    public void BindDomain(IDomain domain)
     {
         Domain = domain;
     }
@@ -1769,7 +1912,7 @@ public class UtilityModelLifecycleTrap : IUtility, IModel
     public int InitializeCount { get; private set; }
     public int UninitializeCount { get; private set; }
 
-    public void SetDomain(IDomain domain)
+    public void BindDomain(IDomain domain)
     {
         Domain = domain;
     }

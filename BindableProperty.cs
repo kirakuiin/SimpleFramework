@@ -43,11 +43,13 @@ public interface IBindableProperty<T> : IReadonlyBindableProperty<T>
 {
     /// <summary>
     /// 获取或设置存储的值；值发生变化时通知监听器。
+    /// <para>同步通知期间写入不同值会抛出 <see cref="InvalidOperationException"/>；比较器判定相等的写入仍为无操作。</para>
     /// </summary>
     new T Value { get; set; }
     
     /// <summary>
     /// 设置新的值并且不触发事件。
+    /// <para>仍使用当前比较器，并在当前属性正在通知监听器时拒绝不同值写入。</para>
     /// </summary>
     /// <param name="value"></param>
     void SetValueWithoutNotify(T value);
@@ -60,6 +62,7 @@ public interface IBindableProperty<T> : IReadonlyBindableProperty<T>
 public class BindableProperty<T> : IBindableProperty<T>
 {
     private T _value;
+    private bool _isNotifying;
 
     private Func<T, T, bool> _comparer = EqualityComparer<T>.Default.Equals;
 
@@ -88,11 +91,18 @@ public class BindableProperty<T> : IBindableProperty<T>
         get => GetValue();
         set
         {
-            var prev = GetValue();
-            if (_comparer(prev, value)) return;
+            if (!CanWriteValue(value, out var prev)) return;
 
             SetValue(value);
-            OnValueChanged?.Invoke(prev, Value);
+            _isNotifying = true;
+            try
+            {
+                OnValueChanged?.Invoke(prev, Value);
+            }
+            finally
+            {
+                _isNotifying = false;
+            }
         }
     }
     
@@ -115,7 +125,23 @@ public class BindableProperty<T> : IBindableProperty<T>
     }
 
     /// <inheritdoc />
-    public void SetValueWithoutNotify(T value) => SetValue(value);
+    public void SetValueWithoutNotify(T value)
+    {
+        if (!CanWriteValue(value, out _)) return;
+        SetValue(value);
+    }
+
+    private bool CanWriteValue(T value, out T previous)
+    {
+        previous = GetValue();
+        if (_comparer(previous, value)) return false;
+        if (_isNotifying)
+        {
+            throw new InvalidOperationException("Cannot change BindableProperty while notifying listeners.");
+        }
+
+        return true;
+    }
 
     /// <inheritdoc />
     public IUnRegister RegisterWithNotify(Action<T, T> onValueChanged)

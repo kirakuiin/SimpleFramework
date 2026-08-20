@@ -12,9 +12,11 @@ Domain 是单线程对象，不提供并发同步。创建、组件访问、父�
 
 ## 父子域
 
-`AddChild` 同时表示生命周期所有权和查找继承：父域持有子域强引用，释放时先释放子域。
+`AddChild` 同时表示生命周期所有权和查找继承：父域持有子域强引用，释放时先释放子域。标准 `AbstractDomain` 所有权树在终止前会递归预检；任一子孙正在执行事件/命令/查询、初始化或释放组件，或者其 Domain 清理回调尚未结束时，整个父域释放会在修改状态前被拒绝。任意自定义 `IDomain` 不暴露这些内部阶段，因此仍按现有方式尽力清理并聚合失败。
 
 `SetParent` 只表示查找继承，不建立生命周期所有权。当前域找不到 `System`、`Model` 或 `Utility` 时才继续查询父域。关系修改只能发生在 Domain 初始化本体或活动期，组件初始化和清理回调中禁止修改关系。
+
+父域切换是异常原子的：框架会先从旧的标准父域移除子域所有权，再提交新的父引用；若旧关系不能变更，子域仍指向旧父域，旧父域也仍保有原所有权。对自定义 `IDomain`，框架会先调用其 `RemoveChild`，成功后才提交本地父引用。
 
 ## 分类、主键与查找
 
@@ -50,7 +52,7 @@ domain.RegisterModelAs<IPlayer>(new NetworkPlayer());
 
 ## System 与 Model 所有权
 
-System 和 Model 的实例生命周期由一个 Domain 独占。一旦组件初始化开始，该实例不能再注册到其他键、分类或 Domain；无论初始化和清理成功还是失败，清理后的实例都不能复用。需要重新注册时必须创建新实例。
+System 和 Model 的实例生命周期由一个 Domain 独占。框架注册时会调用公开的 `IDomainBindable.BindDomain`；该调用对生命周期组件是一次性的，之后即使已经清理也不能重新绑定或复用。无论初始化和清理成功还是失败，需要重新注册时都必须创建新实例。`Command` 与 `Query` 仍使用可重复的执行上下文注入，因此同一实例可在不同 Domain 中依次执行。
 
 活动期替换同一主键时，Domain 先取消发布并完整释放旧组件，再发布和初始化新组件：
 
@@ -67,14 +69,14 @@ Utility 的生命周期始终由调用方管理。Domain 只保存和移除注�
 
 ## 初始化事务
 
-组件 `Initialize()` 中允许：
+组件 `BindDomain()` 与 `Initialize()` 处于同一个受保护的组件初始化阶段。两者执行期间允许：
 
 - `Get*`、`TryGet*`、`Require*` 查找；
 - `SendQuery`；
 - 本地 `RegisterEvent`；
 - 向不存在且不在初始化链中的主键注册新 System、Model 或 Utility。
 
-组件 `Initialize()` 中禁止：
+两者执行期间禁止：
 
 - `SendCommand`；
 - `SendEvent`；
@@ -85,7 +87,11 @@ Utility 的生命周期始终由调用方管理。Domain 只保存和移除注�
 - 直接或间接形成初始化循环；
 - 调用 `Domain.UnInitialize()`。
 
+上述“取消已有的本地事件订阅”同时适用于 `Domain.UnRegisterEvent(...)`，以及 Domain 返回的 `IUnRegister.UnRegister()`/`Dispose()` 句柄。被初始化守卫拒绝的句柄不会被消费，可在 Domain 恢复活动期后再次取消；框架自身的事务回滚和组件清理不受该公开守卫阻断。
+
 一次顶层组件注册会形成框架本地事务。外层初始化失败时，事务会撤销嵌套新增的注册项和本地事件订阅；已经开始初始化的 System/Model 会获得一次清理回调，Utility 只移除注册项。初始化和回滚清理同时失败时，以 `AggregateException` 保留全部错误。
+
+事务中的任意嵌套 System/Model 注册一旦失败，整个顶层事务即被标记为失败。即使外层组件捕获该异常，之后也不能继续登记组件或本地事件，顶层注册最终仍会回滚并以原始失败结束。组件若要容错，应在其自身初始化逻辑内处理错误，不应让嵌套注册调用抛出后再继续注册。
 
 事务不覆盖任意 Utility 调用、`EventBus.Global`、I/O 或其他外部副作用。组件作者必须自行补偿这些行为。
 
@@ -102,6 +108,10 @@ Utility 的生命周期始终由调用方管理。Domain 只保存和移除注�
 每个生命周期组件会先从注册表取消发布，再执行 `UnInitialize()`。因此回调查不到自身，但仍能只读访问尚未轮到清理的依赖项。
 
 整个过程始终保持 `Uninitializing`，包括派生 Domain 的 `UnInit()`，所以清理回调无法重新填充组件或事件。单个清理失败不会中断后续阶段；框架收集全部错误、最终进入 `Disposed`，然后抛出一个 `AggregateException`。清理中的重入和释放后的重复 `UnInitialize()` 都是无操作。
+
+本地事件、Command 或 Query 的同步执行尚未返回时，`UnInitialize()` 会拒绝终止释放。这一守卫覆盖完整的事件派发和可重写 `ExecuteCommand`/`ExecuteQuery` 调用，允许三者相互嵌套，并在用户代码抛出异常时恢复。需要切换场景或关闭 Domain 的回调应在最外层 `SendEvent`、`SendCommand` 或 `SendQuery` 返回后执行或自行调度；异步任务不属于该同步守卫范围。
+
+同一同步执行阶段也不能替换已有的 System 或 Model 生命周期键，因为旧组件可能仍在当前事件快照或调用栈中。执行期间仍可注册不存在的新键，也可替换不受 Domain 生命周期管理的 Utility。
 
 ## 配置化 Domain
 
@@ -131,5 +141,9 @@ public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
 ## 事件、命令和查询
 
 Domain 事件只在当前 Domain 生效，不沿父域传播。跨 Domain 通信必须显式使用 `EventBus.Global`。
+
+System 通过 `this.RegisterEvent(...)` 注册的本地事件订阅默认归该 System 所有：替换、初始化失败回滚和终止清理都会自动取消，返回的 `IUnRegister` 仍可用于提前取消。若订阅创建时正处于任意组件初始化事务，它也会临时归该事务所有；事务失败会取消本次新增订阅，即使 System 早已活动且不会随事务释放，事务成功则继续由 System 管理。直接调用 `domain.RegisterEvent(...)`（或经 `IEventRegistrable` 扩展调用）是 Domain 级订阅，由调用方/Domain 生命周期管理，不会随无关组件替换而取消。
+
+Query 仍可访问完整 `IDomain`；“只读”是使用约定，不是由能力接口强制隔离的保证。
 
 Command 代表可能修改状态的操作，只能在活动期执行。Query 代表只读查询，在 Domain/组件初始化和活动期可执行；清理和释放后禁止执行。

@@ -7,13 +7,21 @@ namespace SimpleFramework;
 /// </summary>
 public abstract class AbstractSystem : ISystem
 {
-    /// <inheritdoc />
-    public IDomain Domain { get; private set; } = default!;
+    private IDomain? _domain;
 
     /// <inheritdoc />
-    public void SetDomain(IDomain domain)
+    public IDomain Domain => _domain ?? throw new InvalidOperationException("System has not been bound to a Domain.");
+
+    /// <inheritdoc />
+    void IDomainBindable.BindDomain(IDomain domain)
     {
-        Domain = domain;
+        ArgumentNullException.ThrowIfNull(domain);
+        if (_domain is not null)
+        {
+            throw new InvalidOperationException("System is already bound to a Domain.");
+        }
+
+        _domain = domain;
     }
 
     void IConstructable.Initialize() => OnInitialize();

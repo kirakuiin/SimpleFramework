@@ -105,7 +105,22 @@ public static class UtilityReadableExtensions
 public static class RegisterAbleExtensions
 {
     /// <summary>
-    /// 注册事件回调。
+    /// 注册随当前 System 生命周期自动取消的本地事件回调。
+    /// </summary>
+    /// <param name="self">订阅所属的 System。</param>
+    /// <param name="action">事件回调。</param>
+    /// <typeparam name="T">事件类型。</typeparam>
+    /// <returns>可提前取消订阅的句柄；取消操作遵循所属 Domain 的事件注销阶段限制。</returns>
+    public static IUnRegister RegisterEvent<T>(this ISystem self, Action<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        return self.Domain is IComponentEventRegistrar registrar
+            ? registrar.RegisterComponentEvent(self, action)
+            : self.Domain.RegisterEvent(action);
+    }
+
+    /// <summary>
+    /// 注册由 Domain 管理的事件回调。
     /// </summary>
     /// <param name="self"></param>
     /// <param name="action"></param>

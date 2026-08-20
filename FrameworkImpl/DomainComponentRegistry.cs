@@ -12,6 +12,8 @@ internal enum ComponentCategory
 
 internal sealed class DomainComponentEntry
 {
+    private readonly List<IUnRegister> _ownedResources = new();
+
     public DomainComponentEntry(ComponentCategory category, Type primaryKey, object instance)
     {
         Category = category;
@@ -28,6 +30,20 @@ internal sealed class DomainComponentEntry
     public bool IsLifecycleManaged => Category is ComponentCategory.System or ComponentCategory.Model;
 
     public bool IsActive { get; set; }
+
+    public void OwnResource(IUnRegister resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        _ownedResources.Add(resource);
+    }
+
+    public IReadOnlyList<IUnRegister> TakeOwnedResourcesReverse()
+    {
+        var resources = _ownedResources.ToArray();
+        Array.Reverse(resources);
+        _ownedResources.Clear();
+        return resources;
+    }
 }
 
 internal sealed class DomainComponentRegistry

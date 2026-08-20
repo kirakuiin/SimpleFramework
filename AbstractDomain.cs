@@ -10,7 +10,7 @@ namespace SimpleFramework;
 /// Domain 不是线程安全的。实例应由同一线程（通常是游戏或应用主线程）创建、访问和释放；
 /// 调用方负责在调用 Domain API 前将后台工作调度回该线程。
 /// </remarks>
-public abstract class AbstractDomain : IDomain
+public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
 {
     private readonly EventBus _eventBus = new();
     private readonly DomainComponentRegistry _registry = new();
@@ -21,6 +21,9 @@ public abstract class AbstractDomain : IDomain
     private InitializationTransaction? _initializationTransaction;
     private int _componentInitializationDepth;
     private int _componentReleaseDepth;
+    private int _executionDepth;
+    private bool _isDetachingFromExternalParent;
+    private IDomain? _childBeingRemoved;
 
     /// <summary>
     /// 执行一次性域初始化；派生类型应在其受控创建入口中调用。
@@ -73,10 +76,7 @@ public abstract class AbstractDomain : IDomain
             return;
         }
 
-        if (_state == DomainState.Initializing || _componentInitializationDepth > 0)
-        {
-            throw new InvalidOperationException("Cannot uninitialize a Domain while it is initializing.");
-        }
+        EnsureOwnedTreeCanUninitialize();
 
         var exceptions = CleanupCore();
         if (exceptions.Count > 0)
@@ -103,6 +103,12 @@ public abstract class AbstractDomain : IDomain
     public void SetParent(IDomain? parent)
     {
         EnsureRelationshipMutationAllowed();
+        if (_isDetachingFromExternalParent && parent is null)
+        {
+            _parent = null;
+            return;
+        }
+
         if (ReferenceEquals(Parent, parent))
         {
             return;
@@ -116,10 +122,32 @@ public abstract class AbstractDomain : IDomain
         }
 
         var oldParent = Parent;
-        _parent = parent is null ? null : new WeakReference<IDomain>(parent);
-        if (oldParent is not null && !ReferenceEquals(oldParent, parent))
+        var candidateParent = parent is null ? null : new WeakReference<IDomain>(parent);
+        try
         {
-            oldParent.RemoveChild(this);
+            if (oldParent is AbstractDomain parentDomain)
+            {
+                parentDomain.DetachOwnedChildForParentChange(this);
+            }
+            else if (oldParent is not null)
+            {
+                _isDetachingFromExternalParent = true;
+                try
+                {
+                    oldParent.RemoveChild(this);
+                }
+                finally
+                {
+                    _isDetachingFromExternalParent = false;
+                }
+            }
+
+            _parent = candidateParent;
+        }
+        catch
+        {
+            _parent = oldParent is null ? null : new WeakReference<IDomain>(oldParent);
+            throw;
         }
     }
 
@@ -142,15 +170,31 @@ public abstract class AbstractDomain : IDomain
     {
         EnsureRelationshipMutationAllowed();
         ArgumentNullException.ThrowIfNull(child);
-        if (!RemoveChildReference(child))
+        if (ReferenceEquals(_childBeingRemoved, child))
+        {
+            return;
+        }
+
+        if (!_children.Any(existing => ReferenceEquals(existing, child)))
         {
             return;
         }
 
         if (ReferenceEquals(child.Parent, this))
         {
-            child.SetParent(null);
+            var previousRemoval = _childBeingRemoved;
+            _childBeingRemoved = child;
+            try
+            {
+                child.SetParent(null);
+            }
+            finally
+            {
+                _childBeingRemoved = previousRemoval;
+            }
         }
+
+        RemoveChildReference(child);
     }
 
     /// <inheritdoc />
@@ -265,7 +309,26 @@ public abstract class AbstractDomain : IDomain
         ArgumentNullException.ThrowIfNull(onEvent);
         var unRegister = _eventBus.Register(onEvent);
         _initializationTransaction?.Enlist(unRegister);
-        return unRegister;
+        return new GuardedDomainUnRegister(this, unRegister);
+    }
+
+    /// <inheritdoc />
+    public IUnRegister RegisterComponentEvent<TEvent>(ISystem owner, Action<TEvent> onEvent)
+    {
+        EnsureEventRegistrationAllowed();
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(onEvent);
+
+        var entry = _registry.GetByInstance(owner);
+        if (entry is null || entry.Category != ComponentCategory.System || !_registry.IsPublished(entry))
+        {
+            throw new InvalidOperationException("System must be registered in this Domain before owning local events.");
+        }
+
+        var unRegister = _eventBus.Register(onEvent);
+        entry.OwnResource(unRegister);
+        _initializationTransaction?.Enlist(unRegister);
+        return new GuardedDomainUnRegister(this, unRegister);
     }
 
     /// <inheritdoc />
@@ -280,21 +343,45 @@ public abstract class AbstractDomain : IDomain
     public void SendEvent<TEvent>() where TEvent : new()
     {
         EnsureActiveExecution("send local events");
-        _eventBus.Send<TEvent>();
+        _executionDepth++;
+        try
+        {
+            _eventBus.Send<TEvent>();
+        }
+        finally
+        {
+            _executionDepth--;
+        }
     }
 
     /// <inheritdoc />
     public void SendEvent<TEvent>(TEvent @event)
     {
         EnsureActiveExecution("send local events");
-        _eventBus.Send(@event);
+        _executionDepth++;
+        try
+        {
+            _eventBus.Send(@event);
+        }
+        finally
+        {
+            _executionDepth--;
+        }
     }
 
     /// <inheritdoc />
     public void SendCommand<TCommand>(TCommand command) where TCommand : ICommand
     {
         EnsureActiveExecution("send commands");
-        ExecuteCommand(command);
+        _executionDepth++;
+        try
+        {
+            ExecuteCommand(command);
+        }
+        finally
+        {
+            _executionDepth--;
+        }
     }
 
     /// <summary>
@@ -310,7 +397,15 @@ public abstract class AbstractDomain : IDomain
     public TResult SendCommand<TResult>(ICommand<TResult> command)
     {
         EnsureActiveExecution("send commands");
-        return ExecuteCommand(command);
+        _executionDepth++;
+        try
+        {
+            return ExecuteCommand(command);
+        }
+        finally
+        {
+            _executionDepth--;
+        }
     }
 
     /// <summary>
@@ -326,7 +421,15 @@ public abstract class AbstractDomain : IDomain
     public TResult SendQuery<TResult>(IQuery<TResult> query)
     {
         EnsureQueryAllowed();
-        return ExecuteQuery(query);
+        _executionDepth++;
+        try
+        {
+            return ExecuteQuery(query);
+        }
+        finally
+        {
+            _executionDepth--;
+        }
     }
 
     /// <summary>
@@ -341,35 +444,8 @@ public abstract class AbstractDomain : IDomain
     /// <inheritdoc />
     public override string ToString() => _registry.ToString();
 
-    private void RegisterLifecycle(ComponentCategory category, Type key, IDomainConfigurable component)
+    private void RegisterLifecycle(ComponentCategory category, Type key, IDomainBindable component)
     {
-        EnsureRegistrationAllowed();
-        ArgumentNullException.ThrowIfNull(component);
-        if (component is not IConstructable constructable)
-        {
-            throw new ArgumentException("Lifecycle component must implement IConstructable.", nameof(component));
-        }
-
-        var byInstance = _registry.GetByInstance(component);
-        if (byInstance is not null)
-        {
-            if (byInstance.Category == category &&
-                byInstance.PrimaryKey == key &&
-                _componentInitializationDepth == 0)
-            {
-                return;
-            }
-
-            throw CreateDuplicateInstanceException(byInstance);
-        }
-
-        var previous = _registry.GetExact(category, key);
-        if (previous is not null)
-        {
-            EnsureReplacementAllowed(category, key);
-            ReleaseEntry(previous);
-        }
-
         var ownsTransaction = _initializationTransaction is null;
         if (ownsTransaction)
         {
@@ -378,12 +454,44 @@ public abstract class AbstractDomain : IDomain
 
         try
         {
+            EnsureRegistrationAllowed();
+            ArgumentNullException.ThrowIfNull(component);
+            if (component is not IConstructable constructable)
+            {
+                throw new ArgumentException("Lifecycle component must implement IConstructable.", nameof(component));
+            }
+
+            var byInstance = _registry.GetByInstance(component);
+            if (byInstance is not null)
+            {
+                if (byInstance.Category == category &&
+                    byInstance.PrimaryKey == key &&
+                    _componentInitializationDepth == 0)
+                {
+                    return;
+                }
+
+                throw CreateDuplicateInstanceException(byInstance);
+            }
+
+            var previous = _registry.GetExact(category, key);
+            if (previous is not null)
+            {
+                EnsureReplacementAllowed(category, key);
+                ReleaseEntry(previous);
+            }
+
             InitializeEntry(category, key, component, constructable);
+            if (ownsTransaction)
+            {
+                _initializationTransaction!.ThrowIfPoisoned();
+            }
         }
         catch (Exception initializationException)
         {
             if (!ownsTransaction)
             {
+                _initializationTransaction!.Poison(initializationException);
                 ExceptionDispatchInfo.Capture(initializationException).Throw();
             }
 
@@ -405,7 +513,7 @@ public abstract class AbstractDomain : IDomain
     private void InitializeEntry(
         ComponentCategory category,
         Type key,
-        IDomainConfigurable configurable,
+        IDomainBindable configurable,
         IConstructable constructable)
     {
         LifecycleOwnershipTracker.Reserve(configurable, _registry.OwnershipToken, category, key);
@@ -416,13 +524,12 @@ public abstract class AbstractDomain : IDomain
         {
             entry = _registry.Publish(category, key, configurable);
             _initializationTransaction!.Enlist(entry);
-            configurable.SetDomain(this);
-            LifecycleOwnershipTracker.BeginInitialization(configurable, _registry.OwnershipToken);
-            initializationStarted = true;
-
             _componentInitializationDepth++;
             try
             {
+                configurable.BindDomain(this);
+                LifecycleOwnershipTracker.BeginInitialization(configurable, _registry.OwnershipToken);
+                initializationStarted = true;
                 constructable.Initialize();
             }
             finally
@@ -447,7 +554,13 @@ public abstract class AbstractDomain : IDomain
             {
                 ReleaseStartedComponent(configurable, constructable, cleanupExceptions);
             }
-            else
+
+            if (entry is not null)
+            {
+                ReleaseEntryResources(entry, cleanupExceptions);
+            }
+
+            if (!initializationStarted)
             {
                 LifecycleOwnershipTracker.CancelReservation(configurable, _registry.OwnershipToken);
             }
@@ -507,6 +620,7 @@ public abstract class AbstractDomain : IDomain
         _registry.Unpublish(entry);
         var exceptions = new List<Exception>();
         ReleaseStartedComponent(entry.Instance, (IConstructable)entry.Instance, exceptions);
+        ReleaseEntryResources(entry, exceptions);
         if (exceptions.Count == 1)
         {
             ExceptionDispatchInfo.Capture(exceptions[0]).Throw();
@@ -547,6 +661,21 @@ public abstract class AbstractDomain : IDomain
             if (releaseStarted)
             {
                 LifecycleOwnershipTracker.MarkReleased(instance, _registry.OwnershipToken);
+            }
+        }
+    }
+
+    private static void ReleaseEntryResources(DomainComponentEntry entry, List<Exception> exceptions)
+    {
+        foreach (var resource in entry.TakeOwnedResourcesReverse())
+        {
+            try
+            {
+                resource.UnRegister();
+            }
+            catch (Exception exception)
+            {
+                exceptions.Add(exception);
             }
         }
     }
@@ -660,6 +789,17 @@ public abstract class AbstractDomain : IDomain
         return false;
     }
 
+    private void DetachOwnedChildForParentChange(IDomain child)
+    {
+        if (!_children.Any(existing => ReferenceEquals(existing, child)))
+        {
+            return;
+        }
+
+        EnsureRelationshipMutationAllowed();
+        RemoveChildReference(child);
+    }
+
     private bool CheckCycle(IDomain? domain)
     {
         if (domain is null)
@@ -705,6 +845,8 @@ public abstract class AbstractDomain : IDomain
         {
             throw new InvalidOperationException($"Cannot register components while Domain is {_state}.");
         }
+
+        EnsureTransactionCanEnlist("register components");
     }
 
     private void EnsureReplacementAllowed(ComponentCategory category, Type key)
@@ -713,6 +855,50 @@ public abstract class AbstractDomain : IDomain
         {
             throw new InvalidOperationException(
                 $"Cannot replace {category} key {key.FullName} during component initialization.");
+        }
+
+        if (_executionDepth > 0 && category is ComponentCategory.System or ComponentCategory.Model)
+        {
+            throw new InvalidOperationException(
+                $"Cannot replace {category} key {key.FullName} during event, command, or query execution.");
+        }
+    }
+
+    private void EnsureOwnedTreeCanUninitialize()
+    {
+        if (_state == DomainState.Disposed)
+        {
+            return;
+        }
+
+        if (_state == DomainState.Uninitializing)
+        {
+            throw new InvalidOperationException(
+                "Cannot uninitialize an ancestor Domain while an owned Domain is still uninitializing.");
+        }
+
+        if (_state == DomainState.Initializing || _componentInitializationDepth > 0)
+        {
+            throw new InvalidOperationException("Cannot uninitialize a Domain while it is initializing.");
+        }
+
+        if (_componentReleaseDepth > 0)
+        {
+            throw new InvalidOperationException("Cannot uninitialize an owned Domain while it is releasing a component.");
+        }
+
+        if (_executionDepth > 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot uninitialize a Domain while it is executing events, commands, or queries.");
+        }
+
+        foreach (var child in _children)
+        {
+            if (child is AbstractDomain childDomain)
+            {
+                childDomain.EnsureOwnedTreeCanUninitialize();
+            }
         }
     }
 
@@ -732,6 +918,20 @@ public abstract class AbstractDomain : IDomain
         {
             throw new InvalidOperationException($"Cannot register local events while Domain is {_state}.");
         }
+
+        EnsureTransactionCanEnlist("register local events");
+    }
+
+    private void EnsureTransactionCanEnlist(string operation)
+    {
+        if (_initializationTransaction?.Failure is not { } failure)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Cannot {operation} because the current component initialization transaction has failed.",
+            failure);
     }
 
     private void EnsureEventUnregistrationAllowed()
@@ -787,11 +987,41 @@ public abstract class AbstractDomain : IDomain
         Disposed
     }
 
+    private sealed class GuardedDomainUnRegister : IUnRegister
+    {
+        private readonly WeakReference<AbstractDomain> _domain;
+        private IUnRegister? _unRegister;
+
+        public GuardedDomainUnRegister(AbstractDomain domain, IUnRegister unRegister)
+        {
+            _domain = new WeakReference<AbstractDomain>(domain);
+            _unRegister = unRegister;
+        }
+
+        public void UnRegister()
+        {
+            var unRegister = _unRegister;
+            if (unRegister is null)
+            {
+                return;
+            }
+
+            if (_domain.TryGetTarget(out var domain))
+            {
+                domain.EnsureEventUnregistrationAllowed();
+            }
+
+            _unRegister = null;
+            unRegister.UnRegister();
+        }
+    }
+
     private sealed class InitializationTransaction
     {
         private readonly List<DomainComponentEntry> _entries = new();
         private readonly List<DomainComponentEntry> _activatedEntries = new();
         private readonly List<IUnRegister> _eventSubscriptions = new();
+        private ExceptionDispatchInfo? _failure;
 
         public IReadOnlyList<DomainComponentEntry> Entries => _entries;
 
@@ -799,11 +1029,20 @@ public abstract class AbstractDomain : IDomain
 
         public IReadOnlyList<IUnRegister> EventSubscriptions => _eventSubscriptions;
 
+        public Exception? Failure => _failure?.SourceException;
+
         public void Enlist(DomainComponentEntry entry) => _entries.Add(entry);
 
         public void Enlist(IUnRegister unRegister) => _eventSubscriptions.Add(unRegister);
 
         public void MarkActivated(DomainComponentEntry entry) => _activatedEntries.Add(entry);
+
+        public void Poison(Exception exception)
+        {
+            _failure ??= ExceptionDispatchInfo.Capture(exception);
+        }
+
+        public void ThrowIfPoisoned() => _failure?.Throw();
 
         public void Forget(DomainComponentEntry entry)
         {

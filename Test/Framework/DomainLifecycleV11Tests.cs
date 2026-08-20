@@ -87,6 +87,91 @@ public sealed class DomainLifecycleV11Tests
     }
 
     [Test]
+    public void EventListenerCannotUninitializeDomainDuringDispatch()
+    {
+        var domain = ADomain.Create();
+        Exception? teardownFailure = null;
+        var laterListenerCalls = 0;
+        domain.RegisterEvent<TransactionEvent>(_ =>
+        {
+            try
+            {
+                domain.UnInitialize();
+            }
+            catch (Exception exception)
+            {
+                teardownFailure = exception;
+            }
+        });
+        domain.RegisterEvent<TransactionEvent>(_ => laterListenerCalls++);
+
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.That(teardownFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreEqual(1, laterListenerCalls);
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void CommandExecutionHooksCannotUninitializeDomain()
+    {
+        var domain = ExecutionOverrideDomain.Create();
+        var command = new FlagCommand();
+        var resultCommand = new CountingResultCommand();
+
+        Assert.Throws<InvalidOperationException>(() => domain.SendCommand(command));
+        Assert.Throws<InvalidOperationException>(() => domain.SendCommand(resultCommand));
+
+        Assert.AreEqual(0, command.ExecutionCount);
+        Assert.AreEqual(0, resultCommand.ExecutionCount);
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void QueryExecutionHookCannotUninitializeDomain()
+    {
+        var domain = ExecutionOverrideDomain.Create();
+
+        Assert.Throws<InvalidOperationException>(() => domain.SendQuery(new ConstantQuery()));
+
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void ExecutionDepthRecoversAfterEventCommandAndQueryExceptions()
+    {
+        AssertExecutionFailureAllowsTeardown(domain =>
+        {
+            domain.RegisterEvent<TransactionEvent>(_ => throw new ExecutionProbeException());
+            domain.SendEvent(new TransactionEvent());
+        });
+        AssertExecutionFailureAllowsTeardown(domain => domain.SendCommand(new ThrowingCommand()));
+        AssertExecutionFailureAllowsTeardown(domain => domain.SendQuery(new ThrowingQuery()));
+    }
+
+    [Test]
+    public void EventCommandAndQueryExecutionCanNestSynchronously()
+    {
+        var domain = ADomain.Create();
+        var command = new FlagCommand();
+        var queryResult = 0;
+        domain.RegisterEvent<TransactionEvent>(_ =>
+        {
+            domain.SendCommand(command);
+            queryResult = domain.SendQuery(new ConstantQuery());
+        });
+
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(1, command.ExecutionCount);
+        Assert.AreEqual(42, queryResult);
+        domain.UnInitialize();
+    }
+
+    [Test]
     public void ConcreteModelsResolveByUniqueInterfaceAndExactKeyWins()
     {
         var domain = ADomain.Create();
@@ -196,6 +281,7 @@ public sealed class DomainLifecycleV11Tests
         Assert.IsNull(domain.GetUtility<SharedUtility>());
         domain.SendEvent(new TransactionEvent());
         Assert.AreEqual(0, outer.EventCalls);
+        Assert.AreEqual(0, outer.OwnedEventCalls);
         Assert.AreEqual(1, outer.UninitializeCount);
         Assert.AreEqual(1, outer.Model.UninitializeCount);
         Assert.AreEqual(1, outer.System.UninitializeCount);
@@ -283,6 +369,87 @@ public sealed class DomainLifecycleV11Tests
         Assert.IsNull(domain.GetModel<UninitializingInitializerModel>());
         Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
         domain.UnInitialize();
+    }
+
+    [Test]
+    public void BindDomainCannotUninitializeActiveDomain()
+    {
+        var domain = ADomain.Create();
+        var model = new ForbiddenBindingModel(ForbiddenAction.Uninitialize);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(model));
+
+        Assert.That(exception!.Message, Does.Contain("while it is initializing"));
+        Assert.AreEqual(0, model.InitializeCount);
+        Assert.AreEqual(0, model.UninitializeCount);
+        Assert.IsNull(domain.GetModel<ForbiddenBindingModel>());
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+        model.Child.UnInitialize();
+    }
+
+    [Test]
+    public void BindDomainUsesComponentInitializationGuards()
+    {
+        foreach (var action in new[]
+                 {
+                     ForbiddenAction.Command,
+                     ForbiddenAction.Event,
+                     ForbiddenAction.EventUnregistration,
+                     ForbiddenAction.Relationship,
+                     ForbiddenAction.Replacement
+                 })
+        {
+            AssertForbiddenBinding(action);
+        }
+    }
+
+    [Test]
+    public void BindDomainAllowsQueriesNestedRegistrationAndOwnedSubscription()
+    {
+        var domain = ADomain.Create();
+        var system = new PermittedBindingSystem();
+
+        domain.RegisterSystem(system);
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(42, system.QueryResult);
+        Assert.AreSame(system.Utility, domain.GetUtility<SharedUtility>());
+        Assert.AreEqual(1, system.EventCalls);
+        Assert.AreEqual(1, system.InitializeCount);
+        domain.UnInitialize();
+        Assert.AreEqual(1, system.UninitializeCount);
+    }
+
+    private static void AssertForbiddenBinding(ForbiddenAction action)
+    {
+        var domain = ADomain.Create();
+        var model = new ForbiddenBindingModel(action);
+        var existing = new ReplaceTargetModel();
+        if (action == ForbiddenAction.EventUnregistration)
+        {
+            domain.RegisterEvent(model.EventHandler);
+        }
+
+        if (action == ForbiddenAction.Replacement)
+        {
+            domain.RegisterModel(existing);
+        }
+
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(model));
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(0, model.InitializeCount);
+        Assert.AreEqual(0, model.UninitializeCount);
+        Assert.AreEqual(0, model.Command.ExecutionCount);
+        Assert.AreEqual(action == ForbiddenAction.EventUnregistration ? 1 : 0, model.EventCalls);
+        Assert.IsNull(model.Child.Parent);
+        Assert.IsNull(domain.GetModel<ForbiddenBindingModel>());
+        Assert.AreSame(action == ForbiddenAction.Replacement ? existing : null, domain.GetModel<ReplaceTargetModel>());
+        Assert.AreEqual(0, existing.UninitializeCount);
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+        model.Child.UnInitialize();
     }
 
     [Test]
@@ -406,6 +573,448 @@ public sealed class DomainLifecycleV11Tests
         Assert.IsNull(container.Get<IPlayerService>());
     }
 
+    [Test]
+    public void LifecycleBindingIsOneShotWhileCommandsAndQueriesCanRebind()
+    {
+        var firstDomain = ADomain.Create();
+        var secondDomain = BDomain.Create();
+        var model = new BindingProbeModel();
+
+        Assert.Throws<InvalidOperationException>(() => _ = model.Domain);
+        firstDomain.RegisterModel(model);
+        Assert.AreSame(firstDomain, model.Domain);
+        Assert.Throws<InvalidOperationException>(() => ((IDomainBindable)model).BindDomain(firstDomain));
+        Assert.Throws<InvalidOperationException>(() => ((IDomainBindable)model).BindDomain(secondDomain));
+
+        var command = new DomainRecordingCommand();
+        var query = new DomainRecordingQuery();
+        firstDomain.SendCommand(command);
+        firstDomain.SendQuery(query);
+        secondDomain.SendCommand(command);
+        secondDomain.SendQuery(query);
+
+        Assert.AreSame(secondDomain, command.LastDomain);
+        Assert.AreSame(secondDomain, query.LastDomain);
+
+        firstDomain.UnInitialize();
+        Assert.Throws<InvalidOperationException>(() => ((IDomainBindable)model).BindDomain(secondDomain));
+        secondDomain.UnInitialize();
+    }
+
+    [Test]
+    public void PublicBindingContractSupportsDirectDomainAndComponentImplementations()
+    {
+        var customDomain = new BindingOnlyDomain();
+        var frameworkModel = new BindingProbeModel();
+        var frameworkDomain = ADomain.Create();
+        var directSystem = new DirectBindingComponent();
+        var directModel = new DirectBindingComponent();
+
+        customDomain.RegisterModel(frameworkModel);
+        frameworkDomain.RegisterSystem(directSystem);
+        frameworkDomain.RegisterModel(directModel);
+
+        Assert.AreSame(customDomain, frameworkModel.Domain);
+        Assert.AreSame(frameworkDomain, directSystem.Domain);
+        Assert.AreSame(frameworkDomain, directModel.Domain);
+        Assert.AreEqual(1, directSystem.InitializeCount);
+        Assert.AreEqual(1, directModel.InitializeCount);
+        frameworkDomain.UnInitialize();
+    }
+
+    [Test]
+    public void ReplacingSystemCancelsItsOwnedLocalEventSubscription()
+    {
+        var domain = ADomain.Create();
+        var oldSystem = new SubscribedSystem();
+        var replacement = new SubscribedSystem();
+
+        domain.RegisterSystemAs<ISubscribedSystem>(oldSystem);
+        domain.SendEvent(new TransactionEvent());
+        domain.RegisterSystemAs<ISubscribedSystem>(replacement);
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(1, oldSystem.EventCalls);
+        Assert.AreEqual(1, replacement.EventCalls);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void OwnedSubscriptionCanBeCancelledEarlyAndCleanupStillCompletes()
+    {
+        var domain = ADomain.Create();
+        var system = new SubscribedSystem();
+
+        domain.RegisterSystemAs<ISubscribedSystem>(system);
+        system.Subscription!.UnRegister();
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(0, system.EventCalls);
+        Assert.DoesNotThrow(domain.UnInitialize);
+    }
+
+    [Test]
+    public void ReturnedUnregisterHandlesCannotBypassComponentInitializationGuards()
+    {
+        foreach (var ownership in new[] { SubscriptionOwnership.Domain, SubscriptionOwnership.System })
+        foreach (var cancellation in new[] { CancellationMethod.UnRegister, CancellationMethod.Dispose })
+        foreach (var phase in new[] { CancellationPhase.BindDomain, CancellationPhase.Initialize })
+        {
+            AssertGuardedSubscriptionHandle(ownership, cancellation, phase);
+        }
+    }
+
+    [Test]
+    public void ThrowingComponentCleanupStillCancelsOwnedSubscriptions()
+    {
+        var domain = ADomain.Create();
+        var oldSystem = new ThrowingCleanupSubscribedSystem();
+
+        domain.RegisterSystemAs<ISubscribedSystem>(oldSystem);
+        Assert.Throws<InvalidOperationException>(
+            () => domain.RegisterSystemAs<ISubscribedSystem>(new SubscribedSystem()));
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(0, oldSystem.EventCalls);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void DomainScopedSubscriptionOutlivesUnrelatedSystemReplacement()
+    {
+        var domain = ADomain.Create();
+        var calls = 0;
+        domain.RegisterEvent<TransactionEvent>(_ => calls++);
+        domain.RegisterSystemAs<ISubscribedSystem>(new SubscribedSystem());
+        domain.RegisterSystemAs<ISubscribedSystem>(new SubscribedSystem());
+
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(1, calls);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void EventDispatchRejectsSubscribedSystemReplacementBeforeRelease()
+    {
+        var domain = ADomain.Create();
+        var oldSystem = new ExecutionSubscribedSystem();
+        var replacement = new ExecutionSubscribedSystem();
+        Exception? replacementFailure = null;
+        var replacementAttempt = domain.RegisterEvent<TransactionEvent>(_ =>
+        {
+            try
+            {
+                domain.RegisterSystemAs<IExecutionSubscribedSystem>(replacement);
+            }
+            catch (Exception exception)
+            {
+                replacementFailure = exception;
+            }
+        });
+        domain.RegisterSystemAs<IExecutionSubscribedSystem>(oldSystem);
+
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.That(replacementFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(oldSystem, domain.GetSystem<IExecutionSubscribedSystem>());
+        Assert.AreEqual(0, oldSystem.UninitializeCount);
+        Assert.AreEqual(1, oldSystem.EventCalls);
+
+        replacementAttempt.UnRegister();
+        domain.RegisterSystemAs<IExecutionSubscribedSystem>(replacement);
+        domain.SendEvent(new TransactionEvent());
+        Assert.AreEqual(1, oldSystem.UninitializeCount);
+        Assert.AreEqual(1, oldSystem.EventCalls);
+        Assert.AreEqual(1, replacement.EventCalls);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void CommandAndQueryRejectModelReplacementBeforeRelease()
+    {
+        var domain = ADomain.Create();
+        var oldModel = new ExecutionReplaceableModel();
+        var commandReplacement = new ExecutionReplaceableModel();
+        var queryReplacement = new ExecutionReplaceableModel();
+        domain.RegisterModelAs<IExecutionReplaceableModel>(oldModel);
+
+        var command = new ReplacingExecutionCommand(commandReplacement);
+        var query = new ReplacingExecutionQuery(queryReplacement);
+        domain.SendCommand(command);
+        domain.SendQuery(query);
+
+        Assert.That(command.ReplacementFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(query.ReplacementFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(oldModel, domain.GetModel<IExecutionReplaceableModel>());
+        Assert.AreEqual(0, oldModel.UninitializeCount);
+
+        domain.RegisterModelAs<IExecutionReplaceableModel>(queryReplacement);
+        Assert.AreEqual(1, oldModel.UninitializeCount);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void ExecutionStillAllowsNewLifecycleKeysAndUtilityReplacement()
+    {
+        var domain = ADomain.Create();
+        var oldUtility = new SharedUtility();
+        var newUtility = new SharedUtility();
+        var newModel = new ReplaceTargetModel();
+        domain.RegisterUtility(oldUtility);
+        domain.RegisterEvent<TransactionEvent>(_ =>
+        {
+            domain.RegisterModel(newModel);
+            domain.RegisterUtility(newUtility);
+        });
+
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreSame(newModel, domain.GetModel<ReplaceTargetModel>());
+        Assert.AreSame(newUtility, domain.GetUtility<SharedUtility>());
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void CaughtNestedRegistrationFailurePoisonsAndRollsBackTheWholeTransaction()
+    {
+        var domain = ADomain.Create();
+        var outer = new CatchingFailureModel();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(outer));
+
+        Assert.That(exception!.Message, Is.EqualTo("nested initialization failed"));
+        Assert.IsNotNull(outer.CaughtFailure);
+        Assert.IsNotNull(outer.PostFailure);
+        Assert.IsNull(domain.GetModel<CatchingFailureModel>());
+        Assert.IsNull(domain.GetModel<SuccessfulNestedModel>());
+        Assert.IsNull(domain.GetUtility<SharedUtility>());
+        domain.SendEvent(new TransactionEvent());
+        Assert.AreEqual(0, outer.EventCalls);
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void CaughtNestedPreflightFailurePoisonsAndRollsBackTheWholeTransaction()
+    {
+        var domain = ADomain.Create();
+        var outer = new CatchingSelfRegistrationModel();
+
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(outer));
+
+        Assert.That(outer.CaughtFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.IsNull(domain.GetModel<CatchingSelfRegistrationModel>());
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void BindDomainFailureCancelsOwnedSubscriptionBeforeInitializationStarts()
+    {
+        var domain = ADomain.Create();
+        var system = new FailingBindingSubscribedSystem();
+
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterSystem(system));
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(0, system.EventCalls);
+        Assert.AreEqual(0, system.InitializeCount);
+        Assert.AreEqual(0, system.UninitializeCount);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void FailedComponentTransactionCancelsSubscriptionAddedByExistingSystem()
+    {
+        var domain = ADomain.Create();
+        var system = new TransactionSubscriptionSystem();
+        domain.RegisterSystem(system);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            domain.RegisterModel(new ExistingSystemSubscriptionModel(system) { FailInitialization = true }));
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(0, system.EventCalls);
+        Assert.AreSame(system, domain.GetSystem<TransactionSubscriptionSystem>());
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void SuccessfulComponentTransactionKeepsSubscriptionAddedByExistingSystem()
+    {
+        var domain = ADomain.Create();
+        var system = new TransactionSubscriptionSystem();
+        domain.RegisterSystem(system);
+
+        domain.RegisterModel(new ExistingSystemSubscriptionModel(system));
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(1, system.EventCalls);
+        domain.UnInitialize();
+    }
+
+    [Test]
+    public void AncestorTeardownPreflightPreservesTreeWhileDescendantExecutes()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        var grandchild = DDomain.Create();
+        parent.AddChild(child);
+        child.AddChild(grandchild);
+        Exception? teardownFailure = null;
+        grandchild.RegisterEvent<TransactionEvent>(_ =>
+        {
+            try
+            {
+                parent.UnInitialize();
+            }
+            catch (Exception exception)
+            {
+                teardownFailure = exception;
+            }
+        });
+
+        grandchild.SendEvent(new TransactionEvent());
+
+        Assert.That(teardownFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(parent, child.Parent);
+        Assert.AreSame(child, grandchild.Parent);
+        Assert.DoesNotThrow(() => parent.RegisterUtility(new SharedUtility()));
+        Assert.DoesNotThrow(() => child.RegisterUtility(new SharedUtility()));
+        Assert.DoesNotThrow(() => grandchild.RegisterUtility(new SharedUtility()));
+
+        parent.UnInitialize();
+        Assert.IsNull(child.Parent);
+        Assert.IsNull(grandchild.Parent);
+        Assert.Throws<InvalidOperationException>(() => child.RegisterUtility(new SharedUtility()));
+        Assert.Throws<InvalidOperationException>(() => grandchild.RegisterUtility(new SharedUtility()));
+    }
+
+    [Test]
+    public void AncestorTeardownPreflightPreservesTreeDuringChildComponentInitialization()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        parent.AddChild(child);
+        var model = new AncestorTeardownInitializerModel(parent);
+
+        child.RegisterModel(model);
+
+        Assert.That(model.TeardownFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(parent, child.Parent);
+        Assert.DoesNotThrow(() => parent.RegisterUtility(new SharedUtility()));
+        Assert.DoesNotThrow(() => child.RegisterUtility(new SharedUtility()));
+        parent.UnInitialize();
+    }
+
+    [Test]
+    public void AncestorTeardownPreflightPreservesTreeDuringChildComponentRelease()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        parent.AddChild(child);
+        var oldModel = new AncestorTeardownCleanupModel(parent);
+        var replacement = new AncestorTeardownCleanupModel(parent);
+        child.RegisterModelAs<IAncestorTeardownCleanupModel>(oldModel);
+
+        child.RegisterModelAs<IAncestorTeardownCleanupModel>(replacement);
+
+        Assert.That(oldModel.TeardownFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(parent, child.Parent);
+        Assert.AreSame(replacement, child.GetModel<IAncestorTeardownCleanupModel>());
+        Assert.DoesNotThrow(() => parent.RegisterUtility(new SharedUtility()));
+        parent.UnInitialize();
+    }
+
+    [Test]
+    public void AncestorTeardownPreflightRejectsUninitializingDescendant()
+    {
+        var parent = ADomain.Create();
+        var utility = new SharedUtility();
+        parent.RegisterUtility(utility);
+        var child = BDomain.Create();
+        var model = new AncestorTeardownCleanupModel(parent, utility);
+        child.RegisterModel(model);
+        parent.AddChild(child);
+
+        child.UnInitialize();
+
+        Assert.That(model.TeardownFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.IsNull(model.AncestorAccessFailure);
+        Assert.AreSame(utility, model.AncestorUtilityAfterAttempt);
+        Assert.DoesNotThrow(() => parent.RegisterUtility(new SharedUtility()));
+        parent.UnInitialize();
+    }
+
+    [Test]
+    public void SetParentKeepsOwnedRelationshipWhenOldParentRejectsMutation()
+    {
+        var oldParent = ADomain.Create();
+        var child = BDomain.Create();
+        var newParent = DDomain.Create();
+        oldParent.AddChild(child);
+        var system = new ReparentingInitializerSystem(child, newParent);
+
+        oldParent.RegisterSystem(system);
+
+        Assert.That(system.ReparentFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(oldParent, child.Parent);
+        oldParent.UnInitialize();
+        newParent.UnInitialize();
+    }
+
+    [Test]
+    public void RemoveChildKeepsOwnershipWhenChildRejectsParentMutation()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        parent.AddChild(child);
+        var model = new RemovingOwnershipDuringInitializationModel(parent);
+
+        child.RegisterModel(model);
+
+        Assert.That(model.RemoveFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(parent, child.Parent);
+        parent.UnInitialize();
+        Assert.IsNull(child.Parent);
+        Assert.Throws<InvalidOperationException>(() => child.RegisterUtility(new SharedUtility()));
+    }
+
+    [Test]
+    public void SetParentDetachesOwnedChildBeforeCommittingNewParent()
+    {
+        var oldParent = ADomain.Create();
+        var child = BDomain.Create();
+        var newParent = DDomain.Create();
+        oldParent.AddChild(child);
+
+        child.SetParent(newParent);
+        oldParent.UnInitialize();
+
+        Assert.AreSame(newParent, child.Parent);
+        Assert.DoesNotThrow(() => child.RegisterUtility(new SharedUtility()));
+        child.UnInitialize();
+        newParent.UnInitialize();
+    }
+
+    [Test]
+    public void SetParentChangesLookupOnlyRelationshipWithoutCreatingOwnership()
+    {
+        var oldParent = ADomain.Create();
+        var child = BDomain.Create();
+        var newParent = DDomain.Create();
+
+        child.SetParent(oldParent);
+        child.SetParent(newParent);
+        oldParent.UnInitialize();
+
+        Assert.AreSame(newParent, child.Parent);
+        Assert.DoesNotThrow(() => child.RegisterUtility(new SharedUtility()));
+        child.UnInitialize();
+        newParent.UnInitialize();
+    }
+
     private static void AssertForbiddenInitialization(ForbiddenAction action)
     {
         var domain = ADomain.Create();
@@ -423,6 +1032,60 @@ public sealed class DomainLifecycleV11Tests
         Assert.IsNull(domain.GetModel<ForbiddenInitializerModel>());
         domain.UnInitialize();
         model.Child.UnInitialize();
+    }
+
+    private static void AssertExecutionFailureAllowsTeardown(Action<ADomain> execute)
+    {
+        var domain = ADomain.Create();
+
+        Assert.Throws<ExecutionProbeException>(() => execute(domain));
+        Assert.DoesNotThrow(domain.UnInitialize);
+    }
+
+    private static void AssertGuardedSubscriptionHandle(
+        SubscriptionOwnership ownership,
+        CancellationMethod cancellation,
+        CancellationPhase phase)
+    {
+        var domain = ADomain.Create();
+        var eventCalls = 0;
+        IUnRegister subscription;
+        if (ownership == SubscriptionOwnership.System)
+        {
+            var system = new ExistingSubscriptionSystem(() => eventCalls++);
+            domain.RegisterSystem(system);
+            subscription = system.Subscription!;
+        }
+        else
+        {
+            subscription = domain.RegisterEvent<TransactionEvent>(_ => eventCalls++);
+        }
+
+        var model = new HandleCancellingModel(subscription, cancellation, phase);
+        Assert.Throws<InvalidOperationException>(() => domain.RegisterModel(model));
+        domain.SendEvent(new TransactionEvent());
+
+        Assert.AreEqual(1, eventCalls, $"{ownership}, {cancellation}, {phase}");
+        Assert.IsNull(domain.GetModel<HandleCancellingModel>());
+        Assert.AreEqual(phase == CancellationPhase.Initialize ? 1 : 0, model.InitializeCount);
+        Assert.AreEqual(phase == CancellationPhase.Initialize ? 1 : 0, model.UninitializeCount);
+
+        Cancel(subscription, cancellation);
+        domain.SendEvent(new TransactionEvent());
+        Assert.AreEqual(1, eventCalls, $"retry: {ownership}, {cancellation}, {phase}");
+        domain.UnInitialize();
+    }
+
+    private static void Cancel(IUnRegister subscription, CancellationMethod cancellation)
+    {
+        if (cancellation == CancellationMethod.Dispose)
+        {
+            subscription.Dispose();
+        }
+        else
+        {
+            subscription.UnRegister();
+        }
     }
 
     public sealed class ReentrantAccessDomain : AbstractDomain<ReentrantAccessDomain>
@@ -458,6 +1121,36 @@ public sealed class DomainLifecycleV11Tests
         }
 
         protected override void Init() => UnInitialize();
+    }
+
+    private sealed class ExecutionOverrideDomain : AbstractDomain
+    {
+        public static ExecutionOverrideDomain Create()
+        {
+            var domain = new ExecutionOverrideDomain();
+            domain.Initialize();
+            return domain;
+        }
+
+        protected override void Init() { }
+
+        protected override void ExecuteCommand<TCommand>(TCommand command)
+        {
+            UnInitialize();
+            base.ExecuteCommand(command);
+        }
+
+        protected override TResult ExecuteCommand<TResult>(ICommand<TResult> command)
+        {
+            UnInitialize();
+            return base.ExecuteCommand(command);
+        }
+
+        protected override TResult ExecuteQuery<TResult>(IQuery<TResult> query)
+        {
+            UnInitialize();
+            return base.ExecuteQuery(query);
+        }
     }
 
     public sealed class RepopulatingDomain : AbstractDomain<RepopulatingDomain>
@@ -534,7 +1227,7 @@ public sealed class DomainLifecycleV11Tests
         public int InitializeCount { get; private set; }
         public int UninitializeCount { get; private set; }
 
-        public void SetDomain(IDomain domain) => Domain = domain;
+        public void BindDomain(IDomain domain) => Domain = domain;
         public void Initialize() => InitializeCount++;
         public void UnInitialize() => UninitializeCount++;
     }
@@ -546,7 +1239,7 @@ public sealed class DomainLifecycleV11Tests
         public NestedSystem(FailingTransactionModel owner) => _owner = owner;
 
         public int UninitializeCount { get; private set; }
-        protected override void OnInitialize() { }
+        protected override void OnInitialize() => this.RegisterEvent<TransactionEvent>(_ => _owner.RecordOwnedEvent());
 
         protected override void OnUninitialize()
         {
@@ -576,6 +1269,7 @@ public sealed class DomainLifecycleV11Tests
         public NestedModel Model { get; } = new();
         public SharedUtility Utility { get; } = new();
         public int EventCalls { get; private set; }
+        public int OwnedEventCalls { get; private set; }
         public int UninitializeCount { get; private set; }
         public bool ThrowDuringOwnCleanup { get; init; }
         public bool ThrowDuringNestedCleanup { get; init; }
@@ -597,6 +1291,8 @@ public sealed class DomainLifecycleV11Tests
                 throw new InvalidOperationException("outer cleanup failed");
             }
         }
+
+        public void RecordOwnedEvent() => OwnedEventCalls++;
     }
 
     private sealed class PermittedInitializerModel : AbstractModel
@@ -623,6 +1319,73 @@ public sealed class DomainLifecycleV11Tests
         public int ExecutionCount { get; private set; }
         protected override void OnExecute() => ExecutionCount++;
     }
+
+    private sealed class CountingResultCommand : AbstractCommand<int>
+    {
+        public int ExecutionCount { get; private set; }
+
+        protected override int OnExecute()
+        {
+            ExecutionCount++;
+            return 42;
+        }
+    }
+
+    private sealed class ThrowingCommand : AbstractCommand
+    {
+        protected override void OnExecute() => throw new ExecutionProbeException();
+    }
+
+    private sealed class ThrowingQuery : AbstractQuery<int>
+    {
+        protected override int OnExecute() => throw new ExecutionProbeException();
+    }
+
+    private sealed class ReplacingExecutionCommand : AbstractCommand
+    {
+        private readonly IExecutionReplaceableModel _replacement;
+
+        public ReplacingExecutionCommand(IExecutionReplaceableModel replacement) => _replacement = replacement;
+
+        public Exception? ReplacementFailure { get; private set; }
+
+        protected override void OnExecute()
+        {
+            try
+            {
+                Domain.RegisterModelAs<IExecutionReplaceableModel>(_replacement);
+            }
+            catch (Exception exception)
+            {
+                ReplacementFailure = exception;
+            }
+        }
+    }
+
+    private sealed class ReplacingExecutionQuery : AbstractQuery<int>
+    {
+        private readonly IExecutionReplaceableModel _replacement;
+
+        public ReplacingExecutionQuery(IExecutionReplaceableModel replacement) => _replacement = replacement;
+
+        public Exception? ReplacementFailure { get; private set; }
+
+        protected override int OnExecute()
+        {
+            try
+            {
+                Domain.RegisterModelAs<IExecutionReplaceableModel>(_replacement);
+            }
+            catch (Exception exception)
+            {
+                ReplacementFailure = exception;
+            }
+
+            return 0;
+        }
+    }
+
+    private sealed class ExecutionProbeException : Exception { }
 
     private sealed class ForbiddenInitializerModel : AbstractModel
     {
@@ -660,12 +1423,86 @@ public sealed class DomainLifecycleV11Tests
         private void OnEvent(TransactionEvent _) => EventCalls++;
     }
 
+    private sealed class ForbiddenBindingModel : IModel
+    {
+        private readonly ForbiddenAction _action;
+
+        public ForbiddenBindingModel(ForbiddenAction action)
+        {
+            _action = action;
+        }
+
+        public IDomain Domain { get; private set; } = default!;
+        public FlagCommand Command { get; } = new();
+        public ADomain Child { get; } = ADomain.Create();
+        public int EventCalls { get; private set; }
+        public int InitializeCount { get; private set; }
+        public int UninitializeCount { get; private set; }
+        public Action<TransactionEvent> EventHandler => OnEvent;
+
+        public void BindDomain(IDomain domain)
+        {
+            Domain = domain;
+            switch (_action)
+            {
+                case ForbiddenAction.Command:
+                    Domain.SendCommand(Command);
+                    break;
+                case ForbiddenAction.Event:
+                    Domain.SendEvent(new TransactionEvent());
+                    break;
+                case ForbiddenAction.EventUnregistration:
+                    Domain.UnRegisterEvent(EventHandler);
+                    break;
+                case ForbiddenAction.Relationship:
+                    Domain.AddChild(Child);
+                    break;
+                case ForbiddenAction.Uninitialize:
+                    Domain.UnInitialize();
+                    break;
+                case ForbiddenAction.Replacement:
+                    Domain.RegisterModel(new ReplaceTargetModel());
+                    break;
+            }
+        }
+
+        public void Initialize() => InitializeCount++;
+        public void UnInitialize() => UninitializeCount++;
+
+        private void OnEvent(TransactionEvent _) => EventCalls++;
+    }
+
+    private sealed class PermittedBindingSystem : ISystem
+    {
+        private IDomain? _domain;
+
+        public IDomain Domain => _domain ?? throw new InvalidOperationException("System has not been bound.");
+        public SharedUtility Utility { get; } = new();
+        public int QueryResult { get; private set; }
+        public int EventCalls { get; private set; }
+        public int InitializeCount { get; private set; }
+        public int UninitializeCount { get; private set; }
+
+        public void BindDomain(IDomain domain)
+        {
+            _domain = domain;
+            QueryResult = Domain.SendQuery(new ConstantQuery());
+            Domain.RegisterUtility(Utility);
+            this.RegisterEvent<TransactionEvent>(_ => EventCalls++);
+        }
+
+        public void Initialize() => InitializeCount++;
+        public void UnInitialize() => UninitializeCount++;
+    }
+
     private enum ForbiddenAction
     {
         Command,
         Event,
         EventUnregistration,
-        Relationship
+        Relationship,
+        Uninitialize,
+        Replacement
     }
 
     private sealed class ReplaceTargetModel : AbstractModel
@@ -774,6 +1611,444 @@ public sealed class DomainLifecycleV11Tests
         {
             UninitializeCount++;
             throw new InvalidOperationException("system cleanup failed");
+        }
+    }
+
+    private sealed class BindingProbeModel : AbstractModel
+    {
+        protected override void OnInitialize() { }
+    }
+
+    private sealed class DomainRecordingCommand : AbstractCommand
+    {
+        public IDomain? LastDomain { get; private set; }
+        protected override void OnExecute() => LastDomain = Domain;
+    }
+
+    private sealed class DomainRecordingQuery : AbstractQuery<int>
+    {
+        public IDomain? LastDomain { get; private set; }
+        protected override int OnExecute()
+        {
+            LastDomain = Domain;
+            return 0;
+        }
+    }
+
+    private sealed class DirectBindingComponent : ISystem, IModel
+    {
+        private IDomain? _domain;
+
+        public IDomain Domain => _domain ?? throw new InvalidOperationException("Component has not been bound.");
+        public int InitializeCount { get; private set; }
+
+        public void BindDomain(IDomain domain)
+        {
+            ArgumentNullException.ThrowIfNull(domain);
+            if (_domain is not null)
+            {
+                throw new InvalidOperationException("Component is already bound.");
+            }
+
+            _domain = domain;
+        }
+
+        public void Initialize() => InitializeCount++;
+        public void UnInitialize() { }
+    }
+
+    private sealed class BindingOnlyDomain : IDomain
+    {
+        public IDomain? Parent => null;
+
+        public void SetParent(IDomain? domain) => throw new NotSupportedException();
+        public void AddChild(IDomain domain) => throw new NotSupportedException();
+        public void RemoveChild(IDomain domain) => throw new NotSupportedException();
+
+        public void RegisterSystem<TSystem>(TSystem system) where TSystem : ISystem => RegisterLifecycle(system);
+        public void RegisterSystemAs<TSystem>(TSystem system) where TSystem : ISystem => RegisterLifecycle(system);
+        public void RegisterModel<TModel>(TModel model) where TModel : IModel => RegisterLifecycle(model);
+        public void RegisterModelAs<TModel>(TModel model) where TModel : IModel => RegisterLifecycle(model);
+        public void RegisterUtility<TUtility>(TUtility utility) where TUtility : IUtility => throw new NotSupportedException();
+        public void RegisterUtilityAs<TUtility>(TUtility utility) where TUtility : IUtility => throw new NotSupportedException();
+
+        public TSystem? GetSystem<TSystem>() where TSystem : class, ISystem => null;
+        public bool TryGetSystem<TSystem>(out TSystem? system) where TSystem : class, ISystem
+        {
+            system = null;
+            return false;
+        }
+
+        public TSystem RequireSystem<TSystem>() where TSystem : class, ISystem => throw new NotSupportedException();
+        public TModel? GetModel<TModel>() where TModel : class, IModel => null;
+        public bool TryGetModel<TModel>(out TModel? model) where TModel : class, IModel
+        {
+            model = null;
+            return false;
+        }
+
+        public TModel RequireModel<TModel>() where TModel : class, IModel => throw new NotSupportedException();
+        public TUtility? GetUtility<TUtility>() where TUtility : class, IUtility => null;
+        public bool TryGetUtility<TUtility>(out TUtility? utility) where TUtility : class, IUtility
+        {
+            utility = null;
+            return false;
+        }
+
+        public TUtility RequireUtility<TUtility>() where TUtility : class, IUtility => throw new NotSupportedException();
+        public IUnRegister RegisterEvent<TEvent>(Action<TEvent> onEvent) => new CustomUnRegister(() => { });
+        public void UnRegisterEvent<TEvent>(Action<TEvent> onEvent) => throw new NotSupportedException();
+        public void SendEvent<TEvent>() where TEvent : new() => throw new NotSupportedException();
+        public void SendEvent<TEvent>(TEvent @event) => throw new NotSupportedException();
+        public void SendCommand<TCommand>(TCommand command) where TCommand : ICommand => throw new NotSupportedException();
+        public TResult SendCommand<TResult>(ICommand<TResult> command) => throw new NotSupportedException();
+        public TResult SendQuery<TResult>(IQuery<TResult> query) => throw new NotSupportedException();
+        public void UnInitialize() { }
+
+        private void RegisterLifecycle(IDomainBindable component)
+        {
+            component.BindDomain(this);
+            ((IConstructable)component).Initialize();
+        }
+    }
+
+    private interface ISubscribedSystem : ISystem { }
+
+    private interface IExecutionSubscribedSystem : ISystem { }
+
+    private interface IExecutionReplaceableModel : IModel { }
+
+    private sealed class ExecutionSubscribedSystem : AbstractSystem, IExecutionSubscribedSystem
+    {
+        public int EventCalls { get; private set; }
+        public int UninitializeCount { get; private set; }
+
+        protected override void OnInitialize() =>
+            this.RegisterEvent<TransactionEvent>(_ => EventCalls++);
+
+        protected override void OnUninitialize() => UninitializeCount++;
+    }
+
+    private sealed class ExecutionReplaceableModel : AbstractModel, IExecutionReplaceableModel
+    {
+        public int UninitializeCount { get; private set; }
+
+        protected override void OnInitialize() { }
+        protected override void OnUninitialize() => UninitializeCount++;
+    }
+
+    private class SubscribedSystem : AbstractSystem, ISubscribedSystem
+    {
+        public int EventCalls { get; private set; }
+        public IUnRegister? Subscription { get; private set; }
+
+        protected override void OnInitialize() => Subscription = this.RegisterEvent<TransactionEvent>(_ => EventCalls++);
+    }
+
+    private sealed class ThrowingCleanupSubscribedSystem : SubscribedSystem
+    {
+        protected override void OnUninitialize() => throw new InvalidOperationException("subscribed cleanup failed");
+    }
+
+    private sealed class ExistingSubscriptionSystem : AbstractSystem
+    {
+        private readonly Action _onEvent;
+
+        public ExistingSubscriptionSystem(Action onEvent) => _onEvent = onEvent;
+
+        public IUnRegister? Subscription { get; private set; }
+
+        protected override void OnInitialize() =>
+            Subscription = this.RegisterEvent<TransactionEvent>(_ => _onEvent());
+    }
+
+    private sealed class HandleCancellingModel : IModel
+    {
+        private readonly IUnRegister _subscription;
+        private readonly CancellationMethod _cancellation;
+        private readonly CancellationPhase _phase;
+
+        public HandleCancellingModel(
+            IUnRegister subscription,
+            CancellationMethod cancellation,
+            CancellationPhase phase)
+        {
+            _subscription = subscription;
+            _cancellation = cancellation;
+            _phase = phase;
+        }
+
+        public IDomain Domain { get; private set; } = default!;
+        public int InitializeCount { get; private set; }
+        public int UninitializeCount { get; private set; }
+
+        public void BindDomain(IDomain domain)
+        {
+            Domain = domain;
+            if (_phase == CancellationPhase.BindDomain)
+            {
+                AttemptCancellation();
+            }
+        }
+
+        public void Initialize()
+        {
+            InitializeCount++;
+            if (_phase == CancellationPhase.Initialize)
+            {
+                AttemptCancellation();
+            }
+        }
+
+        public void UnInitialize() => UninitializeCount++;
+
+        private void AttemptCancellation()
+        {
+            Cancel(_subscription, _cancellation);
+            throw new InvalidOperationException("Subscription cancellation unexpectedly succeeded.");
+        }
+    }
+
+    private enum SubscriptionOwnership
+    {
+        Domain,
+        System
+    }
+
+    private enum CancellationMethod
+    {
+        UnRegister,
+        Dispose
+    }
+
+    private enum CancellationPhase
+    {
+        BindDomain,
+        Initialize
+    }
+
+    private sealed class FailingBindingSubscribedSystem : ISystem
+    {
+        private IDomain? _domain;
+
+        public IDomain Domain => _domain ?? throw new InvalidOperationException("System has not been bound.");
+        public int EventCalls { get; private set; }
+        public int InitializeCount { get; private set; }
+        public int UninitializeCount { get; private set; }
+
+        public void BindDomain(IDomain domain)
+        {
+            _domain = domain;
+            this.RegisterEvent<TransactionEvent>(_ => EventCalls++);
+            throw new InvalidOperationException("binding failed");
+        }
+
+        public void Initialize() => InitializeCount++;
+        public void UnInitialize() => UninitializeCount++;
+    }
+
+    private sealed class TransactionSubscriptionSystem : AbstractSystem
+    {
+        public int EventCalls { get; private set; }
+
+        protected override void OnInitialize() { }
+
+        public void Subscribe() => this.RegisterEvent<TransactionEvent>(_ => EventCalls++);
+    }
+
+    private sealed class ExistingSystemSubscriptionModel : AbstractModel
+    {
+        private readonly TransactionSubscriptionSystem _system;
+
+        public ExistingSystemSubscriptionModel(TransactionSubscriptionSystem system) => _system = system;
+
+        public bool FailInitialization { get; init; }
+
+        protected override void OnInitialize()
+        {
+            _system.Subscribe();
+            if (FailInitialization)
+            {
+                throw new InvalidOperationException("outer initialization failed");
+            }
+        }
+    }
+
+    private sealed class CatchingFailureModel : AbstractModel
+    {
+        public Exception? CaughtFailure { get; private set; }
+        public Exception? PostFailure { get; private set; }
+        public int EventCalls { get; private set; }
+
+        protected override void OnInitialize()
+        {
+            try
+            {
+                Domain.RegisterModel(new NestedFailureModel(this));
+            }
+            catch (Exception exception)
+            {
+                CaughtFailure = exception;
+            }
+
+            try
+            {
+                Domain.RegisterUtility(new SharedUtility());
+            }
+            catch (Exception exception)
+            {
+                PostFailure = exception;
+            }
+        }
+
+        public void RecordEvent() => EventCalls++;
+    }
+
+    private sealed class NestedFailureModel : AbstractModel
+    {
+        private readonly CatchingFailureModel _owner;
+
+        public NestedFailureModel(CatchingFailureModel owner) => _owner = owner;
+
+        protected override void OnInitialize()
+        {
+            Domain.RegisterModel(new SuccessfulNestedModel());
+            Domain.RegisterEvent<TransactionEvent>(_ => _owner.RecordEvent());
+            throw new InvalidOperationException("nested initialization failed");
+        }
+    }
+
+    private sealed class SuccessfulNestedModel : AbstractModel
+    {
+        protected override void OnInitialize() { }
+    }
+
+    private sealed class CatchingSelfRegistrationModel : AbstractModel
+    {
+        public Exception? CaughtFailure { get; private set; }
+
+        protected override void OnInitialize()
+        {
+            try
+            {
+                Domain.RegisterModel(this);
+            }
+            catch (Exception exception)
+            {
+                CaughtFailure = exception;
+            }
+        }
+    }
+
+    private sealed class RemovingOwnershipDuringInitializationModel : AbstractModel
+    {
+        private readonly IDomain _parent;
+
+        public RemovingOwnershipDuringInitializationModel(IDomain parent) => _parent = parent;
+
+        public Exception? RemoveFailure { get; private set; }
+
+        protected override void OnInitialize()
+        {
+            try
+            {
+                _parent.RemoveChild(Domain);
+            }
+            catch (Exception exception)
+            {
+                RemoveFailure = exception;
+            }
+        }
+    }
+
+    private sealed class AncestorTeardownInitializerModel : AbstractModel
+    {
+        private readonly IDomain _ancestor;
+
+        public AncestorTeardownInitializerModel(IDomain ancestor) => _ancestor = ancestor;
+
+        public Exception? TeardownFailure { get; private set; }
+
+        protected override void OnInitialize()
+        {
+            try
+            {
+                _ancestor.UnInitialize();
+            }
+            catch (Exception exception)
+            {
+                TeardownFailure = exception;
+            }
+        }
+    }
+
+    private interface IAncestorTeardownCleanupModel : IModel { }
+
+    private sealed class AncestorTeardownCleanupModel : AbstractModel, IAncestorTeardownCleanupModel
+    {
+        private readonly IDomain _ancestor;
+        private readonly SharedUtility? _expectedUtility;
+
+        public AncestorTeardownCleanupModel(IDomain ancestor, SharedUtility? expectedUtility = null)
+        {
+            _ancestor = ancestor;
+            _expectedUtility = expectedUtility;
+        }
+
+        public Exception? TeardownFailure { get; private set; }
+        public Exception? AncestorAccessFailure { get; private set; }
+        public SharedUtility? AncestorUtilityAfterAttempt { get; private set; }
+
+        protected override void OnInitialize() { }
+
+        protected override void OnUninitialize()
+        {
+            try
+            {
+                _ancestor.UnInitialize();
+            }
+            catch (Exception exception)
+            {
+                TeardownFailure = exception;
+            }
+
+            if (_expectedUtility is not null)
+            {
+                try
+                {
+                    AncestorUtilityAfterAttempt = _ancestor.RequireUtility<SharedUtility>();
+                }
+                catch (Exception exception)
+                {
+                    AncestorAccessFailure = exception;
+                }
+            }
+        }
+    }
+
+    private sealed class ReparentingInitializerSystem : AbstractSystem
+    {
+        private readonly IDomain _child;
+        private readonly IDomain _newParent;
+
+        public ReparentingInitializerSystem(IDomain child, IDomain newParent)
+        {
+            _child = child;
+            _newParent = newParent;
+        }
+
+        public Exception? ReparentFailure { get; private set; }
+
+        protected override void OnInitialize()
+        {
+            try
+            {
+                _child.SetParent(_newParent);
+            }
+            catch (Exception exception)
+            {
+                ReparentFailure = exception;
+            }
         }
     }
 

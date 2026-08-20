@@ -47,9 +47,9 @@ domain.RegisterModel(new Player());
 var player = domain.RequireModel<IPlayer>();
 ```
 
-存在多个可赋值候选项时会抛出 `AmbiguousComponentException`；可使用显式服务主键消除歧义。System/Model 实例由一个 Domain 独占且清理后不能复用；Utility 始终由调用方管理，可以跨 Domain 共享。
+存在多个可赋值候选项时会抛出 `AmbiguousComponentException`；可使用显式服务主键消除歧义。System/Model 实例由一个 Domain 独占、首次绑定后不能重新绑定或复用；Utility 始终由调用方管理，可以跨 Domain 共享。Command/Query 的 Domain 上下文则在每次执行前注入，可以重复使用。
 
-Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。
+Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。System 通过 `this.RegisterEvent(...)` 创建的本地订阅由该 System 生命周期自动取消，也可使用返回的句柄提前取消；直接调用 `domain.RegisterEvent(...)` 的订阅属于 Domain，不会因无关 System 替换而取消。
 
 需要构造参数的 Domain 使用 `AbstractConfiguredDomain<TConfiguration>`，并通过非公开构造函数和静态工厂保证调用方只能取得完整初始化的实例：
 
@@ -81,7 +81,7 @@ public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
 
 `UnInitialize()` 是终止操作。释放后的实例只保留查找和诊断能力，不能重新注册、发送事件或执行命令/查询。完整约束见 [`docs/domain-lifecycle.md`](docs/domain-lifecycle.md)，从旧注册语义升级请参阅 [`docs/migration-v1.1.md`](docs/migration-v1.1.md)。
 
-属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例:
+属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例。通知同步完成期间禁止写入不同的新值，以避免监听器观察到逆序的旧通知；相同值仍按比较器作为无操作处理:
 
 ```csharp
 var hp = new BindableProperty<int>(100)
