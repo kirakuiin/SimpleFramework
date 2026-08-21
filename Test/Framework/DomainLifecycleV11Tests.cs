@@ -172,6 +172,33 @@ public sealed class DomainLifecycleV11Tests
     }
 
     [Test]
+    public void SameCommandAndQueryInstanceCannotOverlapAcrossDomains()
+    {
+        var first = ADomain.Create();
+        var second = BDomain.Create();
+        var command = new OverlappingCommand(second);
+        var resultCommand = new OverlappingResultCommand(second);
+        var query = new OverlappingQuery(second);
+
+        first.SendCommand(command);
+        first.SendCommand(resultCommand);
+        first.SendQuery(query);
+
+        Assert.That(command.NestedFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(resultCommand.NestedFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(query.NestedFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(first, command.DomainAfterNestedAttempt);
+        Assert.AreSame(first, resultCommand.DomainAfterNestedAttempt);
+        Assert.AreSame(first, query.DomainAfterNestedAttempt);
+
+        Assert.DoesNotThrow(() => second.SendCommand(command));
+        Assert.DoesNotThrow(() => second.SendCommand(resultCommand));
+        Assert.DoesNotThrow(() => second.SendQuery(query));
+        first.UnInitialize();
+        second.UnInitialize();
+    }
+
+    [Test]
     public void ConcreteModelsResolveByUniqueInterfaceAndExactKeyWins()
     {
         var domain = ADomain.Create();
@@ -755,6 +782,55 @@ public sealed class DomainLifecycleV11Tests
     }
 
     [Test]
+    public void AncestorReplacementIsRejectedWhileOwnedDescendantExecutes()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        parent.AddChild(child);
+        var oldModel = new ExecutionReplaceableModel();
+        var replacement = new ExecutionReplaceableModel();
+        parent.RegisterModelAs<IExecutionReplaceableModel>(oldModel);
+        var command = new ReplacingAncestorExecutionCommand(replacement);
+
+        child.SendCommand(command);
+
+        Assert.That(command.ReplacementFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.IsFalse(command.OldModelReleasedBeforeReturn);
+        Assert.AreSame(oldModel, parent.GetModel<IExecutionReplaceableModel>());
+        Assert.AreEqual(0, oldModel.UninitializeCount);
+
+        parent.RegisterModelAs<IExecutionReplaceableModel>(replacement);
+        Assert.AreEqual(1, oldModel.UninitializeCount);
+        parent.UnInitialize();
+    }
+
+    [Test]
+    public void RelationshipMutationCannotBypassOwnedDescendantReplacementGuard()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        parent.AddChild(child);
+        var oldModel = new ExecutionReplaceableModel();
+        var replacement = new ExecutionReplaceableModel();
+        parent.RegisterModelAs<IExecutionReplaceableModel>(oldModel);
+        var command = new DetachingAndReplacingAncestorCommand(replacement);
+
+        child.SendCommand(command);
+
+        Assert.That(command.DetachFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(command.ReplacementFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.IsFalse(command.OldModelReleasedBeforeReturn);
+        Assert.AreSame(parent, child.Parent);
+        Assert.AreSame(oldModel, parent.GetModel<IExecutionReplaceableModel>());
+
+        parent.RemoveChild(child);
+        parent.RegisterModelAs<IExecutionReplaceableModel>(replacement);
+        Assert.AreEqual(1, oldModel.UninitializeCount);
+        parent.UnInitialize();
+        child.UnInitialize();
+    }
+
+    [Test]
     public void ExecutionStillAllowsNewLifecycleKeysAndUtilityReplacement()
     {
         var domain = ADomain.Create();
@@ -909,6 +985,51 @@ public sealed class DomainLifecycleV11Tests
     }
 
     [Test]
+    public void DescendantInitializationCannotCommitFrameworkEffectsInAncestor()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        var unrelatedChild = DDomain.Create();
+        parent.AddChild(child);
+        var existingEventCalls = 0;
+        var existingSubscription = parent.RegisterEvent<TransactionEvent>(_ => existingEventCalls++);
+        var model = new AncestorSideEffectInitializerModel(parent, existingSubscription, unrelatedChild);
+
+        Assert.Throws<InvalidOperationException>(() => child.RegisterModel(model));
+
+        Assert.That(model.RegistrationFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(model.EventRegistrationFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(model.CommandFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(model.EventDispatchFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(model.EventUnregistrationFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(model.RelationshipFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.IsNull(parent.GetModel<ReplaceTargetModel>());
+        Assert.AreEqual(0, model.Command.ExecutionCount);
+        Assert.AreEqual(0, model.NewEventCalls);
+        Assert.IsNull(unrelatedChild.Parent);
+
+        parent.SendEvent(new TransactionEvent());
+        Assert.AreEqual(1, existingEventCalls);
+        Assert.AreEqual(0, model.NewEventCalls);
+        parent.UnInitialize();
+        unrelatedChild.UnInitialize();
+    }
+
+    [Test]
+    public void OwnedDomainInitializationCannotCommitFrameworkEffectsInAncestor()
+    {
+        var parent = ADomain.Create();
+
+        var child = SelfOwningInitializationDomain.Create(parent);
+
+        Assert.That(child.AncestorRegistrationFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(parent, child.Parent);
+        Assert.IsNull(parent.GetModel<ReplaceTargetModel>());
+        parent.UnInitialize();
+        Assert.IsNull(child.Parent);
+    }
+
+    [Test]
     public void AncestorTeardownPreflightPreservesTreeDuringChildComponentRelease()
     {
         var parent = ADomain.Create();
@@ -925,6 +1046,55 @@ public sealed class DomainLifecycleV11Tests
         Assert.AreSame(replacement, child.GetModel<IAncestorTeardownCleanupModel>());
         Assert.DoesNotThrow(() => parent.RegisterUtility(new SharedUtility()));
         parent.UnInitialize();
+    }
+
+    [Test]
+    public void DescendantReleaseCannotCommitFrameworkEffectsInAncestor()
+    {
+        var parent = ADomain.Create();
+        var child = BDomain.Create();
+        var unrelatedChild = DDomain.Create();
+        parent.AddChild(child);
+        var existingEventCalls = 0;
+        parent.RegisterEvent<TransactionEvent>(_ => existingEventCalls++);
+        var oldModel = new AncestorSideEffectCleanupModel(parent, unrelatedChild);
+        var replacement = new AncestorSideEffectCleanupModel(parent, unrelatedChild);
+        child.RegisterModelAs<IAncestorSideEffectCleanupModel>(oldModel);
+
+        child.RegisterModelAs<IAncestorSideEffectCleanupModel>(replacement);
+
+        Assert.That(oldModel.RegistrationFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(oldModel.EventRegistrationFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(oldModel.CommandFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(oldModel.EventDispatchFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(oldModel.QueryFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.That(oldModel.RelationshipFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.IsNull(parent.GetModel<ReplaceTargetModel>());
+        Assert.AreEqual(0, oldModel.Command.ExecutionCount);
+        Assert.AreEqual(0, oldModel.NewEventCalls);
+        Assert.IsNull(unrelatedChild.Parent);
+
+        parent.SendEvent(new TransactionEvent());
+        Assert.AreEqual(1, existingEventCalls);
+        Assert.AreEqual(0, oldModel.NewEventCalls);
+        parent.UnInitialize();
+        unrelatedChild.UnInitialize();
+    }
+
+    [Test]
+    public void ActiveComponentReleaseRejectsDomainTeardownInsteadOfIgnoringIt()
+    {
+        var domain = ADomain.Create();
+        var oldModel = new SelfTeardownCleanupModel();
+        var replacement = new SelfTeardownCleanupModel();
+        domain.RegisterModelAs<ISelfTeardownCleanupModel>(oldModel);
+
+        domain.RegisterModelAs<ISelfTeardownCleanupModel>(replacement);
+
+        Assert.That(oldModel.TeardownFailure, Is.TypeOf<InvalidOperationException>());
+        Assert.AreSame(replacement, domain.GetModel<ISelfTeardownCleanupModel>());
+        Assert.DoesNotThrow(() => domain.RegisterUtility(new SharedUtility()));
+        domain.UnInitialize();
     }
 
     [Test]
@@ -1108,6 +1278,33 @@ public sealed class DomainLifecycleV11Tests
 
             LastFailed = this;
             _ = Instance;
+        }
+    }
+
+    public sealed class SelfOwningInitializationDomain : AbstractConfiguredDomain<IDomain>
+    {
+        private SelfOwningInitializationDomain(IDomain parent) : base(parent) { }
+
+        public Exception? AncestorRegistrationFailure { get; private set; }
+
+        public static SelfOwningInitializationDomain Create(IDomain parent)
+        {
+            var domain = new SelfOwningInitializationDomain(parent);
+            domain.Initialize();
+            return domain;
+        }
+
+        protected override void Init()
+        {
+            Configuration.AddChild(this);
+            try
+            {
+                Configuration.RegisterModel(new ReplaceTargetModel());
+            }
+            catch (Exception exception)
+            {
+                AncestorRegistrationFailure = exception;
+            }
         }
     }
 
@@ -1385,7 +1582,159 @@ public sealed class DomainLifecycleV11Tests
         }
     }
 
+    private sealed class ReplacingAncestorExecutionCommand : AbstractCommand
+    {
+        private readonly IExecutionReplaceableModel _replacement;
+
+        public ReplacingAncestorExecutionCommand(IExecutionReplaceableModel replacement) =>
+            _replacement = replacement;
+
+        public Exception? ReplacementFailure { get; private set; }
+        public bool OldModelReleasedBeforeReturn { get; private set; }
+
+        protected override void OnExecute()
+        {
+            var oldModel = (ExecutionReplaceableModel)this.RequireModel<IExecutionReplaceableModel>();
+            try
+            {
+                Domain.Parent!.RegisterModelAs<IExecutionReplaceableModel>(_replacement);
+            }
+            catch (Exception exception)
+            {
+                ReplacementFailure = exception;
+            }
+
+            OldModelReleasedBeforeReturn = oldModel.UninitializeCount > 0;
+        }
+    }
+
+    private sealed class DetachingAndReplacingAncestorCommand : AbstractCommand
+    {
+        private readonly IExecutionReplaceableModel _replacement;
+
+        public DetachingAndReplacingAncestorCommand(IExecutionReplaceableModel replacement) =>
+            _replacement = replacement;
+
+        public Exception? DetachFailure { get; private set; }
+        public Exception? ReplacementFailure { get; private set; }
+        public bool OldModelReleasedBeforeReturn { get; private set; }
+
+        protected override void OnExecute()
+        {
+            var ancestor = Domain.Parent!;
+            var oldModel = (ExecutionReplaceableModel)this.RequireModel<IExecutionReplaceableModel>();
+            try
+            {
+                ancestor.RemoveChild(Domain);
+            }
+            catch (Exception exception)
+            {
+                DetachFailure = exception;
+            }
+
+            try
+            {
+                ancestor.RegisterModelAs<IExecutionReplaceableModel>(_replacement);
+            }
+            catch (Exception exception)
+            {
+                ReplacementFailure = exception;
+            }
+
+            OldModelReleasedBeforeReturn = oldModel.UninitializeCount > 0;
+        }
+    }
+
     private sealed class ExecutionProbeException : Exception { }
+
+    private sealed class OverlappingCommand : AbstractCommand
+    {
+        private readonly IDomain _other;
+        private bool _attemptNestedExecution = true;
+
+        public OverlappingCommand(IDomain other) => _other = other;
+
+        public Exception? NestedFailure { get; private set; }
+        public IDomain? DomainAfterNestedAttempt { get; private set; }
+
+        protected override void OnExecute()
+        {
+            if (_attemptNestedExecution)
+            {
+                _attemptNestedExecution = false;
+                try
+                {
+                    _other.SendCommand(this);
+                }
+                catch (Exception exception)
+                {
+                    NestedFailure = exception;
+                }
+            }
+
+            DomainAfterNestedAttempt = Domain;
+        }
+    }
+
+    private sealed class OverlappingResultCommand : AbstractCommand<int>
+    {
+        private readonly IDomain _other;
+        private bool _attemptNestedExecution = true;
+
+        public OverlappingResultCommand(IDomain other) => _other = other;
+
+        public Exception? NestedFailure { get; private set; }
+        public IDomain? DomainAfterNestedAttempt { get; private set; }
+
+        protected override int OnExecute()
+        {
+            if (_attemptNestedExecution)
+            {
+                _attemptNestedExecution = false;
+                try
+                {
+                    _other.SendCommand(this);
+                }
+                catch (Exception exception)
+                {
+                    NestedFailure = exception;
+                }
+            }
+
+            DomainAfterNestedAttempt = Domain;
+            return 0;
+        }
+    }
+
+    private sealed class OverlappingQuery : AbstractQuery<int>
+    {
+        private readonly IDomain _other;
+        private bool _attemptNestedExecution = true;
+
+        public OverlappingQuery(IDomain other) => _other = other;
+
+        public Exception? NestedFailure { get; private set; }
+        public IDomain? DomainAfterNestedAttempt { get; private set; }
+
+        protected override int OnExecute()
+        {
+            if (_attemptNestedExecution)
+            {
+                _attemptNestedExecution = false;
+                try
+                {
+                    _other.SendQuery(this);
+                }
+                catch (Exception exception)
+                {
+                    NestedFailure = exception;
+                }
+            }
+
+            DomainAfterNestedAttempt = Domain;
+            return 0;
+        }
+    }
 
     private sealed class ForbiddenInitializerModel : AbstractModel
     {
@@ -1982,7 +2331,128 @@ public sealed class DomainLifecycleV11Tests
         }
     }
 
+    private sealed class AncestorSideEffectInitializerModel : AbstractModel
+    {
+        private readonly IDomain _ancestor;
+        private readonly IUnRegister _existingSubscription;
+        private readonly IDomain _unrelatedChild;
+
+        public AncestorSideEffectInitializerModel(
+            IDomain ancestor,
+            IUnRegister existingSubscription,
+            IDomain unrelatedChild)
+        {
+            _ancestor = ancestor;
+            _existingSubscription = existingSubscription;
+            _unrelatedChild = unrelatedChild;
+        }
+
+        public FlagCommand Command { get; } = new();
+        public int NewEventCalls { get; private set; }
+        public Exception? RegistrationFailure { get; private set; }
+        public Exception? EventRegistrationFailure { get; private set; }
+        public Exception? CommandFailure { get; private set; }
+        public Exception? EventDispatchFailure { get; private set; }
+        public Exception? EventUnregistrationFailure { get; private set; }
+        public Exception? RelationshipFailure { get; private set; }
+
+        protected override void OnInitialize()
+        {
+            RegistrationFailure = Capture(() => _ancestor.RegisterModel(new ReplaceTargetModel()));
+            EventRegistrationFailure = Capture(() =>
+                _ancestor.RegisterEvent<TransactionEvent>(_ => NewEventCalls++));
+            CommandFailure = Capture(() => _ancestor.SendCommand(Command));
+            EventDispatchFailure = Capture(() => _ancestor.SendEvent(new TransactionEvent()));
+            EventUnregistrationFailure = Capture(_existingSubscription.UnRegister);
+            RelationshipFailure = Capture(() => _ancestor.AddChild(_unrelatedChild));
+            throw new InvalidOperationException("descendant initialization failed");
+        }
+
+        private static Exception? Capture(Action action)
+        {
+            try
+            {
+                action();
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        }
+    }
+
     private interface IAncestorTeardownCleanupModel : IModel { }
+
+    private interface IAncestorSideEffectCleanupModel : IModel { }
+
+    private interface ISelfTeardownCleanupModel : IModel { }
+
+    private sealed class SelfTeardownCleanupModel : AbstractModel, ISelfTeardownCleanupModel
+    {
+        public Exception? TeardownFailure { get; private set; }
+
+        protected override void OnInitialize() { }
+
+        protected override void OnUninitialize()
+        {
+            try
+            {
+                Domain.UnInitialize();
+            }
+            catch (Exception exception)
+            {
+                TeardownFailure = exception;
+            }
+        }
+    }
+
+    private sealed class AncestorSideEffectCleanupModel : AbstractModel, IAncestorSideEffectCleanupModel
+    {
+        private readonly IDomain _ancestor;
+        private readonly IDomain _unrelatedChild;
+
+        public AncestorSideEffectCleanupModel(IDomain ancestor, IDomain unrelatedChild)
+        {
+            _ancestor = ancestor;
+            _unrelatedChild = unrelatedChild;
+        }
+
+        public FlagCommand Command { get; } = new();
+        public int NewEventCalls { get; private set; }
+        public Exception? RegistrationFailure { get; private set; }
+        public Exception? EventRegistrationFailure { get; private set; }
+        public Exception? CommandFailure { get; private set; }
+        public Exception? EventDispatchFailure { get; private set; }
+        public Exception? QueryFailure { get; private set; }
+        public Exception? RelationshipFailure { get; private set; }
+
+        protected override void OnInitialize() { }
+
+        protected override void OnUninitialize()
+        {
+            RegistrationFailure = Capture(() => _ancestor.RegisterModel(new ReplaceTargetModel()));
+            EventRegistrationFailure = Capture(() =>
+                _ancestor.RegisterEvent<TransactionEvent>(_ => NewEventCalls++));
+            CommandFailure = Capture(() => _ancestor.SendCommand(Command));
+            EventDispatchFailure = Capture(() => _ancestor.SendEvent(new TransactionEvent()));
+            QueryFailure = Capture(() => { _ancestor.SendQuery(new ConstantQuery()); });
+            RelationshipFailure = Capture(() => _ancestor.AddChild(_unrelatedChild));
+        }
+
+        private static Exception? Capture(Action action)
+        {
+            try
+            {
+                action();
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        }
+    }
 
     private sealed class AncestorTeardownCleanupModel : AbstractModel, IAncestorTeardownCleanupModel
     {

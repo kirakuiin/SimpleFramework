@@ -71,9 +71,14 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
     /// <inheritdoc />
     public void UnInitialize()
     {
-        if (_componentReleaseDepth > 0 || _state is DomainState.Uninitializing or DomainState.Disposed)
+        if (_state is DomainState.Uninitializing or DomainState.Disposed)
         {
             return;
+        }
+
+        if (_componentReleaseDepth > 0)
+        {
+            throw new InvalidOperationException("Cannot uninitialize a Domain while it is releasing a component.");
         }
 
         EnsureOwnedTreeCanUninitialize();
@@ -846,6 +851,10 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
             throw new InvalidOperationException($"Cannot register components while Domain is {_state}.");
         }
 
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            "register components",
+            rejectInitialization: true,
+            rejectRelease: true);
         EnsureTransactionCanEnlist("register components");
     }
 
@@ -857,10 +866,26 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
                 $"Cannot replace {category} key {key.FullName} during component initialization.");
         }
 
-        if (_executionDepth > 0 && category is ComponentCategory.System or ComponentCategory.Model)
+        if (category is ComponentCategory.System or ComponentCategory.Model)
+        {
+            EnsureOwnedTreeIsNotExecuting($"replace {category} key {key.FullName}");
+        }
+    }
+
+    private void EnsureOwnedTreeIsNotExecuting(string operation)
+    {
+        if (_executionDepth > 0)
         {
             throw new InvalidOperationException(
-                $"Cannot replace {category} key {key.FullName} during event, command, or query execution.");
+                $"Cannot {operation} while this Domain or an owned Domain is executing events, commands, or queries.");
+        }
+
+        foreach (var child in _children)
+        {
+            if (child is AbstractDomain childDomain)
+            {
+                childDomain.EnsureOwnedTreeIsNotExecuting(operation);
+            }
         }
     }
 
@@ -910,6 +935,12 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
         {
             throw new InvalidOperationException($"Cannot change Domain relationships while Domain is {_state}.");
         }
+
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            "change Domain relationships",
+            rejectInitialization: true,
+            rejectRelease: true);
+        EnsureOwnedTreeIsNotExecuting("change Domain relationships");
     }
 
     private void EnsureEventRegistrationAllowed()
@@ -919,6 +950,10 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
             throw new InvalidOperationException($"Cannot register local events while Domain is {_state}.");
         }
 
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            "register local events",
+            rejectInitialization: true,
+            rejectRelease: true);
         EnsureTransactionCanEnlist("register local events");
     }
 
@@ -940,6 +975,11 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
         {
             throw new InvalidOperationException($"Cannot unregister local events while Domain is {_state}.");
         }
+
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            "unregister local events",
+            rejectInitialization: true,
+            rejectRelease: false);
     }
 
     private void EnsureActiveExecution(string operation)
@@ -948,6 +988,11 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
         {
             throw new InvalidOperationException($"Cannot {operation} while Domain is {_state}.");
         }
+
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            operation,
+            rejectInitialization: true,
+            rejectRelease: true);
     }
 
     private void EnsureQueryAllowed()
@@ -956,6 +1001,58 @@ public abstract class AbstractDomain : IDomain, IComponentEventRegistrar
         {
             throw new InvalidOperationException($"Cannot send queries while Domain is {_state}.");
         }
+
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            "send queries",
+            rejectInitialization: false,
+            rejectRelease: true);
+    }
+
+    private void EnsureOwnedDescendantsAllowGuardedOperation(
+        string operation,
+        bool rejectInitialization,
+        bool rejectRelease)
+    {
+        foreach (var child in _children)
+        {
+            if (child is AbstractDomain childDomain)
+            {
+                childDomain.EnsureTreeAllowsGuardedOperation(
+                    operation,
+                    rejectInitialization,
+                    rejectRelease);
+            }
+        }
+    }
+
+    private void EnsureTreeAllowsGuardedOperation(
+        string operation,
+        bool rejectInitialization,
+        bool rejectRelease)
+    {
+        if (_state == DomainState.Disposed)
+        {
+            return;
+        }
+
+        if (rejectInitialization &&
+            (_state == DomainState.Initializing || _componentInitializationDepth > 0))
+        {
+            throw new InvalidOperationException(
+                $"Cannot {operation} while an owned Domain is initializing itself or a component.");
+        }
+
+        if (rejectRelease &&
+            (_state == DomainState.Uninitializing || _componentReleaseDepth > 0))
+        {
+            throw new InvalidOperationException(
+                $"Cannot {operation} while an owned Domain is cleaning up.");
+        }
+
+        EnsureOwnedDescendantsAllowGuardedOperation(
+            operation,
+            rejectInitialization,
+            rejectRelease);
     }
 
     private InvalidOperationException CreateDuplicateInstanceException(DomainComponentEntry existing)

@@ -47,3 +47,8 @@
 - [x] 7.11 Recursively preflight standard owned Domain descendants before teardown and cover execution, component initialization, and component release phases.
 - [x] 7.12 Reject existing System/Model replacement during synchronous execution while preserving new-key and Utility registration, then run focused/full validation.
 - [x] 7.13 Reject ancestor teardown while an owned standard descendant cleanup callback is still running, then run focused/full validation.
+- [x] 7.14 Reject ancestor System/Model replacement while an owned standard descendant is synchronously executing, and cover post-execution retry.
+- [x] 7.15 Propagate guarded Domain/component initialization and release phases to standard ancestors so descendant failure cannot leave ancestor framework effects.
+- [x] 7.16 Reject standard ownership relationship mutation during synchronous owned-tree execution so lifecycle guards cannot be bypassed by detachment.
+- [x] 7.17 Reject Domain teardown during active component release while preserving idempotent terminal-cleanup reentrancy.
+- [x] 7.18 Reject overlapping execution of the same framework Command/Query instance without preventing sequential cross-Domain reuse.

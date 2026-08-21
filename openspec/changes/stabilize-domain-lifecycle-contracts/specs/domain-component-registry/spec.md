@@ -33,3 +33,7 @@ The one-shot lifecycle binding contract MUST remain public. A caller MUST be abl
 #### Scenario: Command and Query objects are reused
 - **WHEN** a Command or Query object executes through different Domains at different times
 - **THEN** repeatable execution-context injection remains available and is not subject to lifecycle-component one-shot binding
+
+#### Scenario: The same Command or Query instance overlaps execution
+- **WHEN** a framework-base Command or Query instance is sent to another Domain before its current execution returns
+- **THEN** the nested context injection is rejected before overwriting the outer invocation's Domain, while later sequential reuse remains available

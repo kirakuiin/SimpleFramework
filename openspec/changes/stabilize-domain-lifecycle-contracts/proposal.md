@@ -10,6 +10,7 @@ Domain lifecycle registration currently leaves several ownership gaps: replaced 
 - Make `SetParent` commit a new parent only after the old ownership relationship is removed successfully.
 - Reject terminal Domain teardown while synchronous local-event, Command, or Query execution is still on the call stack.
 - Preflight standard owned Domain descendants before parent teardown, and reject lifecycle-component replacement during synchronous execution.
+- Apply guarded component initialization/release phases to standard ancestor Domains so descendant callbacks cannot commit cross-Domain framework effects.
 - **BREAKING** Reject writes of a different `BindableProperty<T>` value while its listeners are being notified.
 - Clarify that Query read-only behavior is a usage convention rather than a capability boundary or runtime guarantee.
 - Keep `IDomain` as the complete public facade; interface segregation and namespace reorganization remain outside this change.

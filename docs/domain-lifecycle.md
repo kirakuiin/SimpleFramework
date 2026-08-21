@@ -52,7 +52,7 @@ domain.RegisterModelAs<IPlayer>(new NetworkPlayer());
 
 ## System 与 Model 所有权
 
-System 和 Model 的实例生命周期由一个 Domain 独占。框架注册时会调用公开的 `IDomainBindable.BindDomain`；该调用对生命周期组件是一次性的，之后即使已经清理也不能重新绑定或复用。无论初始化和清理成功还是失败，需要重新注册时都必须创建新实例。`Command` 与 `Query` 仍使用可重复的执行上下文注入，因此同一实例可在不同 Domain 中依次执行。
+System 和 Model 的实例生命周期由一个 Domain 独占。框架注册时会调用公开的 `IDomainBindable.BindDomain`；该调用对生命周期组件是一次性的，之后即使已经清理也不能重新绑定或复用。无论初始化和清理成功还是失败，需要重新注册时都必须创建新实例。`Command` 与 `Query` 仍使用可重复的执行上下文注入，因此同一实例可在不同 Domain 中依次执行；框架抽象基类会拒绝同一实例尚未返回时的重叠执行，避免内层调用覆盖外层的 Domain 上下文。
 
 活动期替换同一主键时，Domain 先取消发布并完整释放旧组件，再发布和初始化新组件：
 
@@ -89,6 +89,8 @@ Utility 的生命周期始终由调用方管理。Domain 只保存和移除注�
 
 上述“取消已有的本地事件订阅”同时适用于 `Domain.UnRegisterEvent(...)`，以及 Domain 返回的 `IUnRegister.UnRegister()`/`Dispose()` 句柄。被初始化守卫拒绝的句柄不会被消费，可在 Domain 恢复活动期后再次取消；框架自身的事务回滚和组件清理不受该公开守卫阻断。
 
+标准 `AbstractDomain` 所有权树会把这些阶段守卫向祖先传播：子域本身或其组件正在初始化、或者子域正在清理时，不能通过父域引用绕过限制，把组件、事件订阅、命令执行或关系变更提交到祖先。祖先只做递归预检并直接拒绝，不建立跨 Domain 事务；仅查找继承的 `SetParent` 关系和自定义 `IDomain` 仍由调用方负责协调。
+
 一次顶层组件注册会形成框架本地事务。外层初始化失败时，事务会撤销嵌套新增的注册项和本地事件订阅；已经开始初始化的 System/Model 会获得一次清理回调，Utility 只移除注册项。初始化和回滚清理同时失败时，以 `AggregateException` 保留全部错误。
 
 事务中的任意嵌套 System/Model 注册一旦失败，整个顶层事务即被标记为失败。即使外层组件捕获该异常，之后也不能继续登记组件或本地事件，顶层注册最终仍会回滚并以原始失败结束。组件若要容错，应在其自身初始化逻辑内处理错误，不应让嵌套注册调用抛出后再继续注册。
@@ -107,11 +109,13 @@ Utility 的生命周期始终由调用方管理。Domain 只保存和移除注�
 
 每个生命周期组件会先从注册表取消发布，再执行 `UnInitialize()`。因此回调查不到自身，但仍能只读访问尚未轮到清理的依赖项。
 
-整个过程始终保持 `Uninitializing`，包括派生 Domain 的 `UnInit()`，所以清理回调无法重新填充组件或事件。单个清理失败不会中断后续阶段；框架收集全部错误、最终进入 `Disposed`，然后抛出一个 `AggregateException`。清理中的重入和释放后的重复 `UnInitialize()` 都是无操作。
+整个过程始终保持 `Uninitializing`，包括派生 Domain 的 `UnInit()`，所以清理回调无法重新填充组件或事件。单个清理失败不会中断后续阶段；框架收集全部错误、最终进入 `Disposed`，然后抛出一个 `AggregateException`。Domain 已进入 `Uninitializing` 后的清理重入和释放后的重复 `UnInitialize()` 都是无操作；活动期组件替换或回滚正在释放单个组件时，Domain 尚未进入终止清理，此时调用 `UnInitialize()` 会明确拒绝而不是静默返回。
 
 本地事件、Command 或 Query 的同步执行尚未返回时，`UnInitialize()` 会拒绝终止释放。这一守卫覆盖完整的事件派发和可重写 `ExecuteCommand`/`ExecuteQuery` 调用，允许三者相互嵌套，并在用户代码抛出异常时恢复。需要切换场景或关闭 Domain 的回调应在最外层 `SendEvent`、`SendCommand` 或 `SendQuery` 返回后执行或自行调度；异步任务不属于该同步守卫范围。
 
-同一同步执行阶段也不能替换已有的 System 或 Model 生命周期键，因为旧组件可能仍在当前事件快照或调用栈中。执行期间仍可注册不存在的新键，也可替换不受 Domain 生命周期管理的 Utility。
+标准所有权关系在同一同步执行阶段也保持稳定：执行中的 Domain 及其祖先不能通过 `AddChild`、`RemoveChild` 或 `SetParent` 改变相关所有权树。需要移除或重设父域时，应在最外层同步发送返回后执行，避免先脱离所有权树再绕过祖先组件替换和释放预检。
+
+同一同步执行阶段也不能替换已有的 System 或 Model 生命周期键，因为旧组件可能仍在当前事件快照或调用栈中。标准 `AbstractDomain` 会把这项检查递归应用到所有权子树，避免子域 Command/Query 仍持有通过父域查找获得的组件时，祖先将其释放。执行期间仍可注册不存在的新键，也可替换不受 Domain 生命周期管理的 Utility。
 
 ## 配置化 Domain
 

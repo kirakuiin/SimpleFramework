@@ -47,7 +47,7 @@ domain.RegisterModel(new Player());
 var player = domain.RequireModel<IPlayer>();
 ```
 
-存在多个可赋值候选项时会抛出 `AmbiguousComponentException`；可使用显式服务主键消除歧义。System/Model 实例由一个 Domain 独占、首次绑定后不能重新绑定或复用；Utility 始终由调用方管理，可以跨 Domain 共享。Command/Query 的 Domain 上下文则在每次执行前注入，可以重复使用。
+存在多个可赋值候选项时会抛出 `AmbiguousComponentException`；可使用显式服务主键消除歧义。System/Model 实例由一个 Domain 独占、首次绑定后不能重新绑定或复用；Utility 始终由调用方管理，可以跨 Domain 共享。Command/Query 的 Domain 上下文则在每次执行前注入，可以依次重复使用；同一框架基类实例尚未返回时不能重叠执行。
 
 Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。System 通过 `this.RegisterEvent(...)` 创建的本地订阅由该 System 生命周期自动取消，也可使用返回的句柄提前取消；直接调用 `domain.RegisterEvent(...)` 的订阅属于 Domain，不会因无关 System 替换而取消。
 

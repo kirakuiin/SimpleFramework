@@ -6,6 +6,10 @@ namespace SimpleFramework;
 /// 域类型。
 /// <para>最顶层的对象，用于组织分类组件、父子查找、事件和一次性生命周期。</para>
 /// </summary>
+/// <remarks>
+/// 标准 <see cref="AbstractDomain"/> 会将受保护的组件初始化、释放和同步执行阶段应用到其所有权子树；
+/// 祖先操作可能因标准后代仍处于对应阶段而被拒绝。自定义实现自行定义等价契约。
+/// </remarks>
 public interface IDomain
 {
     /// <summary>
@@ -14,7 +18,7 @@ public interface IDomain
     /// <para>切换会先完成旧父域关系的移除；若该步骤失败，不会提交新的父引用。</para>
     /// </summary>
     /// <param name="domain">父<see cref="IDomain"/></param>
-    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化/清理/同步执行，标准所有权后代处于对应阶段，或者已经释放。</exception>
     void SetParent(IDomain? domain);
     
     /// <summary>
@@ -27,14 +31,14 @@ public interface IDomain
     /// <para>子Domain必然会被父Domain管理，共享生命周期</para>
     /// </summary>
     /// <param name="domain"></param>
-    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化/清理/同步执行，标准所有权后代处于对应阶段，或者已经释放。</exception>
     void AddChild(IDomain domain);
     
     /// <summary>
     /// 移除一个子Domain 
     /// </summary>
     /// <param name="domain"></param>
-    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化或清理，或者已经释放。</exception>
+    /// <exception cref="InvalidOperationException">Domain 尚未初始化、正在组件初始化/清理/同步执行，标准所有权后代处于对应阶段，或者已经释放。</exception>
     void RemoveChild(IDomain domain);
     
     /// <summary>

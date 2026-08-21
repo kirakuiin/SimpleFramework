@@ -53,6 +53,8 @@ System and Model will use a new public one-shot `IDomainBindable.BindDomain(IDom
 
 `AbstractSystem` and `AbstractModel` will explicitly implement binding, reject null, reject every second call including the same Domain, and throw when `Domain` is read before binding. Binding remains set after initialization failure or release because lifecycle instances are terminal and cannot be reused.
 
+Framework `AbstractCommand` and `AbstractQuery` bases keep repeatable sequential context injection but reject `SetDomain` and `Execute` reentrancy while the same instance is already executing. This prevents nested cross-Domain reuse from overwriting the outer invocation's mutable `Domain` context. Different Command/Query instances may still nest normally, and direct custom implementations remain responsible for equivalent context safety.
+
 The contract remains public so a custom `IDomain` can bind a component and custom `ISystem`/`IModel` implementations can participate without framework base classes. Custom implementations are responsible for honoring the same one-shot rule, just as custom Domain implementations are responsible for all other `IDomain` invariants.
 
 Alternative considered: an internal binding method. Rejected because it would make the public component interfaces unusable from a direct external `IDomain` implementation.
@@ -83,13 +85,25 @@ Public documentation will replace claims that Query “guarantees” no mutation
 
 Alternative considered: queue a teardown request until the outermost execution returns. Rejected because it requires new rules for repeated requests, callback exceptions, nested dispatch, and teardown error propagation. Callers can explicitly schedule or invoke teardown after the public execution method returns.
 
-The same execution counter will reject replacement only when an existing System or Model lifecycle key would be released. New-key lifecycle registration and Utility replacement remain available. This avoids released callbacks from EventBus snapshots and prevents Command/Query code from releasing a component that is still on its call stack without adding listener-state tracking or deferred replacement queues.
+The same execution counter will reject replacement only when an existing System or Model lifecycle key would be released. Before replacement, a standard `AbstractDomain` will recursively inspect its owned standard descendants as well as itself, because descendant Command/Query code can resolve and retain ancestor components through parent lookup. New-key lifecycle registration and Utility replacement remain available. This avoids released callbacks from EventBus snapshots and prevents Command/Query code from releasing a component that is still on its call stack without adding listener-state tracking or deferred replacement queues.
+
+Relationship mutation will use the same owned-tree execution preflight. Otherwise executing code could first detach its Domain from the ownership tree and then bypass ancestor replacement or teardown checks while still retaining inherited components. Callers that need to reparent or remove a Domain after a Command/event/Query will perform that operation after the outermost synchronous send returns.
 
 ### Standard owned trees preflight teardown recursively
 
 Before `CleanupCore` changes the parent state, `AbstractDomain.UnInitialize` will recursively inspect only owned descendants that are also `AbstractDomain`. The check reads their lifecycle state plus execution, component-initialization, and component-release depths and throws before mutation when any descendant is busy, including a descendant that has entered terminal cleanup but still owns running cleanup callbacks. Only an already-disposed descendant may be skipped. The public interfaces and custom Domain implementation model stay unchanged; arbitrary `IDomain` children remain best-effort because their internal readiness cannot be observed without adding another public capability.
 
 Alternative considered: add a public teardown-readiness interface for custom Domains. Rejected for this change because it expands the public lifecycle protocol to solve a guarantee that the framework can enforce internally for its standard implementation.
+
+Terminal cleanup reentrancy remains an idempotent no-op once the Domain state is `Uninitializing` or `Disposed`. A teardown request made during active component replacement or rollback release is different: the Domain has not entered terminal cleanup, so silently returning would falsely imply that the request completed. `UnInitialize` will reject that active release phase before mutation.
+
+### Guarded component phases propagate to standard ancestors
+
+An `AbstractDomain` operation that is forbidden during its own Domain/component initialization or component release will also inspect standard descendants it owns before executing. This prevents a descendant callback from escaping its transaction or cleanup guard by invoking the corresponding API on an ancestor whose local depth counter is zero. In particular, ancestor component/event registration, Command/event execution, Query execution during release, and relationship mutation will reject while an owned descendant is in the corresponding guarded phase. Event unregistration keeps its existing release-phase behavior, while initialization-phase unregistration remains rejected.
+
+The check is a recursive read-only preflight and does not coordinate transactions across Domains. Lookup-only and arbitrary custom `IDomain` relationships remain the caller's responsibility because the ancestor has no ownership traversal or observable internal phase for them.
+
+Alternative considered: enlist ancestor mutations into a descendant transaction. Rejected because that would require a distributed transaction across Domain registries; simple rejection preserves atomicity without cross-Domain journals or savepoints.
 
 ## Risks / Trade-offs
 

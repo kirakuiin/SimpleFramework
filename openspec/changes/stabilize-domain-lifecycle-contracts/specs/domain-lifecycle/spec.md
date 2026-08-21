@@ -30,6 +30,8 @@ A top-level lifecycle component registration MUST establish a transaction that i
 ### Requirement: Lifecycle binding runs under component initialization guards
 `AbstractDomain` MUST treat externally implemented `BindDomain` and component `Initialize` callbacks as one guarded component-initialization phase. During either callback, queries, nested new-key registration, and owner-aware System event registration SHALL remain available, while Domain teardown, commands, local event dispatch or unregistration, relationship mutation, and replacement of an existing component key MUST be rejected before mutation or execution. Every caller-facing `IUnRegister` returned by `AbstractDomain` SHALL enforce the same event-unregistration guard through both `UnRegister()` and `Dispose()` without consuming the handle when validation fails; framework-owned rollback and cleanup SHALL retain an internal unguarded cancellation path.
 
+For a standard ownership tree, an ancestor `AbstractDomain` MUST also reject component or local-event registration, local-event unregistration, Command or event execution, and relationship mutation while an owned standard descendant is initializing itself, binding a component, or initializing a component. These operations SHALL fail before committing effects outside the descendant's initialization transaction or Domain creation boundary. During owned descendant component release, ancestor component/event registration, Command/event/Query execution, and relationship mutation SHALL follow the same rejection rules as the releasing Domain itself. Event unregistration and initialization-time Query availability SHALL retain their existing phase behavior. Arbitrary custom and lookup-only Domain relationships remain outside this internal preflight.
+
 #### Scenario: Binding callback attempts runtime-only operations
 - **WHEN** a direct custom System or Model attempts Domain teardown, command or event execution, event unregistration, relationship mutation, or existing-key replacement from `BindDomain`
 - **THEN** the operation throws before changing Domain state, executing user behavior, changing relationships, or releasing the existing component
@@ -46,10 +48,22 @@ A top-level lifecycle component registration MUST establish a transaction that i
 - **WHEN** a handle cancellation was rejected during component binding or initialization and the caller retries after the Domain returns to its active phase
 - **THEN** the retry cancels the subscription normally
 
+#### Scenario: Descendant initializer targets an ancestor Domain
+- **WHEN** an owned standard descendant component initializer attempts component/event registration, event unregistration, Command/event execution, or relationship mutation through an ancestor Domain
+- **THEN** the ancestor rejects every operation before side effects can escape the descendant initialization transaction
+
+#### Scenario: Owned Domain initialization targets its ancestor
+- **WHEN** a standard Domain establishes ownership during its own initialization and then attempts a guarded framework mutation in the ancestor
+- **THEN** the ancestor rejects the mutation until the owned Domain reaches its active state
+
+#### Scenario: Descendant release targets an ancestor Domain
+- **WHEN** an owned standard descendant component release callback attempts component/event registration, Command/event/Query execution, or relationship mutation through an ancestor Domain
+- **THEN** the ancestor applies the same release-phase guard before executing or committing framework effects
+
 ## ADDED Requirements
 
 ### Requirement: Synchronous Domain execution cannot interleave terminal teardown
-`AbstractDomain` MUST track the complete synchronous execution scope of every public local-event, Command, and Query entry point, including the full invocation of overridable `ExecuteCommand` and `ExecuteQuery` methods. `UnInitialize()` MUST reject terminal teardown while any such scope is active. Replacement of an existing System or Model lifecycle key MUST also be rejected before releasing the old component, while new-key registration and Utility replacement SHALL remain allowed. Nested event, Command, and Query execution SHALL remain allowed, and execution depth MUST be restored in a `finally` path when user code throws. This guard defines synchronous call-stack behavior only and SHALL NOT extend to asynchronous work started by user code.
+`AbstractDomain` MUST track the complete synchronous execution scope of every public local-event, Command, and Query entry point, including the full invocation of overridable `ExecuteCommand` and `ExecuteQuery` methods. `UnInitialize()` MUST reject terminal teardown while any such scope is active. Replacement of an existing System or Model lifecycle key and mutation of standard ownership relationships MUST also be rejected when the target Domain or any standard Domain descendant it owns is synchronously executing. These operations SHALL fail before release or topology mutation, while new-key registration and Utility replacement remain allowed. Nested event, Command, and Query execution SHALL remain allowed, and execution depth MUST be restored in a `finally` path when user code throws. This guard defines synchronous call-stack behavior only and SHALL NOT extend to asynchronous work started by user code.
 
 #### Scenario: Event listener attempts Domain teardown
 - **WHEN** a local-event listener calls `UnInitialize()` during synchronous dispatch
@@ -74,6 +88,14 @@ A top-level lifecycle component registration MUST establish a transaction that i
 #### Scenario: Command or Query replaces a lifecycle component
 - **WHEN** synchronous Command or Query execution attempts to replace an existing System or Model key
 - **THEN** replacement is rejected before the old lifecycle component is unpublished or released
+
+#### Scenario: Owned descendant execution replaces an ancestor lifecycle component
+- **WHEN** a standard owned descendant synchronously executes a Command or Query and attempts to replace an existing System or Model key in its ancestor Domain
+- **THEN** ancestor replacement is rejected before releasing the inherited component retained by descendant execution
+
+#### Scenario: Executing descendant detaches before ancestor replacement
+- **WHEN** an owned standard descendant attempts to remove or reparent itself during synchronous execution before replacing an ancestor lifecycle component
+- **THEN** relationship mutation is rejected, the ownership tree remains intact, and the later replacement is still rejected
 
 #### Scenario: Execution registers a new key or replaces a Utility
 - **WHEN** synchronous execution registers an absent System or Model key, or replaces an existing Utility key
@@ -130,7 +152,7 @@ A local event subscription registered through a System's event-registration capa
 - **THEN** the operation throws without removing the parent's strong ownership reference or changing the child's parent reference
 
 ### Requirement: Standard owned Domain trees preflight terminal teardown
-Before an `AbstractDomain` changes state or releases any resource, it MUST recursively verify that every owned descendant implemented by `AbstractDomain` can begin terminal teardown. Execution, component initialization, or component release in any such descendant MUST reject the top-level teardown before mutation, preserving every standard Domain state, parent reference, and strong ownership relationship. Once preflight succeeds, callback failures raised during actual cleanup SHALL retain the existing exhaustive aggregation behavior. Arbitrary custom `IDomain` implementations without framework-internal lifecycle state remain best-effort during parent cleanup.
+Before an `AbstractDomain` changes state or releases any resource, it MUST recursively verify that every owned descendant implemented by `AbstractDomain` can begin terminal teardown. Execution, component initialization, or component release in the target or any such descendant MUST reject the top-level teardown before mutation, preserving every standard Domain state, parent reference, and strong ownership relationship. A repeated request after terminal Domain cleanup has entered `Uninitializing` or `Disposed` SHALL remain an idempotent no-op; active component replacement/release is not terminal Domain cleanup and MUST reject instead of silently returning. Once preflight succeeds, callback failures raised during actual cleanup SHALL retain the existing exhaustive aggregation behavior. Arbitrary custom `IDomain` implementations without framework-internal lifecycle state remain best-effort during parent cleanup.
 
 #### Scenario: Descendant is executing
 - **WHEN** an owned child or deeper standard descendant is synchronously executing an Event, Command, or Query and requests ancestor teardown
@@ -143,6 +165,10 @@ Before an `AbstractDomain` changes state or releases any resource, it MUST recur
 #### Scenario: Descendant cleanup is still running
 - **WHEN** an owned standard descendant has entered terminal cleanup and one of its cleanup callbacks requests ancestor teardown
 - **THEN** ancestor teardown is rejected until that descendant reaches its disposed state, so the callback cannot continue against released ancestor resources
+
+#### Scenario: Active component release requests Domain teardown
+- **WHEN** a component cleanup callback runs during active replacement or rollback and calls its own Domain's `UnInitialize`
+- **THEN** teardown is rejected rather than reported as a successful no-op, and the active replacement or rollback retains control of cleanup
 
 #### Scenario: Cleanup callback fails after successful preflight
 - **WHEN** the standard owned tree passes preflight and a later component or Domain cleanup callback throws
