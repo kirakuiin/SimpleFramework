@@ -118,7 +118,7 @@ hp.Value = 80;
 
 - `Disposable` / `DisposableGroup`：资源释放和组合管理。
 - `SerializeUtil`：基于 `System.Text.Json` 的对象和字节序列化。
-- `Logging`：日志级别、处理器、格式器、控制台和文件输出。
+- `Logging`：日志级别、处理器、格式器、控制台和文件输出；单个处理器发送失败不会影响调用方或其他处理器，显式配置与处理器释放失败仍会抛出。
 - `FileUtil`、`TimeUtil`、`TaskUtil`、`MiscUtil`：文件、时间、异步等待和类型哈希等工具。
 - 列表、枚举器、随机数和字符串扩展方法。
 

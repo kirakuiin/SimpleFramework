@@ -327,7 +327,9 @@ System 在 `Release` 前先取消发布并取消其自动事件订阅；Model �
 | 组件初始化失败 | 原异常继续抛出 | 候选会被清理，且不能再次注册 |
 | 多个释放步骤失败 | `AggregateException` | 按 `InnerExceptions` 顺序检查全部失败 |
 
-框架不会自动记录这些节点的日志，也不会吞掉生命周期异常。需要日志时，可使用 `SimpleFramework.Utility.Logging` 在具体 Domain 的 `OnActivated`、`OnDeactivating` 或业务组件中记录；框架级可选诊断入口留待后续扩展。
+框架使用名为 `Framework` 的 Logger 自动记录关键生命周期。每个 Domain 在进程内获得递增的诊断编号，日志以“完整类型名#编号”关联同一实例；Domain 激活和释放、Model/System 注册与释放、子 Domain 挂载、移除和分离记录为 Info，生命周期失败记录为 Error 并附带原始异常。Utility、查找、Command、Query、Event 和业务消息内容不会自动记录，以免污染业务数据或增加消息热路径开销。
+
+日志只作为诊断旁路，不改变生命周期异常、清理顺序或聚合结果。`Logger` 会隔离单个处理器的格式化或输出异常并继续调用后续处理器；`BasicConfig`、处理器创建、移除和释放等显式资源管理失败仍会向调用方传播。应用可以通过 `SimpleFramework.Utility.Logging.BasicConfig` 配置根输出，也可以取得 `Logging.GetLogger("Framework")` 单独配置框架日志。
 
 ## 线程边界
 

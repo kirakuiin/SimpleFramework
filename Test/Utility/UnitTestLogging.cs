@@ -119,6 +119,53 @@ public class TestLogging
     }
 
     [Test]
+    public void TestEmitFailureDoesNotEscapeOrStopLaterHandlers()
+    {
+        var logger = Logger.GetLogger($"EmitFailureTest-{Guid.NewGuid()}");
+        var records = new List<LogRecord>();
+        logger.AddHandler(new ActionHandler(_ => throw new InvalidOperationException("emit failure")));
+        logger.AddHandler(new ListHandler(records));
+
+        Assert.DoesNotThrow(() => logger.Error("still delivered"));
+
+        Assert.That(records, Has.Count.EqualTo(1));
+        Assert.That(records[0].Message, Is.EqualTo("still delivered"));
+        logger.ClearHandlers();
+    }
+
+    [Test]
+    public void TestConsoleFormatterFailureIsIsolatedAndRestoresColor()
+    {
+        var logger = Logger.GetLogger($"ConsoleFailureTest-{Guid.NewGuid()}");
+        var records = new List<LogRecord>();
+        var originalColor = Console.ForegroundColor;
+        logger.AddHandler(new ConsoleHandler { Formatter = new ThrowingFormatter() });
+        logger.AddHandler(new ListHandler(records));
+
+        Assert.DoesNotThrow(() => logger.Warning("console failure"));
+
+        Assert.That(Console.ForegroundColor, Is.EqualTo(originalColor));
+        Assert.That(records, Has.Count.EqualTo(1));
+        logger.ClearHandlers();
+    }
+
+    [Test]
+    public void TestDisposedFileHandlerFailureIsIsolated()
+    {
+        var logger = Logger.GetLogger($"FileFailureTest-{Guid.NewGuid()}");
+        var records = new List<LogRecord>();
+        var fileHandler = new FileHandler(_testLogFile);
+        logger.AddHandler(fileHandler);
+        logger.AddHandler(new ListHandler(records));
+        fileHandler.Dispose();
+
+        Assert.DoesNotThrow(() => logger.Info("file failure"));
+
+        Assert.That(records, Has.Count.EqualTo(1));
+        logger.ClearHandlers();
+    }
+
+    [Test]
     public void TestClearHandlersWaitsForInFlightEmitBeforeDispose()
     {
         var logger = Logger.GetLogger($"LifetimeTest-{Guid.NewGuid()}");
@@ -238,6 +285,12 @@ public class TestLogging
         public void Dispose()
         {
         }
+    }
+
+    /// <summary>模拟日志格式化失败。</summary>
+    private sealed class ThrowingFormatter : IFormatter
+    {
+        public string Format(LogRecord record) => throw new InvalidOperationException("format failure");
     }
 
     private sealed class BlockingHandler(

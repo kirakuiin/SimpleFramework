@@ -30,6 +30,7 @@ public interface IHandler : IDisposable
     /// 处理一条日志记录。
     /// </summary>
     /// <param name="record">日志记录。</param>
+    /// <remarks>实现可以报告发送失败；通过 <see cref="Logger"/> 分发时，该异常会被隔离且不会阻止其他处理器。</remarks>
     void Emit(LogRecord record);
 
     /// <summary>
@@ -132,17 +133,23 @@ public class ConsoleHandler : IHandler
         if (record.Level < Level) return;
 
         var originalColor = Console.ForegroundColor;
-        Console.ForegroundColor = record.Level switch
+        try
         {
-            LogLevel.Debug => ConsoleColor.Gray,
-            LogLevel.Info => ConsoleColor.White,
-            LogLevel.Warning => ConsoleColor.Yellow,
-            LogLevel.Error or LogLevel.Critical => ConsoleColor.Red,
-            _ => originalColor
-        };
+            Console.ForegroundColor = record.Level switch
+            {
+                LogLevel.Debug => ConsoleColor.Gray,
+                LogLevel.Info => ConsoleColor.White,
+                LogLevel.Warning => ConsoleColor.Yellow,
+                LogLevel.Error or LogLevel.Critical => ConsoleColor.Red,
+                _ => originalColor
+            };
 
-        Console.WriteLine(Formatter.Format(record));
-        Console.ForegroundColor = originalColor;
+            Console.WriteLine(Formatter.Format(record));
+        }
+        finally
+        {
+            Console.ForegroundColor = originalColor;
+        }
     }
 
     /// <inheritdoc/>
@@ -371,6 +378,7 @@ public class Logger
     /// </summary>
     /// <param name="message">日志消息。</param>
     /// <param name="exception">关联异常。</param>
+    /// <remarks>单个日志处理器发送失败不会向调用方传播，也不会阻止后续处理器。</remarks>
     public void Debug(string message, Exception? exception = null)
     {
         Log(LogLevel.Debug, message, exception);
@@ -381,6 +389,7 @@ public class Logger
     /// </summary>
     /// <param name="message">日志消息。</param>
     /// <param name="exception">关联异常。</param>
+    /// <remarks>单个日志处理器发送失败不会向调用方传播，也不会阻止后续处理器。</remarks>
     public void Info(string message, Exception? exception = null)
     {
         Log(LogLevel.Info, message, exception);
@@ -391,6 +400,7 @@ public class Logger
     /// </summary>
     /// <param name="message">日志消息。</param>
     /// <param name="exception">关联异常。</param>
+    /// <remarks>单个日志处理器发送失败不会向调用方传播，也不会阻止后续处理器。</remarks>
     public void Warning(string message, Exception? exception = null)
     {
         Log(LogLevel.Warning, message, exception);
@@ -401,6 +411,7 @@ public class Logger
     /// </summary>
     /// <param name="message">日志消息。</param>
     /// <param name="exception">关联异常。</param>
+    /// <remarks>单个日志处理器发送失败不会向调用方传播，也不会阻止后续处理器。</remarks>
     public void Error(string message, Exception? exception = null)
     {
         Log(LogLevel.Error, message, exception);
@@ -411,6 +422,7 @@ public class Logger
     /// </summary>
     /// <param name="message">日志消息。</param>
     /// <param name="exception">关联异常。</param>
+    /// <remarks>单个日志处理器发送失败不会向调用方传播，也不会阻止后续处理器。</remarks>
     public void Critical(string message, Exception? exception = null)
     {
         Log(LogLevel.Critical, message, exception);
@@ -431,7 +443,14 @@ public class Logger
             var record = new LogRecord(DateTime.Now, level, message, Name, exception);
             foreach (var handler in _handlers.ToArray())
             {
-                handler.Emit(record);
+                try
+                {
+                    handler.Emit(record);
+                }
+                catch (Exception)
+                {
+                    // 日志是诊断旁路，单个输出目标失败不能改变调用方行为或阻止其他目标。
+                }
             }
         }
     }

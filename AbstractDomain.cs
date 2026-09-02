@@ -9,6 +9,8 @@ namespace SimpleFramework;
 /// </summary>
 public abstract class AbstractDomain : IDomain, IDisposable
 {
+    private static long _nextDiagnosticId;
+
     private readonly DomainComponentRegistry _registry = new();
     private readonly DomainEventBus _events = new();
     private readonly List<AbstractDomain> _children = new();
@@ -17,6 +19,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
     private readonly List<DomainComponentEntry> _activeModels = new();
     private readonly List<DomainComponentEntry> _activeSystems = new();
     private readonly object _ownershipToken = new();
+    private readonly long _diagnosticId = Interlocked.Increment(ref _nextDiagnosticId);
 
     private AbstractDomain? _parent;
     private DomainTreeState _treeState = new() { IsTransitioning = true };
@@ -116,6 +119,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
             child._parent = this;
             _children.Add(child);
             child.AdoptTreeState(parentState);
+            Log.Info($"Domain {DiagnosticName} 已挂载子 Domain {child.DiagnosticName}。");
         }
         finally
         {
@@ -142,6 +146,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
             _children.Remove(child);
             child._parent = null;
             child.AdoptTreeState(newState);
+            Log.Info($"Domain {DiagnosticName} 已移除子 Domain {child.DiagnosticName}。");
         }
         finally
         {
@@ -236,6 +241,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
         var oldState = _treeState;
         oldState.IsTransitioning = true;
         var detachedStates = new List<DomainTreeState>(_children.Count);
+        var detachedChildren = new List<AbstractDomain>(_children.Count);
         var failures = new List<Exception>();
         try
         {
@@ -245,14 +251,25 @@ public abstract class AbstractDomain : IDomain, IDisposable
                 detachedStates.Add(state);
                 child._parent = null;
                 child.AdoptTreeState(state);
+                detachedChildren.Add(child);
             }
             _children.Clear();
             DisposeNode(includeChildren: false, failures);
         }
         finally
         {
-            oldState.IsTransitioning = false;
-            foreach (var state in detachedStates) state.IsTransitioning = false;
+            try
+            {
+                foreach (var child in detachedChildren)
+                {
+                    Log.Info($"Domain {DiagnosticName} 已分离子 Domain {child.DiagnosticName}。");
+                }
+            }
+            finally
+            {
+                oldState.IsTransitioning = false;
+                foreach (var state in detachedStates) state.IsTransitioning = false;
+            }
         }
         ThrowFailures(failures);
     }
@@ -301,6 +318,9 @@ public abstract class AbstractDomain : IDomain, IDisposable
             {
                 throw new InvalidOperationException("OnActivated 必须让 Domain 保持 Active，不能在创建流程中释放或改变其终态。");
             }
+            _treeState.IsTransitioning = true;
+            try { Log.Info($"Domain {DiagnosticName} 已激活。"); }
+            finally { _treeState.IsTransitioning = false; }
             return;
         }
         catch (Exception exception)
@@ -316,6 +336,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
             DisposeNode(includeChildren: true, failures);
             _treeState.IsTransitioning = false;
         }
+        Log.Error($"Domain {DiagnosticName} 启动失败。", startupFailure);
         ThrowFailures(failures);
     }
 
@@ -400,15 +421,21 @@ public abstract class AbstractDomain : IDomain, IDisposable
             context.MarkReady();
             _registry.Publish(entry);
             (entry.Category == ComponentCategory.Model ? _activeModels : _activeSystems).Add(entry);
+            Log.Info($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 注册完成。");
         }
         catch (Exception initializationFailure)
         {
+            Log.Error($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 初始化失败。", initializationFailure);
             var failures = new List<Exception>();
             AddFailure(failures, initializationFailure);
             context.Invalidate();
             CancelOwnedResources(entry, failures);
-            try { ReleaseLifecycle(entry); }
-            catch (Exception releaseFailure) { AddFailure(failures, releaseFailure); }
+            try { ReleaseLifecycleAndLog(entry); }
+            catch (Exception releaseFailure)
+            {
+                Log.Error($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 失败清理时释放失败。", releaseFailure);
+                AddFailure(failures, releaseFailure);
+            }
             _registry.Forget(entry);
             ThrowFailures(failures);
         }
@@ -422,7 +449,11 @@ public abstract class AbstractDomain : IDomain, IDisposable
             for (var index = _children.Count - 1; index >= 0; index--)
             {
                 try { _children[index].DisposeNode(includeChildren: true, failures); }
-                catch (Exception exception) { AddFailure(failures, exception); }
+                catch (Exception exception)
+                {
+                    Log.Error($"Domain {DiagnosticName} 释放子 Domain {_children[index].DiagnosticName} 失败。", exception);
+                    AddFailure(failures, exception);
+                }
             }
         }
 
@@ -431,15 +462,23 @@ public abstract class AbstractDomain : IDomain, IDisposable
         foreach (var entry in _activeModels) entry.Context?.Invalidate();
 
         try { OnDeactivating(); }
-        catch (Exception exception) { AddFailure(failures, exception); }
+        catch (Exception exception)
+        {
+            Log.Error($"Domain {DiagnosticName} 的停用回调失败。", exception);
+            AddFailure(failures, exception);
+        }
 
         for (var index = _activeSystems.Count - 1; index >= 0; index--)
         {
             var entry = _activeSystems[index];
             _registry.Unpublish(entry);
             CancelOwnedResources(entry, failures);
-            try { ReleaseLifecycle(entry); }
-            catch (Exception exception) { AddFailure(failures, exception); }
+            try { ReleaseLifecycleAndLog(entry); }
+            catch (Exception exception)
+            {
+                Log.Error($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 释放失败。", exception);
+                AddFailure(failures, exception);
+            }
             _registry.Forget(entry);
         }
         _activeSystems.Clear();
@@ -448,8 +487,12 @@ public abstract class AbstractDomain : IDomain, IDisposable
         {
             var entry = _activeModels[index];
             _registry.Unpublish(entry);
-            try { ReleaseLifecycle(entry); }
-            catch (Exception exception) { AddFailure(failures, exception); }
+            try { ReleaseLifecycleAndLog(entry); }
+            catch (Exception exception)
+            {
+                Log.Error($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 释放失败。", exception);
+                AddFailure(failures, exception);
+            }
             _registry.Forget(entry);
         }
         _activeModels.Clear();
@@ -458,16 +501,28 @@ public abstract class AbstractDomain : IDomain, IDisposable
         {
             if (entry.InitializationStarted || entry.Published) continue;
             try { LifecycleOwnershipTracker.CancelUntouched(entry.Instance, _ownershipToken); }
-            catch (Exception exception) { AddFailure(failures, exception); }
+            catch (Exception exception)
+            {
+                Log.Error($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 取消生命周期预留失败。", exception);
+                AddFailure(failures, exception);
+            }
             _registry.Forget(entry);
         }
         _configuredSystems.Clear();
         _configuredModels.Clear();
 
         try { _events.Clear(); }
-        catch (Exception exception) { AddFailure(failures, exception); }
+        catch (Exception exception)
+        {
+            Log.Error($"Domain {DiagnosticName} 清理本地事件失败。", exception);
+            AddFailure(failures, exception);
+        }
         try { _registry.ClearUtilities(); }
-        catch (Exception exception) { AddFailure(failures, exception); }
+        catch (Exception exception)
+        {
+            Log.Error($"Domain {DiagnosticName} 清理 Utility 引用失败。", exception);
+            AddFailure(failures, exception);
+        }
 
         try
         {
@@ -476,14 +531,23 @@ public abstract class AbstractDomain : IDomain, IDisposable
             foreach (var child in _children) child._parent = null;
             _children.Clear();
         }
-        catch (Exception exception) { AddFailure(failures, exception); }
+        catch (Exception exception)
+        {
+            Log.Error($"Domain {DiagnosticName} 解除树关系失败。", exception);
+            AddFailure(failures, exception);
+        }
         finally
         {
             _registry.ClearAllCandidates();
             _state = DomainState.Disposed;
             try { OnTerminalDisposed(); }
-            catch (Exception exception) { AddFailure(failures, exception); }
+            catch (Exception exception)
+            {
+                Log.Error($"Domain {DiagnosticName} 的终态清理回调失败。", exception);
+                AddFailure(failures, exception);
+            }
         }
+        Log.Info($"Domain {DiagnosticName} 已释放。");
     }
 
     private protected virtual void OnTerminalDisposed() { }
@@ -502,14 +566,31 @@ public abstract class AbstractDomain : IDomain, IDisposable
         }
     }
 
-    private static void CancelOwnedResources(DomainComponentEntry entry, List<Exception> failures)
+    private void ReleaseLifecycleAndLog(DomainComponentEntry entry)
+    {
+        ReleaseLifecycle(entry);
+        Log.Info($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 释放完成。");
+    }
+
+    private void CancelOwnedResources(DomainComponentEntry entry, List<Exception> failures)
     {
         foreach (var token in entry.TakeOwnedResourcesReverse())
         {
             try { token.UnRegister(); }
-            catch (Exception exception) { AddFailure(failures, exception); }
+            catch (Exception exception)
+            {
+                Log.Error($"Domain {DiagnosticName} 的 {ComponentDescription(entry)} 取消归属资源失败。", exception);
+                AddFailure(failures, exception);
+            }
         }
     }
+
+    private string DiagnosticName => $"{TypeName(GetType())}#{_diagnosticId}";
+
+    private static string ComponentDescription(DomainComponentEntry entry) =>
+        $"{entry.Category}（契约 {TypeName(entry.Key)}，实现 {TypeName(entry.Instance.GetType())}）";
+
+    private static string TypeName(Type type) => type.FullName ?? type.Name;
 
     private T ResolvePublic<T>(ComponentCategory category) where T : class
     {
