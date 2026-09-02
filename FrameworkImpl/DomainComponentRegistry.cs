@@ -1,311 +1,194 @@
 using System.Runtime.CompilerServices;
-using System.Text;
 
 namespace SimpleFramework.FrameworkImpl;
 
+/// <summary>Domain 注册表中的组件分类。</summary>
 internal enum ComponentCategory
 {
-    System,
+    /// <summary>由 Domain 管理生命周期的 Model。</summary>
     Model,
+
+    /// <summary>由 Domain 管理生命周期的 System。</summary>
+    System,
+
+    /// <summary>由调用方管理生命周期的 Utility。</summary>
     Utility
 }
 
+/// <summary>描述一个组件的分类、唯一注册键、实例及生命周期资源。</summary>
 internal sealed class DomainComponentEntry
 {
     private readonly List<IUnRegister> _ownedResources = new();
 
-    public DomainComponentEntry(ComponentCategory category, Type primaryKey, object instance)
+    public DomainComponentEntry(ComponentCategory category, Type key, object instance)
     {
         Category = category;
-        PrimaryKey = primaryKey;
+        Key = key;
         Instance = instance;
     }
 
     public ComponentCategory Category { get; }
-
-    public Type PrimaryKey { get; }
-
+    public Type Key { get; }
     public object Instance { get; }
+    public bool InitializationStarted { get; set; }
+    public bool Published { get; set; }
+    public ComponentContextBase? Context { get; set; }
 
-    public bool IsLifecycleManaged => Category is ComponentCategory.System or ComponentCategory.Model;
+    public void Own(IUnRegister token) => _ownedResources.Add(token);
 
-    public bool IsActive { get; set; }
-
-    public void OwnResource(IUnRegister resource)
+    public IEnumerable<IUnRegister> TakeOwnedResourcesReverse()
     {
-        ArgumentNullException.ThrowIfNull(resource);
-        _ownedResources.Add(resource);
-    }
-
-    public IReadOnlyList<IUnRegister> TakeOwnedResourcesReverse()
-    {
-        var resources = _ownedResources.ToArray();
-        Array.Reverse(resources);
+        for (var index = _ownedResources.Count - 1; index >= 0; index--) yield return _ownedResources[index];
         _ownedResources.Clear();
-        return resources;
     }
 }
 
+/// <summary>维护单个 Domain 的三类组件候选、精确键和可赋值解析。</summary>
 internal sealed class DomainComponentRegistry
 {
-    private readonly Dictionary<ComponentCategory, Dictionary<Type, DomainComponentEntry>> _entries = new()
+    private readonly Dictionary<ComponentCategory, Dictionary<Type, DomainComponentEntry>> _published = new()
     {
-        [ComponentCategory.System] = new(),
         [ComponentCategory.Model] = new(),
+        [ComponentCategory.System] = new(),
         [ComponentCategory.Utility] = new()
     };
 
-    private readonly Dictionary<object, DomainComponentEntry> _entriesByInstance =
-        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<object, DomainComponentEntry> _allByInstance = new(ReferenceEqualityComparer.Instance);
 
-    private readonly Dictionary<ComponentCategory, List<DomainComponentEntry>> _activationOrder = new()
+    public IReadOnlyCollection<DomainComponentEntry> Published(ComponentCategory category) => _published[category].Values;
+
+    public bool HasKey(ComponentCategory category, Type key) =>
+        _published[category].ContainsKey(key) || _allByInstance.Values.Any(entry => entry.Category == category && entry.Key == key);
+
+    public DomainComponentEntry AddCandidate(ComponentCategory category, Type key, object instance)
     {
-        [ComponentCategory.System] = new(),
-        [ComponentCategory.Model] = new()
-    };
-
-    public object OwnershipToken { get; } = new();
-
-    public DomainComponentEntry? GetExact(ComponentCategory category, Type key)
-    {
-        return _entries[category].GetValueOrDefault(key);
-    }
-
-    public DomainComponentEntry? GetByInstance(object instance)
-    {
-        return _entriesByInstance.GetValueOrDefault(instance);
-    }
-
-    public bool IsPublished(DomainComponentEntry entry)
-    {
-        return _entries[entry.Category].TryGetValue(entry.PrimaryKey, out var current) &&
-               ReferenceEquals(current, entry);
-    }
-
-    public object? Resolve(ComponentCategory category, Type requestedType)
-    {
-        if (_entries[category].TryGetValue(requestedType, out var exact))
+        if (HasKey(category, key))
         {
-            return exact.Instance;
+            throw new InvalidOperationException($"{category} 注册键 {key.FullName} 已存在，v2 不支持替换。");
         }
 
-        var candidates = _entries[category].Values
-            .Where(entry => requestedType.IsInstanceOfType(entry.Instance))
-            .ToArray();
-
-        return candidates.Length switch
-        {
-            0 => null,
-            1 => candidates[0].Instance,
-            _ => throw new AmbiguousComponentException(
-                requestedType,
-                candidates.Select(entry => entry.PrimaryKey),
-                category.ToString())
-        };
-    }
-
-    public DomainComponentEntry Publish(ComponentCategory category, Type key, object instance)
-    {
-        ArgumentNullException.ThrowIfNull(key);
-        ArgumentNullException.ThrowIfNull(instance);
-
-        if (!key.IsInstanceOfType(instance))
-        {
-            throw new ArgumentException(
-                $"Component {instance.GetType().FullName} is not assignable to registration key {key.FullName}.",
-                nameof(instance));
-        }
-
-        if (_entries[category].ContainsKey(key))
-        {
-            throw new InvalidOperationException($"{category} key is already registered: {key.FullName}.");
-        }
-
-        if (_entriesByInstance.TryGetValue(instance, out var existing))
+        if (_allByInstance.TryGetValue(instance, out var existing))
         {
             throw new InvalidOperationException(
-                $"Component instance is already registered as {existing.Category} with key " +
-                $"{existing.PrimaryKey.FullName}.");
+                $"实例 {instance.GetType().FullName} 已在当前 Domain 以 {existing.Category}/{existing.Key.FullName} 注册，不能重复注册或跨分类注册。");
         }
 
         var entry = new DomainComponentEntry(category, key, instance);
-        _entries[category].Add(key, entry);
-        _entriesByInstance.Add(instance, entry);
+        _allByInstance.Add(instance, entry);
         return entry;
     }
 
-    public void MarkActive(DomainComponentEntry entry)
+    public void Publish(DomainComponentEntry entry)
     {
-        if (!entry.IsLifecycleManaged || entry.IsActive)
-        {
-            return;
-        }
-
-        entry.IsActive = true;
-        _activationOrder[entry.Category].Add(entry);
+        _published[entry.Category].Add(entry.Key, entry);
+        entry.Published = true;
     }
 
     public void Unpublish(DomainComponentEntry entry)
     {
-        if (_entries[entry.Category].TryGetValue(entry.PrimaryKey, out var current) &&
-            ReferenceEquals(current, entry))
-        {
-            _entries[entry.Category].Remove(entry.PrimaryKey);
-        }
-
-        if (_entriesByInstance.TryGetValue(entry.Instance, out current) && ReferenceEquals(current, entry))
-        {
-            _entriesByInstance.Remove(entry.Instance);
-        }
-
-        if (entry.IsLifecycleManaged)
-        {
-            _activationOrder[entry.Category].Remove(entry);
-            entry.IsActive = false;
-        }
+        if (entry.Published) _published[entry.Category].Remove(entry.Key);
+        entry.Published = false;
     }
 
-    public IReadOnlyList<DomainComponentEntry> GetReverseActivationOrder(ComponentCategory category)
+    public void Forget(DomainComponentEntry entry)
     {
-        var result = _activationOrder[category].ToArray();
-        Array.Reverse(result);
-        return result;
+        Unpublish(entry);
+        _allByInstance.Remove(entry.Instance);
+    }
+
+    public bool TryResolveLocal(ComponentCategory category, Type requested, string domainName, out object? instance)
+    {
+        var entries = _published[category];
+        if (entries.TryGetValue(requested, out var exact))
+        {
+            instance = exact.Instance;
+            return true;
+        }
+
+        DomainComponentEntry? match = null;
+        List<DomainComponentEntry>? candidates = null;
+        foreach (var entry in entries.Values)
+        {
+            if (!requested.IsInstanceOfType(entry.Instance)) continue;
+            if (match is null)
+            {
+                match = entry;
+                continue;
+            }
+
+            candidates ??= [match];
+            candidates.Add(entry);
+        }
+
+        if (candidates is not null)
+        {
+            var details = string.Join(", ", candidates.Select(entry =>
+                $"键={entry.Key.FullName}, 运行时类型={entry.Instance.GetType().FullName}"));
+            throw new InvalidOperationException(
+                $"Domain {domainName} 解析 {category} {requested.FullName} 时存在多个本地候选：{details}。");
+        }
+
+        instance = match?.Instance;
+        return match is not null;
     }
 
     public void ClearUtilities()
     {
-        foreach (var entry in _entries[ComponentCategory.Utility].Values.ToArray())
-        {
-            Unpublish(entry);
-        }
+        foreach (var entry in _published[ComponentCategory.Utility].Values.ToArray()) Forget(entry);
     }
 
-    public void Clear()
+    public void ClearAllCandidates()
     {
-        foreach (var entries in _entries.Values)
-        {
-            entries.Clear();
-        }
-
-        _entriesByInstance.Clear();
-        foreach (var entries in _activationOrder.Values)
-        {
-            entries.Clear();
-        }
-    }
-
-    public override string ToString()
-    {
-        var builder = new StringBuilder();
-        AppendCategory(builder, ComponentCategory.System);
-        AppendCategory(builder, ComponentCategory.Model);
-        AppendCategory(builder, ComponentCategory.Utility);
-        return builder.ToString();
-    }
-
-    private void AppendCategory(StringBuilder builder, ComponentCategory category)
-    {
-        var entries = _entries[category].Values.ToArray();
-        if (entries.Length == 0)
-        {
-            return;
-        }
-
-        builder.AppendLine($"----{category}----");
-        foreach (var entry in entries)
-        {
-            builder.AppendLine(entry.Instance.GetType().Name);
-        }
+        _allByInstance.Clear();
+        foreach (var category in _published.Values) category.Clear();
     }
 }
 
+/// <summary>跨 Domain 跟踪 Model/System 实例的一次性独占生命周期所有权。</summary>
 internal static class LifecycleOwnershipTracker
 {
-    private static readonly ConditionalWeakTable<object, LifecycleOwnership> Records = new();
+    private static readonly ConditionalWeakTable<object, Ownership> Records = new();
 
-    public static void Reserve(
-        object instance,
-        object ownerToken,
-        ComponentCategory category,
-        Type primaryKey)
+    public static void Reserve(object instance, object owner, ComponentCategory category, Type key)
     {
         if (Records.TryGetValue(instance, out var existing))
         {
             throw new InvalidOperationException(
-                $"Lifecycle component {instance.GetType().FullName} cannot be registered as {category} " +
-                $"with key {primaryKey.FullName}; it is already {existing.State.ToString().ToLowerInvariant()} " +
-                $"as {existing.Category} with key {existing.PrimaryKey.FullName}.");
+                $"生命周期实例 {instance.GetType().FullName} 已被 {existing.Category}/{existing.Key.FullName} 消耗，不能再次注册。");
         }
 
-        Records.Add(instance, new LifecycleOwnership(ownerToken, category, primaryKey));
+        Records.Add(instance, new Ownership(owner, category, key));
     }
 
-    public static void BeginInitialization(object instance, object ownerToken)
+    public static void Begin(object instance, object owner)
     {
-        GetOwnedRecord(instance, ownerToken).State = LifecycleOwnershipState.Initializing;
+        var record = Get(instance, owner);
+        record.Started = true;
     }
 
-    public static void CancelReservation(object instance, object ownerToken)
+    public static void CancelUntouched(object instance, object owner)
     {
-        var record = GetOwnedRecord(instance, ownerToken);
-        if (record.State != LifecycleOwnershipState.Reserved)
-        {
-            throw new InvalidOperationException("Only an uninitialized lifecycle reservation can be cancelled.");
-        }
-
+        var record = Get(instance, owner);
+        if (record.Started) return;
         Records.Remove(instance);
     }
 
-    public static void MarkActive(object instance, object ownerToken)
+    private static Ownership Get(object instance, object owner)
     {
-        GetOwnedRecord(instance, ownerToken).State = LifecycleOwnershipState.Active;
-    }
-
-    public static void BeginRelease(object instance, object ownerToken)
-    {
-        GetOwnedRecord(instance, ownerToken).State = LifecycleOwnershipState.Releasing;
-    }
-
-    public static void MarkReleased(object instance, object ownerToken)
-    {
-        GetOwnedRecord(instance, ownerToken).State = LifecycleOwnershipState.Released;
-    }
-
-    private static LifecycleOwnership GetOwnedRecord(object instance, object ownerToken)
-    {
-        if (!Records.TryGetValue(instance, out var record) || !ReferenceEquals(record.OwnerToken, ownerToken))
+        if (!Records.TryGetValue(instance, out var record) || !ReferenceEquals(record.Owner, owner))
         {
-            throw new InvalidOperationException(
-                $"Lifecycle component {instance.GetType().FullName} is not owned by this Domain.");
+            throw new InvalidOperationException("生命周期实例不属于当前 Domain。");
         }
 
         return record;
     }
 
-    private sealed class LifecycleOwnership
+    /// <summary>记录生命周期实例的唯一所有者、分类、键及是否已经开始初始化。</summary>
+    private sealed class Ownership(object owner, ComponentCategory category, Type key)
     {
-        public LifecycleOwnership(object ownerToken, ComponentCategory category, Type primaryKey)
-        {
-            OwnerToken = ownerToken;
-            Category = category;
-            PrimaryKey = primaryKey;
-        }
-
-        public object OwnerToken { get; }
-
-        public ComponentCategory Category { get; }
-
-        public Type PrimaryKey { get; }
-
-        public LifecycleOwnershipState State { get; set; } = LifecycleOwnershipState.Reserved;
-    }
-
-    private enum LifecycleOwnershipState
-    {
-        Reserved,
-        Initializing,
-        Active,
-        Releasing,
-        Released
+        public object Owner { get; } = owner;
+        public ComponentCategory Category { get; } = category;
+        public Type Key { get; } = key;
+        public bool Started { get; set; }
     }
 }

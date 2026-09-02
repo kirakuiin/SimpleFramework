@@ -8,84 +8,61 @@ SimpleFramework 是一个面向 C#/.NET 的轻量级游戏与应用框架集合�
 
 ### 核心框架
 
-根项目 `SimpleFramework` 提供一套轻量的应用组织方式：
+根项目 `SimpleFramework` 提供一套外部简洁、内部可靠的 Domain 组织方式：
 
-- `Domain`：顶层作用域与组件容器，负责注册和查找 `System`、`Model`、`Utility`，支持父子 Domain 与生命周期管理。
-- `System`：跨模型或跨实体的业务逻辑单元，初始化后可访问模型、工具和事件。
-- `Model`：单一职责的数据模型，适合保存可被系统和命令读取或修改的状态。
-- `Utility`：底层能力组件，例如网络传输、配置工具或序列化工具。
-- `Command` / `Query`：将写操作和读操作分离，命令可带返回值，查询用于只读访问。
-- `EventBus`：支持域内事件和全局事件注册、取消注册、分发。
-- `BindableProperty<T>`：可监听变化的属性封装，支持注册时立即通知和无通知赋值。
-
-Core 使用示例:
+- `Domain`：分类保存 `System`、`Model`、`Utility`，支持可动态挂载/移除的强引用树。
+- `System` / `Model`：业务接口只继承分类标记，实现类通过独立生命周期接口或抽象基类接入 Domain。
+- `Utility`：由调用方管理、可跨 Domain 共享的底层能力。
+- `Command` / `Query`：接收不可逃逸的同步栈 Context，避免保存或异步滥用执行上下文。
+- 本地事件：按注册顺序同步分发，写时复制订阅数组，System 订阅自动随生命周期取消。
+- `BindableProperty<T>`：可监听变化的属性封装。
 
 ```csharp
-// 简单项目可以继续使用单例 Domain
-var domain = GameDomain.Instance;
-
-// 测试、多会话或工具场景可以显式创建独立 Domain
-var sessionDomain = GameDomain.Create();
-sessionDomain.UnInitialize();
-```
-
-`Domain` 不是线程安全的，应由同一线程（通常是游戏或应用主线程）创建、访问和释放。后台任务可以执行独立计算或 I/O，但在注册组件、发送事件、执行命令/查询或释放 Domain 前，应由应用自己的调度机制回到 Domain 所属线程。
-
-组件注册与必需查找：
-
-```csharp
-domain.RegisterUtilityAs<ITimeUtility>(new TimeUtility());
-var timeUtility = domain.RequireUtility<ITimeUtility>();
-```
-
-Domain 将 `System`、`Model`、`Utility` 分开存储。每个本地实例只有一个分类和一个主键；`Register*As<T>` 中的 `T` 是唯一精确主键，不是附加别名。没有精确键时，查找会返回唯一的可赋值实例，因此接口服务仍可直接从具体注册解析：
-
-```csharp
-public interface IPlayer : IModel { }
-
-domain.RegisterModel(new Player());
-var player = domain.RequireModel<IPlayer>();
-```
-
-存在多个可赋值候选项时会抛出 `AmbiguousComponentException`；可使用显式服务主键消除歧义。System/Model 实例由一个 Domain 独占、首次绑定后不能重新绑定或复用；Utility 始终由调用方管理，可以跨 Domain 共享。Command/Query 的 Domain 上下文则在每次执行前注入，可以依次重复使用；同一框架基类实例尚未返回时不能重叠执行。
-
-Domain 事件默认只在当前 Domain 内触发，不会沿父子 Domain 自动传播。跨 Domain 事件应显式使用 `EventBus.Global`。System 通过 `this.RegisterEvent(...)` 创建的本地订阅由该 System 生命周期自动取消，也可使用返回的句柄提前取消；直接调用 `domain.RegisterEvent(...)` 的订阅属于 Domain，不会因无关 System 替换而取消。
-
-需要构造参数的 Domain 使用 `AbstractConfiguredDomain<TConfiguration>`，并通过非公开构造函数和静态工厂保证调用方只能取得完整初始化的实例：
-
-```csharp
-public sealed record MatchOptions(int Seed);
-
-public sealed class MatchDomain : AbstractConfiguredDomain<MatchOptions>
+public sealed class GameDomain : AbstractDomain
 {
-    private MatchDomain(MatchOptions options)
-        : base(options)
-    {
-    }
+    private GameDomain() { }
+    public static GameDomain Create() => CreateDomain(() => new GameDomain());
 
-    public static MatchDomain Create(MatchOptions options)
+    protected override void Configure()
     {
-        var domain = new MatchDomain(options);
-        domain.Initialize();
-        return domain;
-    }
-
-    protected override void Init()
-    {
-        RegisterModel(new MatchModel(Configuration.Seed));
+        RegisterModel<IPlayerModel>(new PlayerModel());
+        RegisterSystem(new PlayerSystem());
+        RegisterUtility<IJsonUtility>(new JsonUtility());
     }
 }
+
+using var domain = GameDomain.Create();
+var byInterface = domain.GetModel<IPlayerModel>();
+var byConcrete = domain.GetModel<PlayerModel>(); // 同一实例
 ```
 
-`Configuration` 只在 `Init()` 及同步组件初始化期间可用，之后框架会释放内部引用。Domain 或组件初始化失败时会自动清理已经开始生命周期的资源；清理回调必须支持部分初始化状态。初始化与清理同时失败时会通过 `AggregateException` 保留两类错误。
+启动先收集全部注册，再按 Model、System 的分类顺序初始化。Active 后可注册不存在的新键；不支持替换或移除已启动组件。查找按“本地精确键、本地唯一可赋值对象、父域”解析，歧义明确抛出。
 
-`UnInitialize()` 是终止操作。释放后的实例只保留查找和诊断能力，不能重新注册、发送事件或执行命令/查询。完整约束见 [`docs/domain-lifecycle.md`](docs/domain-lifecycle.md)，从旧注册语义升级请参阅 [`docs/migration-v1.1.md`](docs/migration-v1.1.md)。
+子 Domain 先独立创建，再动态挂载：
+
+```csharp
+var battle = BattleDomain.Create(matchId);
+domain.AddChild(battle);
+domain.RemoveChild(battle); // 不释放，battle 仍为 Active 根
+```
+
+`Dispose()` 释放仍附着的完整子树；`DisposeSelfOnly()` 保留并分离直接子树。Domain 采用单线程协作模型，Command、Query、事件及整棵树的结构/生命周期守卫都是同步的。
+
+核心文档：
+
+- [Domain v2 完整使用与生命周期](docs/domain-lifecycle.md)
+- [BindableProperty 使用说明](docs/bindable-property.md)
 
 属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例。通知同步完成期间禁止写入不同的新值，以避免监听器观察到逆序的旧通知；相同值仍按比较器作为无操作处理:
 
 ```csharp
 var hp = new BindableProperty<int>(100)
     .WithComparer((prev, current) => Math.Abs(prev - current) < 5);
+
+using var token = hp.Register((previous, current) =>
+    Console.WriteLine($"HP: {previous} -> {current}"));
+
+hp.Value = 80;
 ```
 
 ### ECS
@@ -201,27 +178,32 @@ dotnet test .\Test\Test.csproj
 ### Domain、Model、Command、Query
 
 ```csharp
-public class GameDomain : AbstractDomain<GameDomain>
+public sealed class GameDomain : AbstractDomain
 {
-    protected override void Init()
+    private GameDomain() { }
+    public static GameDomain Create() => CreateDomain(() => new GameDomain());
+
+    protected override void Configure()
     {
         RegisterModel(new PlayerModel());
         RegisterUtility(new IniConfigTool());
     }
 }
 
-public class PlayerModel : AbstractModel
+public sealed class PlayerModel : AbstractModel
 {
     public BindableProperty<int> Hp { get; } = new(100);
     protected override void OnInitialize() {}
 }
 
-public class ReadHpQuery : AbstractQuery<int>
+public sealed class ReadHpQuery : AbstractQuery<int>
 {
-    protected override int OnExecute() => this.RequireModel<PlayerModel>().Hp.Value;
+    protected override int OnExecute(QueryContext context) =>
+        context.GetModel<PlayerModel>().Hp.Value;
 }
 
-var hp = GameDomain.Instance.SendQuery(new ReadHpQuery());
+using var game = GameDomain.Create();
+var hp = game.SendQuery(new ReadHpQuery());
 ```
 
 ### ECS 查询

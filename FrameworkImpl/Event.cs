@@ -1,223 +1,145 @@
-﻿namespace SimpleFramework.FrameworkImpl;
+namespace SimpleFramework.FrameworkImpl;
 
-/// <summary>
-/// 代表一个基本的事件。
-/// </summary>
+/// <summary>不携带参数的可订阅事件抽象。</summary>
 public interface IEvent
 {
-    /// <summary>
-    /// 注册一个回调。
-    /// </summary>
-    /// <param name="onEvent">回调</param>
-    /// <returns><see cref="IUnRegister"/></returns>
+    /// <summary>注册回调。</summary>
     IUnRegister Register(Action onEvent);
 }
 
-/// <summary>
-/// 能够响应一个全局事件。
-/// </summary>
-/// <typeparam name="T"></typeparam>
-public interface IOnGlobalEvent<in T>
-{
-    /// <summary>
-    /// 处理收到的全局事件。
-    /// </summary>
-    /// <param name="event">事件数据。</param>
-    void OnEvent(T @event);
-}
-
-/// <summary>
-/// 可配置的自定义取消注册。
-/// </summary>
-public class CustomUnRegister : IUnRegister
+/// <summary>使用一次性回调实现的幂等取消注册句柄。</summary>
+public sealed class CustomUnRegister : IUnRegister
 {
     private Action? _onUnRegister;
 
-    /// <summary>
-    /// 使用指定的取消注册回调创建实例。
-    /// </summary>
-    /// <param name="onUnRegister">首次取消注册时执行的回调。</param>
-    public CustomUnRegister(Action onUnRegister)
-    {
-        _onUnRegister = onUnRegister;
-    }
-    
-    /// <summary>
-    /// 执行取消注册回调；无论回调是否抛出异常，该回调都最多执行一次。
-    /// </summary>
-    /// <exception cref="Exception">取消注册回调抛出的原始异常会直接传播。</exception>
+    /// <summary>创建句柄。</summary>
+    public CustomUnRegister(Action onUnRegister) =>
+        _onUnRegister = onUnRegister ?? throw new ArgumentNullException(nameof(onUnRegister));
+
+    /// <inheritdoc />
     public void UnRegister()
     {
-        var onUnRegister = _onUnRegister;
+        var callback = _onUnRegister;
         _onUnRegister = null;
-        onUnRegister?.Invoke();
+        callback?.Invoke();
     }
 }
 
-/// <summary>
-/// 单参数的基本事件类型。
-/// </summary>
-public class Event<T> : IEvent
+/// <summary>使用写时复制监听器数组的单参数事件。</summary>
+public sealed class Event<T> : IEvent
 {
-    private readonly List<Action<T>> _listeners = new();
+    /// <summary>为一次具体注册提供独立身份，避免相等委托之间的 token 误注销。</summary>
+    private sealed class Subscription(Action<T> handler)
+    {
+        public Action<T> Handler { get; } = handler;
+    }
 
-    /// <summary>
-    /// 获取当前是否没有监听器。
-    /// </summary>
-    public bool IsEmpty => _listeners.Count == 0;
-    
-    /// <summary>
-    /// 注册一个单参数的回调。
-    /// </summary>
-    /// <param name="onEvent"><see cref="Action{T}"/></param>
-    /// <returns><see cref="IUnRegister"/></returns>
+    private Subscription[] _subscriptions = [];
+
+    /// <summary>事件是否没有监听器。</summary>
+    public bool IsEmpty => _subscriptions.Length == 0;
+
+    /// <summary>按注册顺序添加监听器。</summary>
     public IUnRegister Register(Action<T> onEvent)
     {
-        _listeners.Add(onEvent);
-        return new CustomUnRegister(() => UnRegister(onEvent));
+        ArgumentNullException.ThrowIfNull(onEvent);
+        var subscription = new Subscription(onEvent);
+        var previous = _subscriptions;
+        var next = new Subscription[previous.Length + 1];
+        Array.Copy(previous, next, previous.Length);
+        next[^1] = subscription;
+        _subscriptions = next;
+        return new CustomUnRegister(() => UnRegister(subscription));
     }
-    
-    /// <summary>
-    /// 取消一个注册。
-    /// </summary>
-    /// <param name="onEvent"><see cref="Action"/></param>
-    public void UnRegister(Action<T> onEvent) => _listeners.Remove(onEvent);
-    
-    /// <summary>
-    /// 触发事件。
-    /// </summary>
-    /// <param name="t"></param>
-    public void Trigger(T t)
+
+    /// <summary>移除第一次匹配的监听器。</summary>
+    public void UnRegister(Action<T> onEvent)
     {
-        foreach (var listener in _listeners.ToArray())
+        ArgumentNullException.ThrowIfNull(onEvent);
+        var subscriptions = _subscriptions;
+        for (var index = 0; index < subscriptions.Length; index++)
         {
-            listener.Invoke(t);
+            if (subscriptions[index].Handler != onEvent) continue;
+            RemoveAt(subscriptions, index);
+            return;
         }
     }
 
-    IUnRegister IEvent.Register(Action onEvent)
+    /// <summary>捕获当前数组并同步触发；首次异常会立即停止分发。</summary>
+    public void Trigger(T value)
     {
-        return Register(Replacement);
-        void Replacement(T _) => onEvent();
+        var snapshot = _subscriptions;
+        for (var index = 0; index < snapshot.Length; index++) snapshot[index].Handler(value);
+    }
+
+    IUnRegister IEvent.Register(Action onEvent) => Register(_ => onEvent());
+
+    private void UnRegister(Subscription subscription)
+    {
+        var subscriptions = _subscriptions;
+        for (var index = 0; index < subscriptions.Length; index++)
+        {
+            if (!ReferenceEquals(subscriptions[index], subscription)) continue;
+            RemoveAt(subscriptions, index);
+            return;
+        }
+    }
+
+    private void RemoveAt(Subscription[] subscriptions, int index)
+    {
+        if (subscriptions.Length == 1)
+        {
+            _subscriptions = [];
+            return;
+        }
+
+        var next = new Subscription[subscriptions.Length - 1];
+        if (index > 0) Array.Copy(subscriptions, 0, next, 0, index);
+        if (index < subscriptions.Length - 1)
+        {
+            Array.Copy(subscriptions, index + 1, next, index, subscriptions.Length - index - 1);
+        }
+        _subscriptions = next;
     }
 }
 
-/// <summary>
-/// 事件容器。
-/// </summary>
-public class EventContainer
+/// <summary>保存单个 Domain 的本地事件，并在 Domain 清理后使旧 token 安全失效。</summary>
+internal sealed class DomainEventBus
 {
-    private readonly Dictionary<Type, IEvent> _events = new();
-    
-    /// <summary>
-    /// 添加新的事件。
-    /// </summary>
-    /// <typeparam name="T">要创建的事件类型。</typeparam>
-    /// <returns>新建并存储的事件。</returns>
-    public T AddEvent<T>() where T : IEvent, new()
+    private readonly Dictionary<Type, object> _events = new();
+    private bool _cleared;
+
+    public IUnRegister Register<T>(Action<T> handler)
     {
-        var @event = new T();
-        _events.Add(typeof(T), @event);
-        return @event;
-    }
+        ArgumentNullException.ThrowIfNull(handler);
+        if (_cleared) throw new InvalidOperationException("Domain 事件容器已清理。");
+        if (!_events.TryGetValue(typeof(T), out var value))
+        {
+            value = new Event<T>();
+            _events.Add(typeof(T), value);
+        }
 
-    /// <summary>
-    /// 查询事件。
-    /// </summary>
-    /// <typeparam name="T">事件类型</typeparam>
-    /// <returns>已注册的事件；不存在时返回 <c>default(T)</c>，仅当 <typeparamref name="T"/> 为引用类型时该值为 <see langword="null"/>。</returns>
-    [return: System.Diagnostics.CodeAnalysis.MaybeNull]
-    public T GetEvent<T>() where T : IEvent =>
-        _events.TryGetValue(typeof(T), out var @event) && @event is T result ? result : default;
-
-    /// <summary>
-    /// 移除事件。
-    /// </summary>
-    /// <typeparam name="T">事件类型</typeparam>
-    public void RemoveEvent<T>() where T : IEvent =>
-        _events.Remove(typeof(T));
-
-    /// <summary>
-    /// 清空事件。
-    /// </summary>
-    public void Clear() => _events.Clear();
-}
-
-/// <summary>
-/// 事件总线，充当订阅者和发布者的中间件。
-/// </summary>
-public class EventBus
-{
-    private readonly EventContainer _container = new();
-    
-    /// <summary>
-    /// 全局事件
-    /// </summary>
-    public static readonly EventBus Global = new();
-
-    /// <summary>
-    /// 发送事件，将会触发事件。
-    /// </summary>
-    /// <typeparam name="T"></typeparam>
-    public void Send<T>() where T : new() =>
-        _container.GetEvent<Event<T>>()?.Trigger(new T());
-    
-    /// <summary>
-    /// 发送事件，将会触发事件。
-    /// </summary>
-    /// <param name="e">事件对象</param>
-    /// <typeparam name="T"></typeparam>
-    public void Send<T>(T e) => _container.GetEvent<Event<T>>()?.Trigger(e);
-
-    /// <summary>
-    /// 查询事件是否被注册过。
-    /// </summary>
-    /// <typeparam name="T"></typeparam>
-    /// <returns>如果注册过返回<c>true</c></returns>
-    public bool Contains<T>() => _container.GetEvent<Event<T>>() != null;
-
-    /// <summary>
-    /// 注册事件
-    /// </summary>
-    /// <param name="onEvent"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
-    public IUnRegister Register<T>(Action<T> onEvent)
-    {
-        var @event = _container.GetEvent<Event<T>>() ?? _container.AddEvent<Event<T>>();
-        @event.Register(onEvent);
+        var @event = (Event<T>)value;
+        var inner = @event.Register(handler);
         return new CustomUnRegister(() =>
         {
-            @event.UnRegister(onEvent);
-            if (@event.IsEmpty && ReferenceEquals(_container.GetEvent<Event<T>>(), @event))
+            inner.UnRegister();
+            if (!_cleared && @event.IsEmpty && _events.TryGetValue(typeof(T), out var current) && ReferenceEquals(current, @event))
             {
-                _container.RemoveEvent<Event<T>>();
+                _events.Remove(typeof(T));
             }
         });
     }
 
-    /// <summary>
-    /// 取消注册
-    /// </summary>
-    /// <param name="onEvent"></param>
-    /// <typeparam name="T"></typeparam>
-    public void UnRegister<T>(Action<T> onEvent)
+    public void Send<T>(T message)
     {
-        var @event = _container.GetEvent<Event<T>>();
-        if (@event == null)
-        {
-            return;
-        }
-
-        @event.UnRegister(onEvent);
-        if (@event.IsEmpty)
-        {
-            _container.RemoveEvent<Event<T>>();
-        }
+        if (_cleared) throw new InvalidOperationException("Domain 事件容器已清理。");
+        if (_events.TryGetValue(typeof(T), out var value)) ((Event<T>)value).Trigger(message);
     }
 
-    /// <summary>
-    /// 清空事件。
-    /// </summary>
-    public void Clear() => _container.Clear();
+    public void Clear()
+    {
+        _cleared = true;
+        _events.Clear();
+    }
 }

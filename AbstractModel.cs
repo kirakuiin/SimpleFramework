@@ -1,39 +1,30 @@
-using SimpleFramework.FrameworkImpl;
 namespace SimpleFramework;
 
-/// <summary>
-/// 实现了模型大部分功能的抽象类。
-/// </summary>
-public abstract class AbstractModel : IModel
+/// <summary>可选的 Model 生命周期基类，安全保存框架 Context。</summary>
+public abstract class AbstractModel : IModelLifecycle
 {
-    private IDomain? _domain;
+    private IModelContext? _context;
 
-    /// <inheritdoc />
-    public IDomain Domain => _domain ?? throw new InvalidOperationException("Model has not been bound to a Domain.");
+    /// <summary>获取当前 Model Context；初始化前或释放完成后访问会失败。</summary>
+    protected IModelContext Context => _context ?? throw new InvalidOperationException("Model Context 当前不可用。");
 
-    /// <inheritdoc />
-    void IDomainBindable.BindDomain(IDomain domain)
+    void IModelLifecycle.Initialize(IModelContext context)
     {
-        ArgumentNullException.ThrowIfNull(domain);
-        if (_domain is not null)
-        {
-            throw new InvalidOperationException("Model is already bound to a Domain.");
-        }
-
-        _domain = domain;
+        ArgumentNullException.ThrowIfNull(context);
+        if (_context is not null) throw new InvalidOperationException("Model 不能重复初始化。");
+        _context = context;
+        OnInitialize();
     }
 
-    void IConstructable.Initialize() => OnInitialize();
+    void IModelLifecycle.Release()
+    {
+        try { OnRelease(); }
+        finally { _context = null; }
+    }
 
-    void IConstructable.UnInitialize() => OnUninitialize();
-
-    /// <summary>
-    /// 初始化模型。
-    /// </summary>
+    /// <summary>初始化 Model。</summary>
     protected abstract void OnInitialize();
 
-    /// <summary>
-    /// 释放模型持有的资源；<see cref="OnInitialize"/> 抛出后也可能调用，因此必须能处理部分初始化状态。
-    /// </summary>
-    protected virtual void OnUninitialize() { }
+    /// <summary>释放 Model 自身资源；初始化部分失败后也可能调用。</summary>
+    protected virtual void OnRelease() { }
 }

@@ -21,7 +21,12 @@ public class TestSourceTextQuality
             .Where(path => !IsUnder(path, root, "bin"))
             .Where(path => !IsUnder(path, root, "obj"))
             .Where(path => !IsUnder(path, root, "Test"));
-        var publicDocs = new[] { Path.Combine(root, "docs", "domain-lifecycle.md") };
+        var publicDocs = new[]
+        {
+            Path.Combine(root, "README.md"),
+            Path.Combine(root, "docs", "domain-lifecycle.md"),
+            Path.Combine(root, "docs", "bindable-property.md")
+        };
         var files = sourceFiles.Concat(publicDocs).ToArray();
 
         var failures = files

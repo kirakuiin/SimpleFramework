@@ -1,40 +1,30 @@
-using SimpleFramework.FrameworkImpl;
-
 namespace SimpleFramework;
 
-/// <summary>
-/// 实现了系统大部分功能的抽象类。
-/// </summary>
-public abstract class AbstractSystem : ISystem
+/// <summary>可选的 System 生命周期基类，安全保存框架 Context。</summary>
+public abstract class AbstractSystem : ISystemLifecycle
 {
-    private IDomain? _domain;
+    private ISystemContext? _context;
 
-    /// <inheritdoc />
-    public IDomain Domain => _domain ?? throw new InvalidOperationException("System has not been bound to a Domain.");
+    /// <summary>获取当前 System Context；初始化前或释放完成后访问会失败。</summary>
+    protected ISystemContext Context => _context ?? throw new InvalidOperationException("System Context 当前不可用。");
 
-    /// <inheritdoc />
-    void IDomainBindable.BindDomain(IDomain domain)
+    void ISystemLifecycle.Initialize(ISystemContext context)
     {
-        ArgumentNullException.ThrowIfNull(domain);
-        if (_domain is not null)
-        {
-            throw new InvalidOperationException("System is already bound to a Domain.");
-        }
-
-        _domain = domain;
+        ArgumentNullException.ThrowIfNull(context);
+        if (_context is not null) throw new InvalidOperationException("System 不能重复初始化。");
+        _context = context;
+        OnInitialize();
     }
 
-    void IConstructable.Initialize() => OnInitialize();
+    void ISystemLifecycle.Release()
+    {
+        try { OnRelease(); }
+        finally { _context = null; }
+    }
 
-    void IConstructable.UnInitialize() => OnUninitialize();
-
-    /// <summary>
-    /// 初始化系统。
-    /// </summary>
+    /// <summary>初始化 System。</summary>
     protected abstract void OnInitialize();
 
-    /// <summary>
-    /// 释放系统持有的资源；<see cref="OnInitialize"/> 抛出后也可能调用，因此必须能处理部分初始化状态。
-    /// </summary>
-    protected virtual void OnUninitialize() { }
+    /// <summary>释放 System 自身资源；初始化部分失败后也可能调用。</summary>
+    protected virtual void OnRelease() { }
 }
