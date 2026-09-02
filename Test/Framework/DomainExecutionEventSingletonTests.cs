@@ -44,6 +44,46 @@ public sealed class DomainExecutionEventSingletonTests
     }
 
     [Test]
+    public void LookupExtensionsSupportDirectLifecycleImplementationsAndPreserveContextRules()
+    {
+        var utility = new ClockUtility();
+        ProbeModel? model = null;
+        ProbeSystem? system = null;
+        model = new ProbeModel(_context =>
+        {
+            Assert.That(model!.GetUtility<IClockUtility>(), Is.SameAs(utility));
+            Assert.That(model!.TryGetUtility<IClockUtility>(out var found), Is.True);
+            Assert.That(found, Is.SameAs(utility));
+        });
+        system = new ProbeSystem(_context =>
+        {
+            Assert.That(system!.GetModel<IPlayerModel>(), Is.SameAs(model));
+            Assert.That(system!.TryGetModel<IPlayerModel>(out var foundModel), Is.True);
+            Assert.That(foundModel, Is.SameAs(model));
+            Assert.That(system!.GetUtility<IClockUtility>(), Is.SameAs(utility));
+            Assert.That(system!.TryGetUtility<IClockUtility>(out var foundUtility), Is.True);
+            Assert.That(foundUtility, Is.SameAs(utility));
+            Assert.Throws<InvalidOperationException>(() => system!.GetSystem<IPlayerSystem>());
+            Assert.Throws<InvalidOperationException>(() => system!.TryGetSystem<IPlayerSystem>(out _));
+        });
+
+        var domain = ProbeDomain.Create(configure: value =>
+        {
+            value.RegisterUtility<IClockUtility>(utility);
+            value.RegisterModel(model!);
+            value.RegisterSystem(system!);
+        });
+
+        Assert.That(system!.GetSystem<IPlayerSystem>(), Is.SameAs(system));
+        Assert.That(system.TryGetSystem<IPlayerSystem>(out var foundSystem), Is.True);
+        Assert.That(foundSystem, Is.SameAs(system));
+
+        domain.Dispose();
+        Assert.Throws<InvalidOperationException>(() => model!.GetUtility<IClockUtility>());
+        Assert.Throws<InvalidOperationException>(() => system.GetModel<IPlayerModel>());
+    }
+
+    [Test]
     public void CommandAndQueryContextsHaveDistinctCapabilitiesAndAreByRefLike()
     {
         Assert.That(typeof(CommandContext).IsByRefLike, Is.True);

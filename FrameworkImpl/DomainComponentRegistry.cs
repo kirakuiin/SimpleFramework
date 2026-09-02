@@ -166,6 +166,28 @@ internal static class LifecycleOwnershipTracker
         record.Started = true;
     }
 
+    public static void AttachContext(object instance, object owner, ComponentContextBase context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        Get(instance, owner).Context = context;
+    }
+
+    public static ComponentContextBase GetContext(object instance)
+    {
+        if (!Records.TryGetValue(instance, out var record) || record.Context is null)
+        {
+            throw new InvalidOperationException($"生命周期组件 {instance.GetType().FullName} 当前没有可用的 Domain Context。");
+        }
+
+        return record.Context;
+    }
+
+    public static void DetachContext(object instance, ComponentContextBase? context)
+    {
+        if (context is null || !Records.TryGetValue(instance, out var record)) return;
+        if (ReferenceEquals(record.Context, context)) record.Context = null;
+    }
+
     public static void CancelUntouched(object instance, object owner)
     {
         var record = Get(instance, owner);
@@ -190,5 +212,6 @@ internal static class LifecycleOwnershipTracker
         public ComponentCategory Category { get; } = category;
         public Type Key { get; } = key;
         public bool Started { get; set; }
+        public ComponentContextBase? Context { get; set; }
     }
 }

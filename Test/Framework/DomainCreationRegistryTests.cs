@@ -247,14 +247,17 @@ public sealed class DomainCreationRegistryTests
     public void DirectAndAbstractLifecycleImplementationsAreBothSupported()
     {
         var direct = new ProbeModel();
+        var derivedModel = new DerivedModel();
         var derived = new DerivedSystem();
         using var domain = ProbeDomain.Create(configure: value =>
         {
             value.RegisterUtility(new ClockUtility());
-            value.RegisterModel(direct);
+            value.RegisterModel<IPlayerModel>(direct);
+            value.RegisterModel(derivedModel);
             value.RegisterSystem(derived);
         });
         Assert.That(direct.InitializeCount, Is.EqualTo(1));
+        Assert.That(derivedModel.InitializeCount, Is.EqualTo(1));
         Assert.That(derived.InitializeCount, Is.EqualTo(1));
     }
 

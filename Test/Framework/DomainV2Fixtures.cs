@@ -108,7 +108,7 @@ internal sealed class DerivedModel : AbstractModel, IPlayerModel
     public int ReleaseCount { get; private set; }
     protected override void OnInitialize()
     {
-        _ = Context.TryGetUtility<IClockUtility>(out _);
+        _ = this.TryGetUtility<IClockUtility>(out _);
         InitializeCount++;
     }
     protected override void OnRelease() => ReleaseCount++;
@@ -121,7 +121,7 @@ internal sealed class DerivedSystem : AbstractSystem, IPlayerSystem
     public int ReleaseCount { get; private set; }
     protected override void OnInitialize()
     {
-        _ = Context.GetModel<IPlayerModel>();
+        _ = this.GetModel<IPlayerModel>();
         InitializeCount++;
     }
     protected override void OnRelease() => ReleaseCount++;

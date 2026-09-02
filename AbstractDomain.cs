@@ -394,6 +394,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
 
         try
         {
+            LifecycleOwnershipTracker.AttachContext(entry.Instance, _ownershipToken, context);
             if (entry.Instance is IModelLifecycle model) model.Initialize((IModelContext)context);
             else ((ISystemLifecycle)entry.Instance).Initialize((ISystemContext)context);
             context.MarkReady();
@@ -490,8 +491,15 @@ public abstract class AbstractDomain : IDomain, IDisposable
     private static void ReleaseLifecycle(DomainComponentEntry entry)
     {
         entry.Context?.Invalidate();
-        if (entry.Instance is IModelLifecycle model) model.Release();
-        else ((ISystemLifecycle)entry.Instance).Release();
+        try
+        {
+            if (entry.Instance is IModelLifecycle model) model.Release();
+            else ((ISystemLifecycle)entry.Instance).Release();
+        }
+        finally
+        {
+            LifecycleOwnershipTracker.DetachContext(entry.Instance, entry.Context);
+        }
     }
 
     private static void CancelOwnedResources(DomainComponentEntry entry, List<Exception> failures)
