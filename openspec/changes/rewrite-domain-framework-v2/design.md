@@ -52,9 +52,11 @@ SimpleFramework 当前 Domain 核心同时承担组件容器、父子关系、�
 
 Starting 中 Register 只收集；Active 中 Register 对全新键执行单次原子初始化，失败只清理当前候选。多次调用不构成事务；多组件动态功能应建立独立 Domain，Create 成功后再 AddChild。
 
+这里的原子性只覆盖候选的注册、生命周期和自身拥有的订阅。已有组件的注册关系和生命周期不受候选失败影响；候选通过其他对象业务方法产生的状态修改或订阅，仍由对应对象或调用方负责恢复，不会按初始化调用栈自动纳入候选清理。
+
 ### 4. 显式工厂与严格单例
 
-普通 Domain 直接继承非泛型 `AbstractDomain`，使用私有构造和具体类的一行静态 Create。受保护 `CreateDomain(Func<TDomain>)` 在调用工厂前建立创建保护，并统一执行启动和失败清理。它支持带参构造，不使用 `new()` 约束或反射，也不允许外部直接获得半成品。
+普通 Domain 直接继承非泛型 `AbstractDomain`，使用私有构造和具体类的一行静态 Create。受保护 `CreateDomain(Func<TDomain>)` 先调用工厂取得新候选，再统一执行启动和失败清理；候选以 Starting 状态和已开启的树转换标记开始启动。它支持带参构造，不使用 `new()` 约束或反射，也不允许外部直接获得半成品。严格单例的 Creating 重入保护由 GetOrCreateInstance 在调用工厂前建立。
 
 `AbstractSingletonDomain<T>` 不提供多例 Create。具体类通过 `GetOrCreateInstance(factory)` 实现 Instance，并继承 GetInstance/DestroyInstance。每个单例类型维护 `Empty -> Creating -> Published` 静态状态：Creating 中再次 Instance 或 DestroyInstance 抛出；GetInstance 返回 null；只有 OnActivated 成功后发布；失败回到 Empty；Published 实例直接 Dispose 后清除引用并允许未来创建新实例。
 
@@ -74,11 +76,11 @@ Domain 只有 `Starting / Active / Disposing / Disposed` 四个内部状态。St
 
 AddChild 要求父子 Active、两树空闲、子为根、无重复和环路；成功后建立强双向关系，并将整棵子树切换到父 TreeState。RemoveChild 只接受直接子节点，完成断链和子树新 TreeState 替换，不释放或回调。移动必须显式 RemoveChild 后 AddChild；它只影响未来查找，不刷新组件已经缓存的父依赖。
 
-不公开 Children。调用者保存 AddChild 返回引用。Dispose 默认释放当前附着子树；DisposeSelfOnly 先脱离直接子树并在整个父释放调用结束前保持临时转换锁，随后只释放当前 Domain。异常路径在 finally 中维护父子双向一致。
+不公开 Children。AddChild 返回 void，调用者保存独立 Create 得到的子域引用。Dispose 默认释放当前附着子树；DisposeSelfOnly 先脱离直接子树并在整个父释放调用结束前保持临时转换锁，随后只释放当前 Domain。临时锁约束组件注册、树结构、释放和 Domain 消息执行，不会使保留子域的 Context 失效或冻结其全部业务能力。异常路径在 finally 中维护父子双向一致。
 
 ### 7. Context 与同步 CQ
 
-IModelContext 在 Initializing 只允许 Utility 查找，Ready 后增加本地 SendEvent。ISystemContext 在 Initializing 只允许 Model/Utility 查找和自动归属的本地事件注册，Ready 后增加 System 查找和 SendEvent。释放开始后两类 Context 均 Invalid。
+IModelContext 在 Initializing 只允许 Utility 查找，Ready 后增加本地 SendEvent。ISystemContext 在 Initializing 只允许 Model/Utility 查找和自动归属的本地事件注册，Ready 后增加 System 查找和 SendEvent。所属 Domain 进入 Disposing 后，其两类 Context 均 Invalid；其他尚未释放 Domain 的 Context 不随之失效。当前 Context 查找与 System 订阅只校验自身阶段，事件发送另外经过 Domain 的转换守卫，因此已有 System 在树转换期间仍可能新增自身订阅。
 
 同步 Command/Query 不使用堆分配接口 Context，而使用构造函数 internal 的 `readonly ref struct CommandContext` 和 `QueryContext`。ICommand、ICommand<TResult>、IQuery<TResult> 的 Execute 直接接收相应具体 Context。ref struct 从类型系统阻止装箱、普通字段保存、异步捕获和跨 await 使用，因此不需要执行后失效对象或池化。
 
@@ -91,6 +93,8 @@ Domain 事件不沿树传播，也没有 EventBus.Global。应用如需共享总
 每个事件类型保存当前不可变监听器数组。注册和注销创建新数组；发送只捕获数组引用并顺序遍历，不产生快照分配。因而发送期间的注册或注销不改变当前轮，但影响下一轮。首个监听器异常 fail-fast，finally 恢复 ExecutionDepth。
 
 System 通过 Context 注册的 token 自动归属该 System；系统释放时在 Release 前取消。外部通过 IDomain 注册的 token 由调用者持有。所有 token 幂等；System 或 Domain 已清理后再次注销无操作且不抛出。
+
+订阅不会因为由另一个候选的 Initialize 间接触发，或回调捕获了该候选，就转移到候选名下。候选动态注册失败时，仅自动取消候选自身拥有的订阅；若业务需要撤销通过已有 System 创建的订阅，应取得 token 并在候选 Release 中取消。
 
 ### 9. 确定且穷尽的释放
 

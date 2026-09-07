@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using SimpleFramework.FrameworkImpl;
 
 namespace SimpleFramework;
@@ -15,7 +16,7 @@ public static class ModelLookupExtensions
         GetContext(self).GetUtility<T>();
 
     /// <summary>通过当前 Model Context 尝试获取 Utility。</summary>
-    public static bool TryGetUtility<T>(this IModelLifecycle self, out T? utility) where T : class, IUtility =>
+    public static bool TryGetUtility<T>(this IModelLifecycle self, [NotNullWhen(true)] out T? utility) where T : class, IUtility =>
         GetContext(self).TryGetUtility(out utility);
 
     private static IModelContext GetContext(IModelLifecycle model)
@@ -39,7 +40,7 @@ public static class SystemLookupExtensions
         GetContext(self).GetModel<T>();
 
     /// <summary>通过当前 System Context 尝试获取 Model。</summary>
-    public static bool TryGetModel<T>(this ISystemLifecycle self, out T? model) where T : class, IModel =>
+    public static bool TryGetModel<T>(this ISystemLifecycle self, [NotNullWhen(true)] out T? model) where T : class, IModel =>
         GetContext(self).TryGetModel(out model);
 
     /// <summary>通过当前 System Context 获取 System。</summary>
@@ -47,7 +48,7 @@ public static class SystemLookupExtensions
         GetContext(self).GetSystem<T>();
 
     /// <summary>通过当前 System Context 尝试获取 System。</summary>
-    public static bool TryGetSystem<T>(this ISystemLifecycle self, out T? system) where T : class, ISystem =>
+    public static bool TryGetSystem<T>(this ISystemLifecycle self, [NotNullWhen(true)] out T? system) where T : class, ISystem =>
         GetContext(self).TryGetSystem(out system);
 
     /// <summary>通过当前 System Context 获取 Utility。</summary>
@@ -55,7 +56,7 @@ public static class SystemLookupExtensions
         GetContext(self).GetUtility<T>();
 
     /// <summary>通过当前 System Context 尝试获取 Utility。</summary>
-    public static bool TryGetUtility<T>(this ISystemLifecycle self, out T? utility) where T : class, IUtility =>
+    public static bool TryGetUtility<T>(this ISystemLifecycle self, [NotNullWhen(true)] out T? utility) where T : class, IUtility =>
         GetContext(self).TryGetUtility(out utility);
 
     private static ISystemContext GetContext(ISystemLifecycle system)

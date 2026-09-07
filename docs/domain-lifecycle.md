@@ -194,13 +194,14 @@ RegisterModel<IPlayerModel>(player);
 每次查找按以下顺序执行：
 
 1. 当前 Domain 的精确主键；
-2. 当前分类内唯一的可赋值实例；
-3. 父 Domain；
-4. 多个本地候选直接抛出带候选键和运行时类型的 `InvalidOperationException`。
+2. 当前分类内唯一的可赋值实例；若有多个本地候选，立即抛出带候选键和运行时类型的 `InvalidOperationException`；
+3. 仅在本地没有候选时继续查找父 Domain。
 
 `Get*` 在缺失时抛出 `KeyNotFoundException`，`TryGet*` 只有在缺失时返回 false；歧义和非法阶段仍然抛出。
 
 System/Model 实例是一锤子生命周期：初始化一旦开始，该对象永久属于一个 Domain、一个分类和一个主键，成功或失败后都不能复用。Active 期只允许注册不存在的新键，不支持替换、移除或初始化期嵌套注册。Utility 完全由调用方管理，可跨 Domain 共享，Domain 释放时只清除引用。
+
+动态注册的原子性限于当前候选的注册和生命周期：失败时不发布候选，取消它拥有的事件订阅并尝试 Release，已有组件的注册关系和生命周期保持不变。初始化代码对其他对象的业务状态、订阅或外部资源所作的修改，不会自动回滚。完整 Domain 创建失败则会清理该次创建中由 Domain 拥有的组件和本地事件。
 
 ### 注册与查找速查
 
@@ -214,7 +215,7 @@ System/Model 实例是一锤子生命周期：初始化一旦开始，该对象�
 
 ## 组件 Context
 
-Model 初始化期间只能读取 Utility；初始化完成后还可以发送本地事件。System 初始化期间可以读取 Model/Utility并注册自身事件；初始化完成后增加 System 查找和事件发送。所有 Context 在 Domain 进入 Disposing 前统一失效，`OnDeactivating` 和 `Release` 只能清理组件此前保存的自身资源。
+Model 初始化期间只能读取 Utility；初始化完成后还可以发送本地事件。System 初始化期间可以读取 Model/Utility 并注册自身事件；初始化完成后增加 System 查找和事件发送。每个 Domain 进入 Disposing 时使自身组件的 Context 统一失效，随后才调用 OnDeactivating 和 Release；这些回调应清理此前保存的自身资源。
 
 | 能力 | Model 初始化中 | Model Ready | System 初始化中 | System Ready | Command | Query |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -226,7 +227,7 @@ Model 初始化期间只能读取 Utility；初始化完成后还可以发送本
 | 发送 Command | 否 | 否 | 否 | 否 | 是 | 否 |
 | 发送 Query | 否 | 否 | 否 | 否 | 是 | 是 |
 
-表中的 Ready 能力通过组件保存的 `Context` 使用。`OnDeactivating` 和 `Release` 开始前，所有保存的 Context 会一起失效。
+表中的 Ready 能力通过组件保存的 `Context` 使用。Context 失效以其所属 Domain 或失败候选为范围，不会因为同一棵树中的另一个 Domain 正在释放而统一失效。Context 的查找与 System 订阅按自身阶段校验；SendEvent 还会经过 Domain 的树转换守卫。当前实现允许尚未失效的 System Context 在树转换期间新增自身订阅，而直接调用 `domain.RegisterEvent` 会被拒绝，不能把转换锁理解为对所有业务调用和订阅的统一冻结。
 
 ```csharp
 public sealed class PlayerSystem : AbstractSystem, IPlayerSystem
@@ -294,6 +295,10 @@ Command Context 可读取三类组件并嵌套发送 Event/Command/Query。Query
 
 Domain 事件只在当前 Domain 内同步分发，不沿树传播。每类事件使用写时复制监听器数组：注册和注销会创建新数组，Send 只捕获一个数组引用，不创建快照。当前分发中的修改只影响下一次发送；监听器按注册顺序执行，首次异常立即停止后续监听器。跨 Domain 通信应显式提供共享 Utility/服务。
 
+订阅所有权由注册入口决定：通过哪个 System 的 Context 注册，就归属哪个 System，与调用栈中的初始化候选、回调目标或闭包捕获的对象无关。该 System 初始化失败或释放时，框架会自动取消其订阅；直接通过 `IDomain.RegisterEvent` 创建的订阅由调用方持有 token，并在 Domain 释放时统一清空。
+
+例如，新组件 A 初始化时调用已有 System B 的业务方法，由 B 的 Context 注册捕获 A 的回调，订阅仍属于 B。A 随后初始化失败，框架清理 A 时不会取消 B 的订阅。需要让订阅跟随 A 结束时，应由 A（若为 System）通过自身 Context 注册，或让 B 返回 token，由 A 保存并在 Release 中取消。
+
 不带参数的便利调用可以使用扩展方法：
 
 ```csharp
@@ -308,9 +313,11 @@ domain.SendEvent<BattleStarted>();
 `Dispose()` 默认释放当前附着子树：子域按逆挂载顺序后序释放，然后当前域执行 `OnDeactivating -> System 逆激活顺序 -> Model 逆激活顺序 -> 清理事件和 Utility 引用 -> 断链 -> Disposed`。
 
 ```csharp
-root.Dispose();          // 明确释放仍附着的完整子树
-root.DisposeSelfOnly();  // 分离并保留直接子树，只释放 root
+root.Dispose();          // 方案一：释放仍附着的完整子树
+// 或改用 root.DisposeSelfOnly(); // 方案二：分离并保留直接子树，只释放 root
 ```
+
+两种释放策略择一调用。`DisposeSelfOnly` 保留的子域不会被释放，其 Context 也不会失效；临时转换锁会在本次调用结束前阻止组件注册、树结构变更、释放和 Domain 消息执行，但不会自动撤销已有业务引用或冻结保留子域的全部 Context 能力。
 
 System 在 `Release` 前先取消发布并取消其自动事件订阅；Model 在 `Release` 前先取消发布。所有清理阶段都会尽力执行。一个失败保留原异常和堆栈，多个失败按发生顺序扁平聚合；无论异常如何，目标 Domain 都会进入 Disposed 并保持树结构一致。重复 `Dispose()` 无效果，其他 Disposed 对象操作抛出 `ObjectDisposedException`。
 

@@ -34,12 +34,24 @@ internal sealed class DomainComponentEntry
     public bool Published { get; set; }
     public ComponentContextBase? Context { get; set; }
 
-    public void Own(IUnRegister token) => _ownedResources.Add(token);
+    public IUnRegister Own(IUnRegister token)
+    {
+        IUnRegister? owned = null;
+        owned = new CustomUnRegister(() =>
+        {
+            _ownedResources.Remove(owned!);
+            token.UnRegister();
+        });
+        _ownedResources.Add(owned);
+        return owned;
+    }
 
     public IEnumerable<IUnRegister> TakeOwnedResourcesReverse()
     {
-        for (var index = _ownedResources.Count - 1; index >= 0; index--) yield return _ownedResources[index];
+        // 先转移剩余 token，避免取消回调修改正在逆序遍历的归属列表。
+        var resources = _ownedResources.ToArray();
         _ownedResources.Clear();
+        for (var index = resources.Length - 1; index >= 0; index--) yield return resources[index];
     }
 }
 

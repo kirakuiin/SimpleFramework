@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define synchronous Command and Query contexts, component capability boundaries, tree-scoped execution guards, and Domain-local event subscription lifetimes.
+
+## Requirements
 
 ### Requirement: Component Context exposes categorized capabilities
 Model and System components MUST receive Context objects that do not implement `IDomain` and do not expose Parent, component registration, tree mutation, or disposal. Model Context SHALL expose Utility Get/TryGet and local SendEvent. System Context SHALL expose System, Model, and Utility Get/TryGet plus local RegisterEvent and SendEvent.
@@ -87,6 +91,10 @@ The first event handler exception MUST stop later handlers and propagate unchang
 #### Scenario: Token is used after Domain disposal
 - **WHEN** an external caller unregisters a token after its Domain cleared the event bus
 - **THEN** the call has no effect and does not throw
+
+#### Scenario: System manually cancels an owned subscription
+- **WHEN** a System unregisters a token before its own Release
+- **THEN** the framework MUST remove both the event subscription and its ownership record, allowing the canceled token to be collected while the System remains active; remaining subscriptions retain registration order and are canceled in reverse ownership order before Release
 
 ### Requirement: Subscription ownership follows the registering Context
 A subscription created through a System Context MUST belong to that System, regardless of which business method invoked registration or which objects the callback captures. Failure cleanup of another dynamic candidate MUST NOT automatically cancel it. Direct IDomain event subscriptions SHALL remain caller-managed until canceled or cleared by Domain disposal.

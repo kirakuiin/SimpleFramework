@@ -114,7 +114,7 @@ Model and System entries MUST remain private candidates while Initialize runs an
 - **THEN** it is already absent from its Domain Registry and its saved Context has no capability
 
 ### Requirement: Active registration adds only a new key atomically
-An Active Domain in an idle tree MAY register one component under an absent key. Lifecycle initialization MUST finish before publication. Failure SHALL clean the candidate and leave all pre-existing entries unchanged. Existing keys, replacement, removal, and batch rollback MUST NOT be supported.
+An Active Domain in an idle tree MAY register one component under an absent key. Lifecycle initialization MUST finish before publication. Failure SHALL clean the candidate and preserve all pre-existing registration bindings and lifecycle ownership. This guarantee covers the candidate and its owned subscriptions; it does not roll back business-state changes or subscriptions created through other objects. Existing keys, replacement, removal, and batch rollback MUST NOT be supported.
 
 #### Scenario: Active new Model succeeds
 - **WHEN** an Active idle Domain registers a lifecycle Model under an absent key and Initialize succeeds
@@ -127,6 +127,10 @@ An Active Domain in an idle tree MAY register one component under an absent key.
 #### Scenario: Active key already exists
 - **WHEN** Register targets any existing primary key
 - **THEN** it throws `InvalidOperationException` without releasing or replacing the current instance
+
+#### Scenario: Failed candidate indirectly creates another System's subscription
+- **WHEN** a dynamic candidate's Initialize calls an existing System's business method that registers through that System's Context, and the candidate then fails
+- **THEN** the subscription remains owned by the existing System and is not automatically canceled by candidate cleanup; a caller that needs candidate-scoped cancellation must retain the token and cancel it during candidate Release
 
 ### Requirement: Dynamic registration may change assignable resolution
 Adding a new entry MAY change a previously unique assignable request into an ambiguity. The framework MUST apply current Registry contents on each non-exact lookup and MUST NOT preserve an earlier successful answer unless a future versioned cache proves equivalent.

@@ -7,6 +7,12 @@ public interface IEvent
     IUnRegister Register(Action onEvent);
 }
 
+/// <summary>供 Domain 清理不同消息类型的事件订阅。</summary>
+internal interface IClearableEvent
+{
+    void Clear();
+}
+
 /// <summary>使用一次性回调实现的幂等取消注册句柄。</summary>
 public sealed class CustomUnRegister : IUnRegister
 {
@@ -26,11 +32,12 @@ public sealed class CustomUnRegister : IUnRegister
 }
 
 /// <summary>使用写时复制监听器数组的单参数事件。</summary>
-public sealed class Event<T> : IEvent
+public sealed class Event<T> : IEvent, IClearableEvent
 {
     /// <summary>为一次具体注册提供独立身份，避免相等委托之间的 token 误注销。</summary>
-    private sealed class Subscription(Action<T> handler)
+    private sealed class Subscription(object identity, Action<T> handler)
     {
+        public object Identity { get; } = identity;
         public Action<T> Handler { get; } = handler;
     }
 
@@ -43,13 +50,15 @@ public sealed class Event<T> : IEvent
     public IUnRegister Register(Action<T> onEvent)
     {
         ArgumentNullException.ThrowIfNull(onEvent);
-        var subscription = new Subscription(onEvent);
+        var identity = new object();
+        var subscription = new Subscription(identity, onEvent);
         var previous = _subscriptions;
         var next = new Subscription[previous.Length + 1];
         Array.Copy(previous, next, previous.Length);
         next[^1] = subscription;
         _subscriptions = next;
-        return new CustomUnRegister(() => UnRegister(subscription));
+        // token 只持有注册身份；清空事件后不能经 token 继续持有回调目标。
+        return new CustomUnRegister(() => UnRegister(identity));
     }
 
     /// <summary>移除第一次匹配的监听器。</summary>
@@ -72,14 +81,20 @@ public sealed class Event<T> : IEvent
         for (var index = 0; index < snapshot.Length; index++) snapshot[index].Handler(value);
     }
 
-    IUnRegister IEvent.Register(Action onEvent) => Register(_ => onEvent());
+    IUnRegister IEvent.Register(Action onEvent)
+    {
+        ArgumentNullException.ThrowIfNull(onEvent);
+        return Register(_ => onEvent());
+    }
 
-    private void UnRegister(Subscription subscription)
+    void IClearableEvent.Clear() => _subscriptions = [];
+
+    private void UnRegister(object identity)
     {
         var subscriptions = _subscriptions;
         for (var index = 0; index < subscriptions.Length; index++)
         {
-            if (!ReferenceEquals(subscriptions[index], subscription)) continue;
+            if (!ReferenceEquals(subscriptions[index].Identity, identity)) continue;
             RemoveAt(subscriptions, index);
             return;
         }
@@ -106,7 +121,7 @@ public sealed class Event<T> : IEvent
 /// <summary>保存单个 Domain 的本地事件，并在 Domain 清理后使旧 token 安全失效。</summary>
 internal sealed class DomainEventBus
 {
-    private readonly Dictionary<Type, object> _events = new();
+    private readonly Dictionary<Type, IClearableEvent> _events = new();
     private bool _cleared;
 
     public IUnRegister Register<T>(Action<T> handler)
@@ -140,6 +155,7 @@ internal sealed class DomainEventBus
     public void Clear()
     {
         _cleared = true;
+        foreach (var @event in _events.Values) @event.Clear();
         _events.Clear();
     }
 }

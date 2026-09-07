@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace SimpleFramework.FrameworkImpl;
 
 /// <summary>组件 Context 的最小生命周期状态。</summary>
@@ -51,7 +53,7 @@ internal sealed class ModelContext : ComponentContextBase, IModelContext
         return Domain.ResolveForContext<T>(ComponentCategory.Utility);
     }
 
-    public bool TryGetUtility<T>(out T? utility) where T : class, IUtility
+    public bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility
     {
         AllowInitializingOrReady();
         return Domain.TryResolveForContext(ComponentCategory.Utility, out utility);
@@ -75,7 +77,7 @@ internal sealed class SystemContext : ComponentContextBase, ISystemContext
         return Domain.ResolveForContext<T>(ComponentCategory.System);
     }
 
-    public bool TryGetSystem<T>(out T? system) where T : class, ISystem
+    public bool TryGetSystem<T>([NotNullWhen(true)] out T? system) where T : class, ISystem
     {
         AllowReady();
         return Domain.TryResolveForContext(ComponentCategory.System, out system);
@@ -87,7 +89,7 @@ internal sealed class SystemContext : ComponentContextBase, ISystemContext
         return Domain.ResolveForContext<T>(ComponentCategory.Model);
     }
 
-    public bool TryGetModel<T>(out T? model) where T : class, IModel
+    public bool TryGetModel<T>([NotNullWhen(true)] out T? model) where T : class, IModel
     {
         AllowInitializingOrReady();
         return Domain.TryResolveForContext(ComponentCategory.Model, out model);
@@ -99,7 +101,7 @@ internal sealed class SystemContext : ComponentContextBase, ISystemContext
         return Domain.ResolveForContext<T>(ComponentCategory.Utility);
     }
 
-    public bool TryGetUtility<T>(out T? utility) where T : class, IUtility
+    public bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility
     {
         AllowInitializingOrReady();
         return Domain.TryResolveForContext(ComponentCategory.Utility, out utility);

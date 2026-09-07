@@ -48,7 +48,7 @@ using var token = hp.RegisterWithNotify((previous, current) =>
     RenderHp(current));
 ```
 
-返回的 `IUnRegister` 同时实现 `IDisposable`。调用 `UnRegister()`、`Dispose()` 或离开 `using` 作用域都会取消订阅；重复取消没有副作用。也可以把原委托传给 `UnRegister`，取消一次匹配的订阅。
+返回的 `IUnRegister` 同时实现 `IDisposable`。调用 `UnRegister()`、`Dispose()` 或离开 `using` 作用域都会取消该 token 对应的那次订阅；重复取消没有副作用。同一个委托可以多次注册，各 token 的身份独立。也可以把原委托传给 `UnRegister`，取消最后一次匹配的注册；之后使用该注册的旧 token 不会误删其他订阅。
 
 通知是同步、按注册顺序执行的。监听器抛出异常时，异常直接返回给写入方，后续监听器不会继续执行。通知期间新增或移除监听器只影响之后的写入。
 
@@ -76,7 +76,7 @@ hp.SetValueWithoutNotify(100);
 
 ## 通知期间的写入限制
 
-监听器执行期间再次写入不同值会抛出 `InvalidOperationException`，防止嵌套通知让其他监听器观察到错乱顺序。按当前比较器判定相等的写入仍是无操作：
+监听器执行期间（包括 `RegisterWithNotify` 的首次通知）再次写入不同值会抛出 `InvalidOperationException`，防止嵌套通知让其他监听器观察到错乱顺序。首次通知抛出异常时不会留下订阅；嵌套首次通知结束后仍保留外层通知的写入保护。按当前比较器判定相等的写入仍是无操作：
 
 ```csharp
 hp.Register((_, current) =>

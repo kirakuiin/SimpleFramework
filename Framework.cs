@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace SimpleFramework;
 
 /// <summary>
@@ -16,19 +18,19 @@ public interface IDomain
     T GetModel<T>() where T : class, IModel;
 
     /// <summary>尝试获取 Model；只有不存在匹配对象时返回 <see langword="false"/>。</summary>
-    bool TryGetModel<T>(out T? model) where T : class, IModel;
+    bool TryGetModel<T>([NotNullWhen(true)] out T? model) where T : class, IModel;
 
     /// <summary>获取 System。按当前域精确键、当前域唯一可赋值对象、父域的顺序解析。</summary>
     T GetSystem<T>() where T : class, ISystem;
 
     /// <summary>尝试获取 System；只有不存在匹配对象时返回 <see langword="false"/>。</summary>
-    bool TryGetSystem<T>(out T? system) where T : class, ISystem;
+    bool TryGetSystem<T>([NotNullWhen(true)] out T? system) where T : class, ISystem;
 
     /// <summary>获取 Utility。按当前域精确键、当前域唯一可赋值对象、父域的顺序解析。</summary>
     T GetUtility<T>() where T : class, IUtility;
 
     /// <summary>尝试获取 Utility；只有不存在匹配对象时返回 <see langword="false"/>。</summary>
-    bool TryGetUtility<T>(out T? utility) where T : class, IUtility;
+    bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility;
 
     /// <summary>同步执行一个无返回值命令。</summary>
     void SendCommand(ICommand command);
@@ -82,7 +84,7 @@ public interface IModelContext
     T GetUtility<T>() where T : class, IUtility;
 
     /// <summary>尝试获取 Utility。</summary>
-    bool TryGetUtility<T>(out T? utility) where T : class, IUtility;
+    bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility;
 
     /// <summary>在 Model 初始化完成后发送当前 Domain 的本地事件。</summary>
     void SendEvent<T>(T message);
@@ -95,19 +97,19 @@ public interface ISystemContext
     T GetSystem<T>() where T : class, ISystem;
 
     /// <summary>在 System 初始化完成后尝试获取 System。</summary>
-    bool TryGetSystem<T>(out T? system) where T : class, ISystem;
+    bool TryGetSystem<T>([NotNullWhen(true)] out T? system) where T : class, ISystem;
 
     /// <summary>获取 Model。</summary>
     T GetModel<T>() where T : class, IModel;
 
     /// <summary>尝试获取 Model。</summary>
-    bool TryGetModel<T>(out T? model) where T : class, IModel;
+    bool TryGetModel<T>([NotNullWhen(true)] out T? model) where T : class, IModel;
 
     /// <summary>获取 Utility。</summary>
     T GetUtility<T>() where T : class, IUtility;
 
     /// <summary>尝试获取 Utility。</summary>
-    bool TryGetUtility<T>(out T? utility) where T : class, IUtility;
+    bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility;
 
     /// <summary>订阅当前 Domain 的本地事件；订阅由此 System 自动管理。</summary>
     IUnRegister RegisterEvent<T>(Action<T> handler);
@@ -148,19 +150,19 @@ public readonly ref struct CommandContext
     public T GetSystem<T>() where T : class, ISystem => _domain.GetSystem<T>();
 
     /// <summary>尝试获取 System。</summary>
-    public bool TryGetSystem<T>(out T? system) where T : class, ISystem => _domain.TryGetSystem(out system);
+    public bool TryGetSystem<T>([NotNullWhen(true)] out T? system) where T : class, ISystem => _domain.TryGetSystem(out system);
 
     /// <summary>获取 Model。</summary>
     public T GetModel<T>() where T : class, IModel => _domain.GetModel<T>();
 
     /// <summary>尝试获取 Model。</summary>
-    public bool TryGetModel<T>(out T? model) where T : class, IModel => _domain.TryGetModel(out model);
+    public bool TryGetModel<T>([NotNullWhen(true)] out T? model) where T : class, IModel => _domain.TryGetModel(out model);
 
     /// <summary>获取 Utility。</summary>
     public T GetUtility<T>() where T : class, IUtility => _domain.GetUtility<T>();
 
     /// <summary>尝试获取 Utility。</summary>
-    public bool TryGetUtility<T>(out T? utility) where T : class, IUtility => _domain.TryGetUtility(out utility);
+    public bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility => _domain.TryGetUtility(out utility);
 
     /// <summary>发送本地事件。</summary>
     public void SendEvent<T>(T message) => _domain.SendEvent(message);
@@ -186,13 +188,13 @@ public readonly ref struct QueryContext
     public T GetSystem<T>() where T : class, ISystem => _domain.GetSystem<T>();
 
     /// <summary>尝试获取 System。</summary>
-    public bool TryGetSystem<T>(out T? system) where T : class, ISystem => _domain.TryGetSystem(out system);
+    public bool TryGetSystem<T>([NotNullWhen(true)] out T? system) where T : class, ISystem => _domain.TryGetSystem(out system);
 
     /// <summary>获取 Model。</summary>
     public T GetModel<T>() where T : class, IModel => _domain.GetModel<T>();
 
     /// <summary>尝试获取 Model。</summary>
-    public bool TryGetModel<T>(out T? model) where T : class, IModel => _domain.TryGetModel(out model);
+    public bool TryGetModel<T>([NotNullWhen(true)] out T? model) where T : class, IModel => _domain.TryGetModel(out model);
 
     /// <summary>同步发送嵌套查询。</summary>
     public TResult SendQuery<TResult>(IQuery<TResult> query) => _domain.SendQuery(query);

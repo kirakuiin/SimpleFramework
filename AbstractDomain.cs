@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.ExceptionServices;
 using SimpleFramework.FrameworkImpl;
 
@@ -104,7 +105,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
         child.EnsureTreeMutationAllowed();
         if (ReferenceEquals(this, child)) throw new InvalidOperationException("Domain 不能挂载自身。");
         if (child._parent is not null) throw new InvalidOperationException("待挂载 Domain 已经有父 Domain；移动必须先 RemoveChild。");
-        if (_children.Contains(child)) throw new InvalidOperationException("该 Domain 已是直接子域。");
+        if (IndexOfChild(child) >= 0) throw new InvalidOperationException("该 Domain 已是直接子域。");
         for (var node = this; node is not null; node = node._parent)
         {
             if (ReferenceEquals(node, child)) throw new InvalidOperationException("挂载会形成 Domain 环路。");
@@ -133,7 +134,8 @@ public abstract class AbstractDomain : IDomain, IDisposable
     {
         ArgumentNullException.ThrowIfNull(child);
         EnsureTreeMutationAllowed();
-        if (!_children.Contains(child) || !ReferenceEquals(child._parent, this))
+        var childIndex = IndexOfChild(child);
+        if (childIndex < 0 || !ReferenceEquals(child._parent, this))
         {
             throw new InvalidOperationException("只能移除当前 Domain 的直接子域。");
         }
@@ -143,7 +145,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
         var newState = new DomainTreeState { IsTransitioning = true };
         try
         {
-            _children.Remove(child);
+            _children.RemoveAt(childIndex);
             child._parent = null;
             child.AdoptTreeState(newState);
             Log.Info($"Domain {DiagnosticName} 已移除子 Domain {child.DiagnosticName}。");
@@ -159,19 +161,19 @@ public abstract class AbstractDomain : IDomain, IDisposable
     public T GetModel<T>() where T : class, IModel => ResolvePublic<T>(ComponentCategory.Model);
 
     /// <inheritdoc />
-    public bool TryGetModel<T>(out T? model) where T : class, IModel => TryResolvePublic(ComponentCategory.Model, out model);
+    public bool TryGetModel<T>([NotNullWhen(true)] out T? model) where T : class, IModel => TryResolvePublic(ComponentCategory.Model, out model);
 
     /// <inheritdoc />
     public T GetSystem<T>() where T : class, ISystem => ResolvePublic<T>(ComponentCategory.System);
 
     /// <inheritdoc />
-    public bool TryGetSystem<T>(out T? system) where T : class, ISystem => TryResolvePublic(ComponentCategory.System, out system);
+    public bool TryGetSystem<T>([NotNullWhen(true)] out T? system) where T : class, ISystem => TryResolvePublic(ComponentCategory.System, out system);
 
     /// <inheritdoc />
     public T GetUtility<T>() where T : class, IUtility => ResolvePublic<T>(ComponentCategory.Utility);
 
     /// <inheritdoc />
-    public bool TryGetUtility<T>(out T? utility) where T : class, IUtility => TryResolvePublic(ComponentCategory.Utility, out utility);
+    public bool TryGetUtility<T>([NotNullWhen(true)] out T? utility) where T : class, IUtility => TryResolvePublic(ComponentCategory.Utility, out utility);
 
     /// <inheritdoc />
     public IUnRegister RegisterEvent<T>(Action<T> handler)
@@ -280,7 +282,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
         throw Missing(category, typeof(T));
     }
 
-    internal bool TryResolveForContext<T>(ComponentCategory category, out T? result) where T : class
+    internal bool TryResolveForContext<T>(ComponentCategory category, [NotNullWhen(true)] out T? result) where T : class
     {
         if (TryResolveCore(category, typeof(T), out var value))
         {
@@ -294,8 +296,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
     internal IUnRegister RegisterOwnedEvent<T>(DomainComponentEntry owner, Action<T> handler)
     {
         var token = _events.Register(handler);
-        owner.Own(token);
-        return token;
+        return owner.Own(token);
     }
 
     private void Start()
@@ -526,7 +527,11 @@ public abstract class AbstractDomain : IDomain, IDisposable
 
         try
         {
-            if (_parent is not null) _parent._children.Remove(this);
+            if (_parent is not null)
+            {
+                var childIndex = _parent.IndexOfChild(this);
+                if (childIndex >= 0) _parent._children.RemoveAt(childIndex);
+            }
             _parent = null;
             foreach (var child in _children) child._parent = null;
             _children.Clear();
@@ -599,7 +604,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
         throw Missing(category, typeof(T));
     }
 
-    private bool TryResolvePublic<T>(ComponentCategory category, out T? result) where T : class
+    private bool TryResolvePublic<T>(ComponentCategory category, [NotNullWhen(true)] out T? result) where T : class
     {
         EnsurePublicReadable();
         if (TryResolveCore(category, typeof(T), out var value))
@@ -673,6 +678,16 @@ public abstract class AbstractDomain : IDomain, IDisposable
         foreach (var child in _children) child.AdoptTreeState(state);
     }
 
+    private int IndexOfChild(AbstractDomain child)
+    {
+        // 树的所有权绑定具体实例，不应调用派生 Domain 的业务相等性逻辑。
+        for (var index = 0; index < _children.Count; index++)
+        {
+            if (ReferenceEquals(_children[index], child)) return index;
+        }
+        return -1;
+    }
+
     private static void ValidateRegistrationKey(Type key, object component, ComponentCategory category)
     {
         if (!key.IsInstanceOfType(component))
@@ -699,7 +714,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
 
     private static void AddFailure(List<Exception> failures, Exception exception)
     {
-        if (exception is AggregateException aggregate)
+        if (exception is AggregateException aggregate && aggregate.InnerExceptions.Count > 0)
         {
             foreach (var inner in aggregate.InnerExceptions) AddFailure(failures, inner);
         }

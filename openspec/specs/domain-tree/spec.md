@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define reference-based Domain tree ownership, independent creation, dynamic attachment and removal, parent lookup, and deterministic subtree disposal.
+
+## Requirements
 
 ### Requirement: Domain attachment uses independently active instances
 A child Domain MUST complete its own creation and become Active before `AddChild` can attach it. Child initialization MUST resolve only local components because parent fallback SHALL begin only after attachment succeeds. `AddChild` MUST NOT create, initialize, reactivate, or invoke attachment callbacks on the child.
@@ -21,6 +25,10 @@ Each attached child MUST have exactly one strong `Parent` reference and each par
 #### Scenario: Parent retains child
 - **WHEN** the caller releases its own child reference after successful attachment
 - **THEN** the parent continues to retain the child until removal or disposal
+
+#### Scenario: Derived Domains compare equal by business value
+- **WHEN** distinct Domain instances compare equal through overridden Equals, either before or after attachment
+- **THEN** attachment checks, removal, and disposal unlinking MUST use reference identity so each instance retains its own parent relationship and disposal ownership
 
 ### Requirement: Attached lookup falls back through parents
 After successful attachment, categorized component lookup MUST use the current parent chain when the local Domain has no exact, assignable, or ambiguous result. Removing or moving a subtree SHALL affect future lookup only and MUST NOT refresh dependency references already cached by components.

@@ -15,7 +15,7 @@ public interface IReadonlyBindableProperty<out T> : IEvent
     T Value { get; }
     
     /// <summary>
-    /// 注册回调，并且在注册时就会触发一次回调。
+    /// 注册回调，并且在注册时就会触发一次回调；首次通知同样禁止重入写入不同值。
     /// </summary>
     /// <param name="onValueChanged"></param>
     /// <returns></returns>
@@ -29,7 +29,7 @@ public interface IReadonlyBindableProperty<out T> : IEvent
     IUnRegister Register(Action<T, T> onValueChanged);
 
     /// <summary>
-    /// 取消注册。
+    /// 取消最后一次匹配的注册；不会影响其他注册所对应的 token。
     /// </summary>
     /// <param name="onValueChanged"></param>
     void UnRegister(Action<T, T> onValueChanged);
@@ -66,7 +66,13 @@ public class BindableProperty<T> : IBindableProperty<T>
 
     private Func<T, T, bool> _comparer = EqualityComparer<T>.Default.Equals;
 
-    private Action<T, T>? OnValueChanged { get; set; } = (_, _) => {};
+    /// <summary>一次独立的属性订阅，使相等委托的 token 仍具有不同身份。</summary>
+    private sealed class Subscription(Action<T, T> handler)
+    {
+        public Action<T, T> Handler { get; } = handler;
+    }
+
+    private Subscription[] _subscriptions = [];
 
     /// <summary>
     /// 使用指定初始值创建可绑定属性。
@@ -97,7 +103,9 @@ public class BindableProperty<T> : IBindableProperty<T>
             _isNotifying = true;
             try
             {
-                OnValueChanged?.Invoke(prev, Value);
+                var snapshot = _subscriptions;
+                var current = Value;
+                foreach (var subscription in snapshot) subscription.Handler(prev, current);
             }
             finally
             {
@@ -120,6 +128,7 @@ public class BindableProperty<T> : IBindableProperty<T>
     
     IUnRegister IEvent.Register(Action onEvent)
     {
+        ArgumentNullException.ThrowIfNull(onEvent);
         return Register(Replace);
         void Replace(T prev, T curr) => onEvent();
     }
@@ -146,22 +155,51 @@ public class BindableProperty<T> : IBindableProperty<T>
     /// <inheritdoc />
     public IUnRegister RegisterWithNotify(Action<T, T> onValueChanged)
     {
+        ArgumentNullException.ThrowIfNull(onValueChanged);
         var val = Value;
-        onValueChanged.Invoke(val, val);
+        var wasNotifying = _isNotifying;
+        _isNotifying = true;
+        try { onValueChanged.Invoke(val, val); }
+        // 首次通知也可能嵌套在普通通知中，必须保留外层的写入保护。
+        finally { _isNotifying = wasNotifying; }
         return Register(onValueChanged);
     }
 
     /// <inheritdoc />
     public IUnRegister Register(Action<T, T> onValueChanged)
     {
-        OnValueChanged += onValueChanged;
-        return new BindablePropertyUnRegister<T>(this, onValueChanged);
+        ArgumentNullException.ThrowIfNull(onValueChanged);
+        var subscription = new Subscription(onValueChanged);
+        var next = new Subscription[_subscriptions.Length + 1];
+        Array.Copy(_subscriptions, next, _subscriptions.Length);
+        next[^1] = subscription;
+        _subscriptions = next;
+        return new CustomUnRegister(() => UnRegister(subscription));
     }
 
     /// <inheritdoc />
     public void UnRegister(Action<T, T> onValueChanged)
     {
-        OnValueChanged -= onValueChanged;
+        for (var index = _subscriptions.Length - 1; index >= 0; index--)
+        {
+            if (_subscriptions[index].Handler != onValueChanged) continue;
+            RemoveAt(index);
+            return;
+        }
+    }
+
+    private void UnRegister(Subscription subscription)
+    {
+        var index = Array.IndexOf(_subscriptions, subscription);
+        if (index >= 0) RemoveAt(index);
+    }
+
+    private void RemoveAt(int index)
+    {
+        var next = new Subscription[_subscriptions.Length - 1];
+        Array.Copy(_subscriptions, 0, next, 0, index);
+        Array.Copy(_subscriptions, index + 1, next, index, next.Length - index);
+        _subscriptions = next;
     }
 
     /// <summary>
@@ -169,29 +207,4 @@ public class BindableProperty<T> : IBindableProperty<T>
     /// </summary>
     /// <returns>当前值的字符串表示。</returns>
     public override string ToString() => Value?.ToString() ?? string.Empty;
-}
-
-/// <summary>
-/// 用于解除可绑定属性的注册关系的类。
-/// </summary>
-/// <typeparam name="T"></typeparam>
-internal class BindablePropertyUnRegister<T> : IUnRegister
-{
-    private IReadonlyBindableProperty<T>? _property;
-   
-    private Action<T, T>? _onValueChanged;
-    
-    public BindablePropertyUnRegister(IReadonlyBindableProperty<T> property, Action<T, T> onValueChanged)
-    {
-        _property = property;
-        _onValueChanged = onValueChanged;
-    }
-    
-    public void UnRegister()
-    {
-        if (_property == null || _onValueChanged == null) return;
-        _property.UnRegister(_onValueChanged);
-        _property = null;
-        _onValueChanged = null;
-    }
 }

@@ -1,123 +1,142 @@
 ## Purpose
 
-Define how a Domain registers, owns, replaces, and resolves categorized System, Model, and Utility components.
+Define categorized single-key registration, exclusive lifecycle ownership, delayed publication, and exact, assignable, and parent component resolution for Domain v2.
 
 ## Requirements
 
 ### Requirement: Domain registration is categorized and single-keyed
-The Domain MUST maintain separate System, Model, and Utility categories. Each local registration SHALL create one entry with one primary key and one instance, and an instance MUST NOT occupy multiple local keys or categories. `Register*As<T>` SHALL use `typeof(T)` as the explicit primary key; non-`As` registration SHALL use its inferred generic type.
+The Domain MUST maintain separate System, Model, and Utility categories. Each local registration SHALL create one entry with one primary key and one instance. Non-generic Register MUST use the instance runtime type as the primary key. Explicit generic Register MUST use the supplied contract type and validate assignability before changing state. An instance MUST NOT occupy multiple local keys or categories, and a runtime type that belongs to multiple component categories MUST be rejected.
 
-#### Scenario: Concrete Model registration
-- **WHEN** `RegisterModel(new Player())` is called
-- **THEN** one Model entry is created with `Player` as its primary key
+#### Scenario: Concrete Model registration ignores variable static type
+- **WHEN** RegisterModel is called without an explicit contract for a PlayerModel instance
+- **THEN** the primary key is PlayerModel regardless of the variable's declared interface type
 
-#### Scenario: Explicit service registration
-- **WHEN** `RegisterModelAs<IPlayer>(player)` is called
-- **THEN** one Model entry is created with `IPlayer` as its primary key and no implicit aliases
+#### Scenario: Explicit service contract is registered
+- **WHEN** `RegisterModel<IPlayerModel>(player)` is called and player implements IPlayerModel and IModelLifecycle
+- **THEN** one Model entry is created with IPlayerModel as its primary key and no implicit aliases
 
-#### Scenario: Same instance is registered twice locally
-- **WHEN** an instance already has a local entry and registration is attempted under another key or category
-- **THEN** registration throws `InvalidOperationException` without changing the existing entry
+#### Scenario: Explicit contract is incompatible
+- **WHEN** explicit generic registration names a contract not implemented by the instance
+- **THEN** it throws `ArgumentException` before reserving, initializing, or publishing the instance
 
 ### Requirement: Component lookup uses exact then assignable resolution
-Lookup MUST search only the requested category. It SHALL return an exact primary-key match first; otherwise it SHALL return the single distinct local instance whose runtime type is assignable to the requested type. If no local candidate exists, resolution SHALL continue at the parent Domain.
+Lookup MUST search only the requested category. It SHALL return a current-Domain exact primary-key match first; otherwise it SHALL return the single distinct current-Domain instance assignable to the requested type. Only if no local candidate exists SHALL lookup continue at the parent Domain. Exact-key lookup MUST use a dictionary; v2 SHALL NOT require an assignable-result cache.
 
-#### Scenario: Concrete registration is requested through an interface
-- **WHEN** `Player` is registered as a Model under its concrete key and it is the only local Model implementing `IPlayer`
-- **THEN** `GetModel<IPlayer>()` returns that `Player`
+#### Scenario: Interface resolves concrete registration
+- **WHEN** PlayerModel is registered under its concrete key and is the only local Model implementing IPlayerModel
+- **THEN** GetModel<IPlayerModel> returns that same PlayerModel instance
 
-#### Scenario: Exact key disambiguates compatible instances
-- **WHEN** multiple local Models implement `IPlayer` but one is registered with primary key `IPlayer`
-- **THEN** `GetModel<IPlayer>()` returns the exact-key entry
-
-#### Scenario: Runtime role does not leak across categories
-- **WHEN** an object implementing multiple component interfaces is registered only as a Utility
-- **THEN** System and Model lookup cannot resolve it
+#### Scenario: Explicit key avoids fallback scan result
+- **WHEN** IPlayerModel is registered as the exact key
+- **THEN** GetModel<IPlayerModel> resolves the dictionary entry before assignable scanning or parent fallback
 
 ### Requirement: Ambiguous assignable lookup is explicit
-If an exact key is absent and more than one distinct local entry in the requested category is assignable to the requested type, lookup MUST throw a public dedicated exception derived from `InvalidOperationException`. The exception SHALL expose `RequestedType` and a read-only list of `CandidateKeys`, and its message SHALL identify the category.
+If an exact key is absent and more than one distinct local entry in the requested category is assignable to the requested type, Get and TryGet MUST throw a clear `InvalidOperationException`. The message MUST identify the requested category, requested type, Domain, and candidate keys and runtime types.
 
-#### Scenario: Multiple Models implement one service interface
-- **WHEN** two Model entries with different primary keys implement `IPlayer` and no exact `IPlayer` key exists
-- **THEN** `GetModel<IPlayer>()` throws the dedicated ambiguity exception with `IPlayer` and both candidate keys
+#### Scenario: Multiple Models implement one contract
+- **WHEN** two local Model entries implement IPlayerModel and no exact IPlayerModel key exists
+- **THEN** GetModel<IPlayerModel> throws an ambiguity InvalidOperationException containing both candidates
 
 #### Scenario: TryGet encounters ambiguity
-- **WHEN** `TryGetModel<IPlayer>` encounters multiple compatible local candidates
-- **THEN** it throws the same ambiguity exception rather than returning false or choosing one candidate
+- **WHEN** TryGetModel<IPlayerModel> encounters the same ambiguity
+- **THEN** it throws rather than returning false or choosing a candidate
 
 ### Requirement: Parent fallback preserves local precedence
-Parent lookup MUST occur only when local resolution has neither an exact nor an assignable candidate. A local exact or unique assignable candidate SHALL shadow every parent candidate, and local ambiguity MUST throw before consulting the parent.
+Parent lookup MUST occur only when local resolution has neither an exact nor an assignable candidate. A local exact or unique assignable candidate SHALL shadow every parent candidate, and local ambiguity MUST throw before consulting the parent. Parent fallback SHALL be available only after Domain attachment.
 
-#### Scenario: Parent supplies a missing component
-- **WHEN** the child has no compatible Model and the parent has one
-- **THEN** child Model lookup returns the parent's instance
+#### Scenario: Parent supplies a missing component after attachment
+- **WHEN** an attached child has no compatible local Model and the parent has one
+- **THEN** child Model lookup returns the parent instance
 
 #### Scenario: Local assignable component shadows parent exact component
 - **WHEN** the child has one assignable Model and the parent has an exact primary-key match
 - **THEN** child lookup returns the local instance
 
-#### Scenario: Local lookup is ambiguous
-- **WHEN** the child has multiple assignable Models and the parent has an exact match
-- **THEN** child lookup throws the local ambiguity exception without returning the parent's instance
+#### Scenario: Independent initialization has no parent fallback
+- **WHEN** an unattached child initializes before AddChild
+- **THEN** lookup cannot resolve components from its future parent
 
 ### Requirement: System and Model instances have exclusive terminal ownership
-Once initialization of a System or Model begins, that object MUST belong to exactly one Domain, one lifecycle category, and one primary key. Registration in another Domain, key, or lifecycle category MUST fail. After successful or failed cleanup, the object MUST remain permanently ineligible for lifecycle registration.
+Once initialization of a System or Model begins, that object MUST belong to exactly one Domain, one lifecycle category, and one primary key. Registration in another Domain, key, or category MUST fail. Successful or failed Release leaves the object permanently ineligible. A candidate reserved during Configure but never passed to Initialize because Configure failed SHALL become eligible again.
 
-#### Scenario: Active component is registered in another Domain
-- **WHEN** a System or Model already owned by one Domain is registered in another
+#### Scenario: Active component is registered elsewhere
+- **WHEN** a lifecycle component already owned by one Domain is registered in another
 - **THEN** the second registration throws `InvalidOperationException` without changing either Domain
 
-#### Scenario: Dual-role lifecycle object is registered in both categories
-- **WHEN** an object implementing both `ISystem` and `IModel` has begun initialization in one category
-- **THEN** registration in the other lifecycle category is rejected
+#### Scenario: Failed initialization instance is reused
+- **WHEN** Initialize began, failed, and failure cleanup attempted Release
+- **THEN** later lifecycle registration of that same object is rejected
 
-#### Scenario: Released component is reused
-- **WHEN** a System or Model is registered after its cleanup succeeded or failed
-- **THEN** registration throws `InvalidOperationException` before initialization runs
-
-#### Scenario: Candidate was never initialized
-- **WHEN** replacement cannot start because old-component cleanup failed
-- **THEN** the untouched new candidate remains eligible for a later registration
+#### Scenario: Configure-only reservation is released
+- **WHEN** Configure fails before a collected lifecycle candidate begins Initialize
+- **THEN** that untouched candidate may be registered in a later Domain creation attempt
 
 ### Requirement: Utility registration is caller-managed
-Utility entries MUST participate in categorized lookup and transaction removal but MUST NOT receive System or Model initialization or cleanup callbacks. A Utility instance MAY be registered in multiple Domains because the caller owns its lifetime.
+Utility entries MUST participate in categorized lookup but MUST receive no framework initialization or cleanup callback. A pure Utility instance MAY be registered in multiple Domains because the caller owns its lifetime. An object whose runtime type also belongs to Model or System lifecycle categories MUST be rejected as a Utility to prevent conflicting ownership.
 
-#### Scenario: Shared Utility instance
-- **WHEN** the same Utility instance is registered in two Domains
-- **THEN** each Domain resolves its local entry and disposing either Domain does not invoke a lifecycle callback on the Utility
+#### Scenario: Pure Utility is shared
+- **WHEN** the same pure Utility instance is registered in two Domains
+- **THEN** both Domains resolve it and disposing either Domain only clears its reference
 
-### Requirement: Active replacement releases before publishing
-Replacing an existing primary key in an active Domain MUST unpublish and clean the old lifecycle component completely before publishing or initializing the new component. The old component MUST never be restored. The key SHALL remain empty if either old cleanup or new initialization fails.
-
-#### Scenario: Successful replacement
-- **WHEN** old cleanup and new initialization both succeed
-- **THEN** lookup observes the old instance before replacement and only the new instance after replacement, never both
-
-#### Scenario: Old cleanup fails
-- **WHEN** old cleanup throws during replacement
-- **THEN** the Domain stays active, the key is empty, new initialization does not run, and the cleanup exception propagates
-
-#### Scenario: New initialization fails
-- **WHEN** old cleanup succeeds but new initialization throws
-- **THEN** the new registration transaction is rolled back, the key remains empty, and the old instance is not restored
-
-### Requirement: Replacement is forbidden inside component initialization
-While a component initialization transaction is active, registration under any existing primary key MUST fail before releasing the current entry. Only absent, non-initializing keys may be added to the transaction.
-
-#### Scenario: Nested initializer targets an active key
-- **WHEN** a component initializer attempts to replace an existing System, Model, or Utility key
-- **THEN** the Domain throws `InvalidOperationException` and leaves the existing entry unchanged
-
-### Requirement: Public Container behavior is unchanged
-`FrameworkImpl.Container` MUST retain its public exact-key registration and lookup behavior. Assignable resolution, category separation, ownership, and lifecycle semantics SHALL remain internal to Domain component management.
-
-#### Scenario: Container stores concrete type and interface is requested
-- **WHEN** a `Container` stores an instance only under its concrete type and a caller requests an implemented interface
-- **THEN** `Container` returns no value for the interface key
+#### Scenario: Lifecycle object is presented as Utility
+- **WHEN** an instance implements IUtility and IModelLifecycle or ISystemLifecycle
+- **THEN** Utility registration throws before publishing the instance
 
 ### Requirement: Registration and lookup keep component marker constraints
-System APIs MUST continue to require `ISystem`, Model APIs MUST continue to require `IModel`, and Utility APIs MUST continue to require `IUtility`. A domain service interface used with Model registration or lookup, such as `IPlayer`, MUST therefore inherit `IModel`.
+System contracts used for registration or lookup MUST inherit ISystem, Model contracts MUST inherit IModel, and Utility contracts MUST inherit IUtility. Lifecycle eligibility MUST be expressed separately by ISystemLifecycle or IModelLifecycle on the concrete instance.
 
-#### Scenario: Service interface participates in Model lookup
-- **WHEN** `IPlayer : IModel` and a compatible Player Model is registered
-- **THEN** the existing generic Model APIs can resolve `IPlayer` without a new untyped registration API
+#### Scenario: Business Model contract participates in lookup
+- **WHEN** `IPlayerModel : IModel` and PlayerModel implements both IPlayerModel and IModelLifecycle
+- **THEN** registration and lookup can use IPlayerModel without exposing Initialize or Release through the business contract
+
+### Requirement: Get and TryGet have distinct missing behavior
+Get MUST throw `KeyNotFoundException` when the complete local and parent lookup chain has no candidate. TryGet MUST return false and assign null only for that missing case. Null arguments, ambiguity, invalid phase, and disposed access MUST retain their own exceptions.
+
+#### Scenario: Required component is missing
+- **WHEN** GetUtility<IOptionalUtility> finds no compatible Utility in the lookup chain
+- **THEN** it throws `KeyNotFoundException` with category, type, and Domain information
+
+#### Scenario: Optional component is missing
+- **WHEN** TryGetUtility<IOptionalUtility> finds no compatible Utility
+- **THEN** it returns false and sets the output to null
+
+### Requirement: Lifecycle components publish only after successful initialization
+Model and System entries MUST remain private candidates while Initialize runs and SHALL become visible only after success. Release MUST cancel publication before invoking the component callback. Utilities collected during Configure SHALL become available before Model initialization.
+
+#### Scenario: Model initialization requests itself
+- **WHEN** a Model Initialize callback requests the key currently being initialized
+- **THEN** lookup does not observe that unpublished candidate
+
+#### Scenario: Initialization succeeds
+- **WHEN** lifecycle Initialize returns successfully
+- **THEN** the entry is published exactly once and later lookup returns it
+
+#### Scenario: Release callback performs external lookup
+- **WHEN** a component has been selected for Release
+- **THEN** it is already absent from its Domain Registry and its saved Context has no capability
+
+### Requirement: Active registration adds only a new key atomically
+An Active Domain in an idle tree MAY register one component under an absent key. Lifecycle initialization MUST finish before publication. Failure SHALL clean the candidate and preserve all pre-existing registration bindings and lifecycle ownership. This guarantee covers the candidate and its owned subscriptions; it does not roll back business-state changes or subscriptions created through other objects. Existing keys, replacement, removal, and batch rollback MUST NOT be supported.
+
+#### Scenario: Active new Model succeeds
+- **WHEN** an Active idle Domain registers a lifecycle Model under an absent key and Initialize succeeds
+- **THEN** the Model becomes immediately available after Register returns
+
+#### Scenario: Active new System fails
+- **WHEN** an Active registration candidate throws during Initialize
+- **THEN** the framework attempts its Release, permanently consumes that candidate, leaves the key absent, and preserves all older entries
+
+#### Scenario: Active key already exists
+- **WHEN** Register targets any existing primary key
+- **THEN** it throws `InvalidOperationException` without releasing or replacing the current instance
+
+#### Scenario: Failed candidate indirectly creates another System's subscription
+- **WHEN** a dynamic candidate's Initialize calls an existing System's business method that registers through that System's Context, and the candidate then fails
+- **THEN** the subscription remains owned by the existing System and is not automatically canceled by candidate cleanup; a caller that needs candidate-scoped cancellation must retain the token and cancel it during candidate Release
+
+### Requirement: Dynamic registration may change assignable resolution
+Adding a new entry MAY change a previously unique assignable request into an ambiguity. The framework MUST apply current Registry contents on each non-exact lookup and MUST NOT preserve an earlier successful answer unless a future versioned cache proves equivalent.
+
+#### Scenario: New candidate creates ambiguity
+- **WHEN** GetModel<IServiceModel> initially resolves one assignable entry and a second compatible entry is later registered under another key
+- **THEN** the next GetModel<IServiceModel> throws ambiguity unless an exact IServiceModel key exists

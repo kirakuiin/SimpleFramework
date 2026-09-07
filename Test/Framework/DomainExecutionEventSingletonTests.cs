@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using NUnit.Framework;
 using SimpleFramework;
 using SimpleFramework.FrameworkImpl;
@@ -8,6 +9,57 @@ namespace Test.Framework;
 [TestFixture]
 public sealed class DomainExecutionEventSingletonTests
 {
+    [Test]
+    public void ParameterlessEventRegistrationRejectsNullWithoutLeavingSubscription()
+    {
+        var source = new Event<int>();
+        var error = Assert.Throws<ArgumentNullException>(() => ((IEvent)source).Register(null!));
+        Assert.That(error!.ParamName, Is.EqualTo("onEvent"));
+        Assert.That(source.IsEmpty, Is.True);
+
+        var calls = 0;
+        using var token = ((IEvent)source).Register(() => calls++);
+        Assert.DoesNotThrow(() => source.Trigger(1));
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void DisposedDomainTokensDoNotRetainOwnOrOtherEventSubscribers()
+    {
+        var (token, own, other, otherType) = CreateDisposedEventSubscriptions();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.That(own.IsAlive, Is.False, "旧 token 不应保留自身监听器。");
+        Assert.That(other.IsAlive, Is.False, "旧 token 不应保留同类型的其他监听器。");
+        Assert.That(otherType.IsAlive, Is.False);
+        Assert.DoesNotThrow(() => token.UnRegister());
+        Assert.DoesNotThrow(() => token.UnRegister());
+        GC.KeepAlive(token);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (IUnRegister Token, WeakReference Own, WeakReference Other, WeakReference OtherType) CreateDisposedEventSubscriptions()
+    {
+        var domain = ProbeDomain.Create();
+        var own = new EventSubscriber();
+        var other = new EventSubscriber();
+        var otherType = new EventSubscriber();
+        var token = domain.RegisterEvent<int>(own.Handle);
+        domain.RegisterEvent<int>(other.Handle);
+        domain.RegisterEvent<string>(otherType.HandleText);
+        domain.Dispose();
+        return (token, new WeakReference(own), new WeakReference(other), new WeakReference(otherType));
+    }
+
+    /// <summary>用于验证事件清理后回调目标可被回收的订阅者。</summary>
+    private sealed class EventSubscriber
+    {
+        public void Handle(int value) { }
+        public void HandleText(string value) { }
+    }
+
     [TearDown]
     public void TearDownSingleton()
     {
