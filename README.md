@@ -8,13 +8,14 @@ SimpleFramework 是一个面向 C#/.NET 的轻量级游戏与应用框架集合�
 
 ### 核心框架
 
-根项目 `SimpleFramework` 提供一套外部简洁、内部可靠的 Domain 组织方式：
+根项目 `SimpleFramework` 提供与 QFramework 用法接近、但更严格的 Domain 组织方式：
 
-- `Domain`：分类保存 `System`、`Model`、`Utility`，支持可动态挂载/移除的强引用树。
-- `System` / `Model`：业务接口只继承分类标记，实现类通过独立生命周期接口或抽象基类接入 Domain。
+- `Domain`：分类保存 `System`、`Model`、`Utility`，可以创建多个实例并组成可动态挂载/移除的树。
+- `System` / `Model`：业务接口只继承分类标记；实现类继承 `AbstractSystem` / `AbstractModel` 后可直接调用 `GetModel<T>()` 等方法，能力范围由规则接口在编译期约束。
+- `IController`：表现层纯接口，实现 `GetDomain()` 即可使用 `this.GetModel<T>()`、`this.SendCommand(...)`。
 - `Utility`：由调用方管理、可跨 Domain 共享的底层能力。
-- `Command` / `Query`：接收不可逃逸的同步栈 Context，避免保存或异步滥用执行上下文。
-- 本地事件：按注册顺序同步分发，写时复制订阅数组，System 订阅自动随生命周期取消。
+- `Command` / `Query`：接收不可逃逸的同步栈上下文，避免保存或异步滥用。
+- 本地事件：按注册顺序同步分发，Domain 释放时订阅自动失效。
 - `BindableProperty<T>`：可监听变化的属性封装。
 
 ```csharp
@@ -36,7 +37,7 @@ var byInterface = domain.GetModel<IPlayerModel>();
 var byConcrete = domain.GetModel<PlayerModel>(); // 同一实例
 ```
 
-启动先收集全部注册，再按 Model、System 的分类顺序初始化。Active 后可注册不存在的新键；不支持替换或移除已启动组件。查找按“本地精确键、本地唯一可赋值对象、父域”解析，歧义明确抛出。
+注册只能在 `Configure` 中进行；启动时先初始化全部 Model，再初始化全部 System。不支持替换或移除组件。查找按“本地精确键、本地唯一可赋值对象、父域”解析，查不到或有歧义都会明确抛出。
 
 子 Domain 先独立创建，再动态挂载：
 
@@ -46,7 +47,7 @@ domain.AddChild(battle);
 domain.RemoveChild(battle); // 不释放，battle 仍为 Active 根
 ```
 
-`Dispose()` 释放仍附着的完整子树；`DisposeSelfOnly()` 保留并分离直接子树。Domain 采用单线程协作模型，Command、Query、事件及整棵树的结构/生命周期守卫都是同步的。
+挂载、移除和释放可以在 Command 或事件处理中进行。`Dispose()` 释放仍附着的完整子树。Domain 采用同步、单线程协作模型。
 
 核心文档：
 

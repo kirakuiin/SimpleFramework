@@ -62,13 +62,16 @@ dotnet test .\Test\Test.csproj
 ## 核心行为说明
 
 - 具体 `Domain` 使用私有构造函数，并通过调用 `CreateDomain(() => new Domain(...))` 的静态工厂创建；严格单例继承 `AbstractSingletonDomain<T>`，通过 `GetOrCreateInstance` 暴露 `Instance`。
-- `IDomain` 仅用于消费。注册、`AddChild`/`RemoveChild`、`Dispose` 和 `DisposeSelfOnly` 通过 `AbstractDomain` 提供。
-- 子 `Domain` 在执行 `AddChild` 前已经独立处于 `Active` 状态。唯一的强树关系同时提供父级组件回退和默认子树释放；`RemoveChild` 永远不会释放子 `Domain`。
-- 未显式指定泛型契约的 `Register` 重载以运行时具体类型作为唯一键。查找顺序为：本地精确匹配、本地唯一可赋值匹配、父级匹配；存在歧义时抛出异常。
-- `Model`/`System` 生命周期一旦开始初始化，便具有全局排他性且只执行一次。`Active` 阶段的注册只能添加不存在的键；不支持替换、删除，也不支持初始化期间的嵌套注册。
+- `IDomain` 仅用于消费。注册方法是 `AbstractDomain` 的 `protected` 成员，只能在 `Configure` 中调用；`AddChild`/`RemoveChild`、`Dispose` 由 `AbstractDomain` 提供。
+- 能力由 `ICanXxx` 规则接口在编译期约束，与 QFramework 一致：Model 只能获取 Utility、发送事件；System 不能发送 Command/Query；Query 不能获取 Utility。`AbstractModel`/`AbstractSystem` 以 `protected` 方法提供能力，`IController` 等纯接口实现者使用扩展方法；`TryGet*` 只在 `IDomain` 上提供。
+- 未显式指定泛型契约的 `Register` 重载以运行时具体类型作为唯一键。查找顺序为：本地精确匹配、本地唯一可赋值匹配、父级匹配；存在歧义时抛出异常。注册即可被查找，初始化期间可能拿到尚未初始化的组件。
+- 启动先初始化全部 Model 再初始化全部 System；失败时逆序释放已初始化的组件并释放 Domain。不支持替换、删除组件或 Active 阶段注册。
+- 子 `Domain` 在执行 `AddChild` 前已经独立处于 `Active` 状态。唯一的强树关系同时提供父级组件回退和默认子树释放；`RemoveChild` 永远不会释放子 `Domain`。挂载、移除、释放可以在 Command、Query、事件处理中进行，已释放 Domain 的访问抛 `ObjectDisposedException`。
+- 释放顺序：进入 Disposing 并失效全部事件订阅 → 子树逆序 → `OnDeactivating`（仅进入过 Active 时）→ System 逆序 → Model 逆序 → 清空注册表。释放期间仍可读取组件，但不能订阅事件或修改树；重入 `Dispose` 无操作。组件按初始化逆序释放，`OnRelease` 中不要调用其他 System；需要协调的退出逻辑放在 `OnDeactivating`。
+- 只有 Domain 本地事件会自动失效；订阅 `BindableProperty` 等非本地来源时必须在 `OnRelease` 中取消。
 - `Utility` 由调用方拥有，可以在多个 `Domain` 之间共享。运行时对象若跨越多个组件类别，将被拒绝注册。
-- `Model`/`System` 的 `Context` 能力受生命周期阶段限制，在 `OnDeactivating`/`Release` 之前无效。`Command`/`Query` 使用同步的 `readonly ref struct` `Context` 值。
-- `Domain` 事件为本地事件并采用写时复制；不存在全局事件总线。跨 `Domain` 通信应使用显式共享的 `Utility` 或服务。
+- `Command`/`Query` 使用同步的 `readonly ref struct` 上下文，构造函数公开以便测试。
+- `Domain` 事件为本地事件并采用写时复制；分发中被取消或所属 Domain 已释放的订阅会被跳过。不存在全局事件总线，跨 `Domain` 通信应使用显式共享的 `Utility` 或服务。
 - `BindableProperty<T>.WithComparer` 仅作用于当前实例。
 
 ## 模块说明

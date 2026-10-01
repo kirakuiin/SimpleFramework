@@ -1,10 +1,10 @@
-# Domain v2 设计与使用
+# Domain 设计与使用
 
-Domain v2 提供简洁的分类组件访问、可靠的生命周期管理和可动态调整的 Domain 树。它采用同步、单线程协作模型，不提供组件热替换、双重父子关系或任意 `IDomain` 实现。
+Domain 提供分类组件访问、生命周期管理和可动态调整的 Domain 树，用法与 QFramework 接近：Model、System、Utility 三类组件，同步的 Command/Query，Domain 内的本地事件。它采用同步、单线程协作模型。
+
+与 QFramework 相比，主要区别是：可以创建多个 Domain 并组成树；查不到组件时抛异常而不是返回 `null`；重复注册会报错而不是静默覆盖；按接口或具体类型都能查到组件；初始化失败会回滚，释放失败会汇总；Command/Query 的上下文不能被保存。
 
 ## 最小结构
-
-每个 Domain 内部只有三部分：分类注册表、Model/System 生命周期和整棵树共享的执行状态。
 
 ```text
 Root Domain
@@ -14,11 +14,11 @@ Root Domain
 └─ Network Domain
 ```
 
-`IDomain` 是消费接口，只暴露三类 Get/TryGet、父引用、同步 Command/Query 和本地事件。注册、树管理和释放只在 `AbstractDomain` 上提供，业务组件拿到的 Context 不是 `IDomain`。
+- `IDomain` 是消费接口：父引用、三类 `Get`/`TryGet`、同步 Command/Query、本地事件。
+- 注册只能在 `AbstractDomain.Configure` 中进行；树管理和释放在 `AbstractDomain` 上提供。
+- 每个角色能做什么由能力规则接口决定，编译期检查。
 
 ## 完整入门示例
-
-下面的例子包含业务接口、Utility、Model、System 和 Domain，可以直接看出各类型的职责：
 
 ```csharp
 using SimpleFramework;
@@ -26,48 +26,54 @@ using SimpleFramework;
 public interface ISaveUtility : IUtility
 {
     int LoadHp();
+    void SaveHp(int hp);
 }
 
 public sealed class SaveUtility : ISaveUtility
 {
     public int LoadHp() => 100;
+    public void SaveHp(int hp) { }
 }
 
 public interface IPlayerModel : IModel
 {
-    int Hp { get; }
+    int Hp { get; set; }
 }
 
 public sealed class PlayerModel : AbstractModel, IPlayerModel
 {
-    public int Hp { get; private set; }
+    public int Hp { get; set; }
 
-    protected override void OnInitialize()
-    {
-        Hp = Context.GetUtility<ISaveUtility>().LoadHp();
-    }
+    protected override void OnInitialize() => Hp = GetUtility<ISaveUtility>().LoadHp();
 }
 
 public interface IPlayerSystem : ISystem { }
 
 public sealed class PlayerSystem : AbstractSystem, IPlayerSystem
 {
+    private IPlayerModel _player = null!;
+
     protected override void OnInitialize()
     {
-        var player = Context.GetModel<IPlayerModel>();
-        Context.RegisterEvent<PlayerDamaged>(message =>
-            Console.WriteLine($"Damage: {message.Amount}, HP before: {player.Hp}"));
+        _player = GetModel<IPlayerModel>();
+        RegisterEvent<PlayerDamaged>(message => _player.Hp -= message.Amount); // Domain 释放时自动失效
     }
+
+    protected override void OnRelease() => GetUtility<ISaveUtility>().SaveHp(_player.Hp); // 释放时仍可读取组件
 }
 
 public readonly record struct PlayerDamaged(int Amount);
+
+public sealed class DamageCommand(int amount) : ICommand
+{
+    public void Execute(CommandContext context) => context.SendEvent(new PlayerDamaged(amount));
+}
 
 public sealed class GameDomain : AbstractDomain
 {
     private GameDomain() { }
 
-    public static GameDomain Create() =>
-        CreateDomain(() => new GameDomain());
+    public static GameDomain Create() => CreateDomain(() => new GameDomain());
 
     protected override void Configure()
     {
@@ -77,270 +83,255 @@ public sealed class GameDomain : AbstractDomain
     }
 }
 
-public static class Example
+using var game = GameDomain.Create();
+game.SendCommand(new DamageCommand(10));
+var hp = game.GetModel<IPlayerModel>().Hp; // 90
+```
+
+`Configure` 中的书写顺序不影响分类顺序：上例先注册 System，框架仍先初始化全部 Model，再初始化全部 System。
+
+## 各角色的能力
+
+| 能力 | Model | System | Controller | Command | Query |
+| --- | --- | --- | --- | --- | --- |
+| 获取 Model | 否 | 是 | 是 | 是 | 是 |
+| 获取 System | 否 | 是 | 是 | 是 | 是 |
+| 获取 Utility | 是 | 是 | 是 | 是 | 否 |
+| 订阅事件 | 否 | 是 | 是 | 否 | 否 |
+| 发送事件 | 是 | 是 | 否 | 是 | 否 |
+| 发送 Command | 否 | 否 | 是 | 是 | 否 |
+| 发送 Query | 否 | 否 | 是 | 是 | 是 |
+
+写法：
+
+```csharp
+// AbstractModel / AbstractSystem 子类：受保护方法，直接调用
+var player = GetModel<IPlayerModel>();
+
+// Controller（纯接口，例如 Godot 节点）：扩展方法，需要写 this.
+this.GetModel<IPlayerModel>();
+
+// Command / Query：栈上下文
+context.GetModel<IPlayerModel>();
+```
+
+`TryGetModel` / `TryGetSystem` / `TryGetUtility` 只在 `IDomain` 上提供，用于确实可能不存在的组件。
+
+**建议按业务接口获取组件**，例如 `GetModel<IPlayerModel>()`。如果按具体类型获取，比如 `GetModel<PlayerModel>()`，拿到的对象继承了 `AbstractModel`，调用方就能对它使用 `SendEvent` 等扩展方法，绕过上表的能力限制。
+
+### Controller
+
+`IController` 是纯接口，实现者只需提供所属 Domain，适合 UI 或引擎节点：
+
+```csharp
+public partial class HpLabel : Label, IController
 {
-    public static void Run()
-    {
-        using var game = GameDomain.Create();
-        var player = game.GetModel<IPlayerModel>();
-        game.SendEvent(new PlayerDamaged(10));
-    }
+    private IUnRegister? _token;
+
+    public IDomain GetDomain() => GameApp.Instance;
+
+    public override void _Ready() =>
+        _token = this.RegisterEvent<PlayerDamaged>(_ => Text = this.GetModel<IPlayerModel>().Hp.ToString());
+
+    public override void _ExitTree() => _token?.UnRegister(); // Controller 的订阅由自己取消
 }
 ```
 
-`Configure` 中的书写顺序不会改变启动分类顺序。上例虽然先注册 System，框架仍会先初始化全部 Model，再初始化全部 System。
+### 直接实现生命周期接口
+
+不继承基类时，实现 `IModelLifecycle` 或 `ISystemLifecycle`：保存 `Initialize(IDomain)` 传入的 Domain，并从 `GetDomain()` 返回它，即可使用 `this.GetModel<T>()` 等扩展方法。基类会拒绝同一实例在仍被使用时重复初始化，直接实现者需要自己保证不重复注册到多个 Domain。
 
 ## 创建与启动
 
-具体 Domain 使用非公开构造函数和显式工厂，不使用反射或 `new()` 约束：
+具体 Domain 使用非公开构造函数和显式工厂：
 
 ```csharp
-public sealed class GameDomain : AbstractDomain
+public sealed class BattleDomain : AbstractDomain
 {
-    private readonly int _saveSlot;
+    private readonly int _matchId;
 
-    private GameDomain(int saveSlot) => _saveSlot = saveSlot;
+    private BattleDomain(int matchId) => _matchId = matchId;
 
-    public static GameDomain Create(int saveSlot = 0) =>
-        CreateDomain(() => new GameDomain(saveSlot));
+    public static BattleDomain Create(int matchId) => CreateDomain(() => new BattleDomain(matchId));
 
-    protected override void Configure()
-    {
-        RegisterSystem(new PlayerSystem()); // 注册顺序不影响分类启动顺序
-        RegisterModel<IPlayerModel>(new PlayerModel());
-        RegisterUtility<ISaveUtility>(new SaveUtility());
-    }
+    protected override void Configure() { /* RegisterXxx */ }
 
-    protected override void OnActivated()
-    {
-        // 此时已是正常 Active：可以发送消息、动态注册或修改树。
-    }
+    protected override void OnActivated() { /* 已是 Active，可以发消息、改树 */ }
 }
 ```
 
-启动固定为：
+启动流程：
 
 ```text
 构造 Domain
-  -> Configure 收集注册
+  -> Configure 注册（注册即可被查找）
   -> Model 按注册顺序初始化
   -> System 按注册顺序初始化
-  -> Domain 进入 Active
+  -> 进入 Active
   -> OnActivated
 ```
 
-Utility 在 Model 初始化前即可查找。Model/System 只有在自己的 `Initialize` 成功后才发布。创建失败会清理框架资源并使该 Domain 进入终态；已经开始初始化的生命周期组件不能复用，尚未开始初始化的组件会释放预留关系，仍可用于之后的新 Domain。
+- 注册只能在 `Configure` 中进行，其他时候调用抛 `InvalidOperationException`。
+- 初始化期间可以取到任何已注册组件的引用，但对方可能尚未初始化。**`OnInitialize` 里可以缓存引用，不要依赖其他 System 已经初始化完成。**
+- 任一步失败：已初始化成功的组件按逆序 `Release`，Domain 进入 Disposed，原异常抛给调用方。初始化失败的组件本身不会被 `Release`，需要在 `OnInitialize` 内自行清理已占用的资源。
+- 如果失败发生在进入 Active 之前（`Configure` 或组件初始化失败），不会调用 `OnDeactivating`；它只和 `OnActivated` 成对出现。`OnActivated` 自己抛异常时已处于 Active，仍会调用 `OnDeactivating`。
+- 每个 Domain 只能启动一次，工厂必须返回新实例；返回已在使用的实例会直接抛异常，不会影响那个实例。
 
 需要严格单例时继承 `AbstractSingletonDomain<T>`：
 
 ```csharp
-public sealed class AppDomain : AbstractSingletonDomain<AppDomain>
+public sealed class GameApp : AbstractSingletonDomain<GameApp>
 {
-    private AppDomain() { }
-    public static AppDomain Instance => GetOrCreateInstance(() => new AppDomain());
+    private GameApp() { }
+    public static GameApp Instance => GetOrCreateInstance(() => new GameApp());
     protected override void Configure() { }
 }
 
-var current = AppDomain.Instance;
-AppDomain.DestroyInstance(); // 不存在时不会隐式创建
+GameApp.DestroyInstance(); // 不存在时不会隐式创建
 ```
 
-单例只在 `OnActivated` 成功后发布。创建期间重入 `Instance` 或 `DestroyInstance` 会明确抛出；创建失败可用新实例重试，直接 `Dispose` 也会清空单例引用。
+单例在 `OnActivated` 成功后才发布。创建期间重入 `Instance` 或 `DestroyInstance` 会抛异常；创建失败可以重试；直接 `Dispose` 单例也会清空引用。
 
 ## 注册与查找
 
-业务接口继承分类标记，生命周期能力放在实现类型上：
+业务接口只继承分类标记，生命周期放在实现类型上，这样消费者拿到 `IPlayerModel` 时看不到 `Initialize`、`GetUtility` 等内部能力：
 
 ```csharp
-public interface IPlayerModel : IModel
-{
-    int Hp { get; }
-}
-
-public sealed class PlayerModel : AbstractModel, IPlayerModel
-{
-    public int Hp { get; private set; } = 100;
-    protected override void OnInitialize() { }
-}
-```
-
-注册保留分类和生命周期语义，读取也保留三类权限边界：
-
-```csharp
-RegisterModel(new PlayerModel());                    // 主键 PlayerModel
-RegisterModel<IPlayerModel>(new PlayerModel());      // 主键 IPlayerModel
-RegisterSystem(new PlayerSystem());
+RegisterModel(new PlayerModel());                    // 注册键 PlayerModel（运行时类型）
+RegisterModel<IPlayerModel>(new PlayerModel());      // 注册键 IPlayerModel
 RegisterUtility<IJsonUtility>(new JsonUtility());
-
-var model = domain.GetModel<IPlayerModel>();
-if (domain.TryGetUtility<IOptionalUtility>(out var optional)) { }
 ```
 
-未指定泛型契约时，主键始终取对象的运行时具体类型，与变量的静态类型无关：
+查找顺序：
 
-```csharp
-IModelLifecycle lifecycle = new PlayerModel();
-RegisterModel(lifecycle); // 主键仍然是 PlayerModel
-```
+1. 当前 Domain 的精确注册键；
+2. 当前 Domain 中唯一可赋值的实例；有多个时抛出列出全部候选的 `InvalidOperationException`；
+3. 本地没有候选时查找父 Domain。
 
-显式泛型参数表示唯一的注册主键，不会同时创建具体类型键。不过，只要当前分类中该对象是唯一可赋值候选，仍可按具体类型或它实现的其他业务接口查到它。接口变量如果只声明为 `IPlayerModel`，编译器无法证明它具有生命周期能力；注册时应保留具体实现变量，或显式使用 `IModelLifecycle` 变量：
+规则：
 
-```csharp
-var player = new PlayerModel();
-IPlayerModel readOnlyView = player;
-RegisterModel<IPlayerModel>(player);
-```
-
-每次查找按以下顺序执行：
-
-1. 当前 Domain 的精确主键；
-2. 当前分类内唯一的可赋值实例；若有多个本地候选，立即抛出带候选键和运行时类型的 `InvalidOperationException`；
-3. 仅在本地没有候选时继续查找父 Domain。
-
-`Get*` 在缺失时抛出 `KeyNotFoundException`，`TryGet*` 只有在缺失时返回 false；歧义和非法阶段仍然抛出。
-
-System/Model 实例是一锤子生命周期：初始化一旦开始，该对象永久属于一个 Domain、一个分类和一个主键，成功或失败后都不能复用。Active 期只允许注册不存在的新键，不支持替换、移除或初始化期嵌套注册。Utility 完全由调用方管理，可跨 Domain 共享，Domain 释放时只清除引用。
-
-动态注册的原子性限于当前候选的注册和生命周期：失败时不发布候选，取消它拥有的事件订阅并尝试 Release，已有组件的注册关系和生命周期保持不变。初始化代码对其他对象的业务状态、订阅或外部资源所作的修改，不会自动回滚。完整 Domain 创建失败则会清理该次创建中由 Domain 拥有的组件和本地事件。
-
-### 注册与查找速查
-
-| 需求 | API | 生命周期所有者或缺失行为 |
-| --- | --- | --- |
-| 注册 Model | `RegisterModel(...)` | Domain |
-| 注册 System | `RegisterSystem(...)` | Domain |
-| 注册 Utility | `RegisterUtility(...)` | 调用方 |
-| 必须存在 | `GetModel<T>()` / `GetSystem<T>()` / `GetUtility<T>()` | 缺失时抛出 |
-| 可以不存在 | `TryGetModel<T>()` / `TryGetSystem<T>()` / `TryGetUtility<T>()` | 仅缺失时返回 `false` |
-
-## 组件 Context
-
-Model 初始化期间只能读取 Utility；初始化完成后还可以发送本地事件。System 初始化期间可以读取 Model/Utility 并注册自身事件；初始化完成后增加 System 查找和事件发送。每个 Domain 进入 Disposing 时使自身组件的 Context 统一失效，随后才调用 OnDeactivating 和 Release；这些回调应清理此前保存的自身资源。
-
-| 能力 | Model 初始化中 | Model Ready | System 初始化中 | System Ready | Command | Query |
-| --- | --- | --- | --- | --- | --- | --- |
-| 获取 Utility | 是 | 是 | 是 | 是 | 是 | 否 |
-| 获取 Model | 否 | 否 | 是 | 是 | 是 | 是 |
-| 获取 System | 否 | 否 | 否 | 是 | 是 | 是 |
-| 订阅本地事件 | 否 | 否 | 是 | 是 | 否 | 否 |
-| 发送本地事件 | 否 | 是 | 否 | 是 | 是 | 否 |
-| 发送 Command | 否 | 否 | 否 | 否 | 是 | 否 |
-| 发送 Query | 否 | 否 | 否 | 否 | 是 | 是 |
-
-表中的 Ready 能力通过组件保存的 `Context` 使用。Context 失效以其所属 Domain 或失败候选为范围，不会因为同一棵树中的另一个 Domain 正在释放而统一失效。Context 的查找与 System 订阅按自身阶段校验；SendEvent 还会经过 Domain 的树转换守卫。当前实现允许尚未失效的 System Context 在树转换期间新增自身订阅，而直接调用 `domain.RegisterEvent` 会被拒绝，不能把转换锁理解为对所有业务调用和订阅的统一冻结。
-
-```csharp
-public sealed class PlayerSystem : AbstractSystem, IPlayerSystem
-{
-    private IUnRegister? _manualResource;
-
-    protected override void OnInitialize()
-    {
-        var player = Context.GetModel<IPlayerModel>();
-        Context.RegisterEvent<PlayerDamaged>(OnDamaged); // Domain 自动取消
-    }
-
-    protected override void OnRelease()
-    {
-        _manualResource?.UnRegister();
-    }
-
-    private void OnDamaged(PlayerDamaged message) { }
-}
-```
+- 同一分类重复注册同一个键、同一实例注册两次、组件同时属于多个分类，都会抛 `InvalidOperationException`。
+- 不支持替换和移除组件。需要动态增减的一组功能，用子 Domain 表达。
+- Utility 由调用方管理，可以在多个 Domain 间共享；Domain 释放时只清除引用，不会调用它的 `Dispose`。
 
 ## 动态 Domain 树
 
-子 Domain 必须先独立创建到 Active，再显式挂载：
+子 Domain 先独立创建，再挂载：
 
 ```csharp
 var battle = BattleDomain.Create(matchId);
 game.AddChild(battle);
+var save = battle.GetUtility<ISaveUtility>(); // 挂载后才回退到父域
 
-var shared = battle.GetUtility<ISaveUtility>(); // 挂载后才回退父域
-
-game.RemoveChild(battle); // 不释放，battle 成为独立 Active 根
-network.AddChild(battle); // 移动必须显式 remove + add
+game.RemoveChild(battle);  // 不释放，battle 成为独立 Active 根
+network.AddChild(battle);  // 移动必须先 Remove 再 Add
 ```
 
-树只有一种强双向关系：父域持有直接子域，子域查找回退父域。Add/Remove 不触发生命周期或附加回调；调用方已经缓存的父组件引用不会自动刷新。
-
-执行 Command、Query 或 Event 时，整棵树共享 `ExecutionDepth`。执行中禁止注册组件、修改树或释放；结构/生命周期转换时也禁止这些操作。检查是 O(1)，只有 Add/Remove 时会为被移动子树更新共享状态。
-
-## Command、Query 与事件
-
-Command/Query 同步接收不可逃逸的 `readonly ref struct` Context：
+挂载、移除、释放**可以在 Command、Query 或事件处理中进行**。命令上下文不暴露所属 Domain（与 QFramework 一致，命令没有管理能力），切换场景由持有子域的对象完成，例如单例 Domain：
 
 ```csharp
-public sealed class DamageCommand : ICommand
+public sealed class EnterBattleCommand(int matchId) : ICommand
 {
     public void Execute(CommandContext context)
     {
-        var player = context.GetModel<IPlayerModel>();
-        context.SendEvent(new PlayerDamaged(10));
+        var game = GameApp.Instance;
+        game.AddChild(BattleDomain.Create(matchId));
     }
 }
-
-public sealed class ReadHpQuery : IQuery<int>
-{
-    public int Execute(QueryContext context) =>
-        context.GetModel<IPlayerModel>().Hp;
-}
-
-domain.SendCommand(new DamageCommand());
-var hp = domain.SendQuery(new ReadHpQuery());
 ```
 
-Command Context 可读取三类组件并嵌套发送 Event/Command/Query。Query Context 只提供 System/Model 读取和嵌套 Query；这是明确的只读意图，不承诺返回对象深度不可变。Context 不能装箱、保存到普通对象字段、捕获到异步闭包或跨越 `await`。
+释放后的 Domain 再被访问会抛 `ObjectDisposedException`。例如命令释放了自己所在的 Domain 后继续使用 `context`，就会立刻得到这个异常。
 
-Domain 事件只在当前 Domain 内同步分发，不沿树传播。每类事件使用写时复制监听器数组：注册和注销会创建新数组，Send 只捕获一个数组引用，不创建快照。当前分发中的修改只影响下一次发送；监听器按注册顺序执行，首次异常立即停止后续监听器。跨 Domain 通信应显式提供共享 Utility/服务。
+挂载会拒绝：挂载自身、已有父级的 Domain、形成环、非 Active 的 Domain。树操作只按引用身份判断，不受派生类重写 `Equals` 影响。已缓存的父组件引用不会因移动而刷新。
 
-订阅所有权由注册入口决定：通过哪个 System 的 Context 注册，就归属哪个 System，与调用栈中的初始化候选、回调目标或闭包捕获的对象无关。该 System 初始化失败或释放时，框架会自动取消其订阅；直接通过 `IDomain.RegisterEvent` 创建的订阅由调用方持有 token，并在 Domain 释放时统一清空。
-
-例如，新组件 A 初始化时调用已有 System B 的业务方法，由 B 的 Context 注册捕获 A 的回调，订阅仍属于 B。A 随后初始化失败，框架清理 A 时不会取消 B 的订阅。需要让订阅跟随 A 结束时，应由 A（若为 System）通过自身 Context 注册，或让 B 返回 token，由 A 保存并在 Release 中取消。
-
-不带参数的便利调用可以使用扩展方法：
+## Command、Query 与事件
 
 ```csharp
-domain.SendCommand<RestartBattleCommand>();
-domain.SendEvent<BattleStarted>();
+public sealed class ReadHpQuery : IQuery<int>
+{
+    public int Execute(QueryContext context) => context.GetModel<IPlayerModel>().Hp;
+}
+
+var hp = domain.SendQuery(new ReadHpQuery());
+domain.SendCommand<RestartBattleCommand>(); // 无参便利写法
 ```
 
-这些扩展只负责调用无参构造函数，不改变同步执行、异常传播或事件作用域。需要构造参数时，直接创建对象后调用非泛型方法。
+- 上下文是 `readonly ref struct`，不能保存到字段、装箱或跨越 `await`。构造函数是公开的，测试可以直接 `command.Execute(new CommandContext(domain))`。
+- Query 表达只读意图，但不保证返回对象不可变。
+- 不提供异步 Command/Query。
+
+事件：
+
+- 只在当前 Domain 内同步分发，不沿树传播，没有全局事件总线。跨 Domain 通信使用共享 Utility，或父级 Model 上的 `BindableProperty`。
+- **只有本地事件会在 Domain 释放时自动失效。** 订阅父域 Model 的 `BindableProperty`、Utility 上的事件等非本地来源时，必须保存句柄并在 `OnRelease` 中取消；否则子域释放后回调仍挂在父域上、继续被调用，回调里一旦访问组件就会抛出 `InvalidOperationException`，而且异常是从父域的触发处抛出的：
+
+```csharp
+public sealed class BattleHudSystem : AbstractSystem
+{
+    private IUnRegister? _scoreToken;
+
+    // IMatchModel 注册在父域，Score 是 BindableProperty<int>。
+    protected override void OnInitialize() =>
+        _scoreToken = GetModel<IMatchModel>().Score.Register((_, score) => Refresh(score));
+
+    protected override void OnRelease() => _scoreToken?.UnRegister();
+
+    private void Refresh(int score) { }
+}
+```
+- 按注册顺序执行；第一个异常会停止后续处理器并原样抛出。
+- 分发中新注册的处理器从下一次发送开始生效；分发中被取消的处理器，本轮不再调用。
+- 分发中 Domain 被释放时，本轮剩余处理器不再调用。
+- 取消注册句柄是幂等的，Domain 释放后调用也不会报错。
 
 ## 释放
 
-`Dispose()` 默认释放当前附着子树：子域按逆挂载顺序后序释放，然后当前域执行 `OnDeactivating -> System 逆激活顺序 -> Model 逆激活顺序 -> 清理事件和 Utility 引用 -> 断链 -> Disposed`。
+`Dispose()` 的顺序：
 
-```csharp
-root.Dispose();          // 方案一：释放仍附着的完整子树
-// 或改用 root.DisposeSelfOnly(); // 方案二：分离并保留直接子树，只释放 root
+```text
+进入 Disposing，全部事件订阅失效
+  -> 子 Domain 按逆挂载顺序后序释放
+  -> OnDeactivating（仅当进入过 Active）
+  -> System 逆序 Release
+  -> Model 逆序 Release
+  -> 清空注册表、从父级摘除
+  -> Disposed
 ```
 
-两种释放策略择一调用。`DisposeSelfOnly` 保留的子域不会被释放，其 Context 也不会失效；临时转换锁会在本次调用结束前阻止组件注册、树结构变更、释放和 Domain 消息执行，但不会自动撤销已有业务引用或冻结保留子域的全部 Context 能力。
+- 释放期间仍可读取组件，适合在 `OnRelease` 中保存数据；Model 在 System 之后释放，所以 System 释放时仍能拿到 Model。
+- 组件按初始化逆序释放，与初始化对称：先注册的 System 后释放。**`OnRelease` 里不要调用其他 System 的方法**，后注册的 System 此时已经释放，调用会抛 `InvalidOperationException`。需要多个组件配合的退出逻辑（例如统一保存），放到 Domain 的 `OnDeactivating` 中，那时所有组件都还可用：
 
-System 在 `Release` 前先取消发布并取消其自动事件订阅；Model 在 `Release` 前先取消发布。所有清理阶段都会尽力执行。一个失败保留原异常和堆栈，多个失败按发生顺序扁平聚合；无论异常如何，目标 Domain 都会进入 Disposed 并保持树结构一致。重复 `Dispose()` 无效果，其他 Disposed 对象操作抛出 `ObjectDisposedException`。
+```csharp
+public sealed class GameDomain : AbstractDomain
+{
+    protected override void OnDeactivating() => GetSystem<IStoreSystem>().Flush(); // 所有组件尚未释放
+
+    // ...
+}
+```
+- 释放期间（从进入 Disposing 起，包括释放子域的阶段）发送事件不会调用任何处理器；订阅事件、挂载或移除子域会抛 `InvalidOperationException`。子域在释放回调里向正在释放的父域发送的事件会被丢弃。
+- 释放过程中再次调用 `Dispose` 无效果，包括子域释放回调间接释放父域的情况。启动期间（例如在 `Configure` 中）调用 `Dispose` 会导致启动失败。
+- 父域在释放子域时已处于 Disposing，所以子域的释放回调里不能再挂载或移除父域的子域。
+- 每一步都会执行到底：一个失败保留原异常和堆栈，多个失败按发生顺序展开为 `AggregateException`；无论如何 Domain 都会进入 Disposed 并从树中摘除。回调自己抛出的非空 `AggregateException` 也会被展开，调用方拿到的是其中的内层异常。
+- 直接释放一个已挂载的子 Domain，会同时把它从父级移除。
 
 ## 常见失败与处理方式
 
 | 情况 | 结果 | 建议 |
 | --- | --- | --- |
-| `Get*` 找不到对象 | `KeyNotFoundException` | 可选依赖改用 `TryGet*` |
-| 本地存在多个可赋值候选 | `InvalidOperationException`，消息列出候选 | 用显式接口键消除歧义 |
-| 重复注册相同主键 | `InvalidOperationException` | 不替换；为不同能力使用不同契约或新建 Domain |
-| 初始化期间嵌套注册 | `InvalidOperationException` | 在 `Configure` 中声明依赖，或 Active 后由外部注册 |
-| 执行消息时修改树、注册或释放 | `InvalidOperationException` | 等同步调用返回后再执行结构变更 |
-| 使用已释放 Domain | `ObjectDisposedException` | 调用方负责停止持有和使用失效引用 |
-| 组件初始化失败 | 原异常继续抛出 | 候选会被清理，且不能再次注册 |
-| 多个释放步骤失败 | `AggregateException` | 按 `InnerExceptions` 顺序检查全部失败 |
+| `Get*` 找不到组件 | `KeyNotFoundException` | 检查注册；可选依赖用 `IDomain.TryGet*` |
+| 本地存在多个可赋值候选 | `InvalidOperationException`，列出候选 | 用显式接口键注册 |
+| 重复注册 | `InvalidOperationException` | 每个键只注册一次 |
+| 在 `Configure` 之外注册 | `InvalidOperationException` | 移到 `Configure`，或用子 Domain |
+| 使用已释放的 Domain | `ObjectDisposedException` | 停止持有失效引用 |
+| 组件初始化失败 | 原异常抛出，Domain 被释放 | 在 `OnInitialize` 内清理自身资源 |
+| 多个释放步骤失败 | `AggregateException` | 按 `InnerExceptions` 顺序检查 |
 
-框架使用名为 `Framework` 的 Logger 自动记录关键生命周期。每个 Domain 在进程内获得递增的诊断编号，日志以“完整类型名#编号”关联同一实例；Domain 激活和释放、Model/System 注册与释放、子 Domain 挂载、移除和分离记录为 Info，生命周期失败记录为 Error 并附带原始异常。Utility、查找、Command、Query、Event 和业务消息内容不会自动记录，以免污染业务数据或增加消息热路径开销。
-
-日志只作为诊断旁路，不改变生命周期异常、清理顺序或聚合结果。`Logger` 会隔离单个处理器的格式化或输出异常并继续调用后续处理器；`BasicConfig`、处理器创建、移除和释放等显式资源管理失败仍会向调用方传播。应用可以通过 `SimpleFramework.Utility.Logging.BasicConfig` 配置根输出，也可以取得 `Logging.GetLogger("Framework")` 单独配置框架日志。
+框架使用名为 `Framework` 的 Logger 记录关键生命周期：Domain 激活与释放、Model/System 注册与释放、子 Domain 挂载与移除记录为 Info，启动和释放失败记录为 Error 并附带原始异常。每个 Domain 有进程内递增的诊断编号，日志以“完整类型名#编号”关联同一实例。查找、Command、Query、事件不会自动记录。日志只是诊断旁路，不影响异常和清理顺序。
 
 ## 线程边界
 
-框架不加锁、不记录线程所有者，也不自动切回主线程。应用应在一个拥有线程串行使用同一棵 Domain 树；后台任务完成后，由应用调度回拥有线程，再调用 Domain 或 Context API。v2 暂不提供异步 Command/Query。
+框架不加锁、不记录线程所有者，也不自动切回主线程。应用应在一个线程串行使用同一棵 Domain 树；后台任务完成后，先调度回该线程，再调用 Domain API。
 
 ## 延伸阅读
 

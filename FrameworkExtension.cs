@@ -1,72 +1,104 @@
-using System.Diagnostics.CodeAnalysis;
-using SimpleFramework.FrameworkImpl;
-
 namespace SimpleFramework;
 
-/// <summary>Model 生命周期实现的组件查找便利方法。</summary>
-/// <remarks>
-/// 方法转发到当前 <see cref="IModelContext"/>：初始化期间和初始化完成后可用；
-/// 组件尚未附加 Context、Context 已失效或释放完成后调用会抛出 <see cref="InvalidOperationException"/>。
-/// TryGet 只将“组件不存在”转换为 <see langword="false"/>，不会屏蔽生命周期或解析歧义错误。
-/// </remarks>
-public static class ModelLookupExtensions
+/// <summary><see cref="ICanGetModel"/> 的能力扩展。</summary>
+public static class CanGetModelExtensions
 {
-    /// <summary>通过当前 Model Context 获取 Utility。</summary>
-    public static T GetUtility<T>(this IModelLifecycle self) where T : class, IUtility =>
-        GetContext(self).GetUtility<T>();
-
-    /// <summary>通过当前 Model Context 尝试获取 Utility。</summary>
-    public static bool TryGetUtility<T>(this IModelLifecycle self, [NotNullWhen(true)] out T? utility) where T : class, IUtility =>
-        GetContext(self).TryGetUtility(out utility);
-
-    private static IModelContext GetContext(IModelLifecycle model)
+    /// <summary>通过所属 Domain 获取 Model；找不到时抛出 <see cref="KeyNotFoundException"/>。</summary>
+    public static T GetModel<T>(this ICanGetModel self) where T : class, IModel
     {
-        ArgumentNullException.ThrowIfNull(model);
-        return (IModelContext)LifecycleOwnershipTracker.GetContext(model);
+        ArgumentNullException.ThrowIfNull(self);
+        return self.GetDomain().GetModel<T>();
     }
 }
 
-/// <summary>System 生命周期实现的组件查找便利方法。</summary>
-/// <remarks>
-/// 方法转发到当前 <see cref="ISystemContext"/>：Model 和 Utility 查找在初始化期间即可使用，
-/// System 查找仅在初始化成功后可用；组件尚未附加 Context、Context 已失效或释放完成后调用会抛出
-/// <see cref="InvalidOperationException"/>。TryGet 只将“组件不存在”转换为 <see langword="false"/>，
-/// 不会屏蔽生命周期或解析歧义错误。
-/// </remarks>
-public static class SystemLookupExtensions
+/// <summary><see cref="ICanGetSystem"/> 的能力扩展。</summary>
+public static class CanGetSystemExtensions
 {
-    /// <summary>通过当前 System Context 获取 Model。</summary>
-    public static T GetModel<T>(this ISystemLifecycle self) where T : class, IModel =>
-        GetContext(self).GetModel<T>();
-
-    /// <summary>通过当前 System Context 尝试获取 Model。</summary>
-    public static bool TryGetModel<T>(this ISystemLifecycle self, [NotNullWhen(true)] out T? model) where T : class, IModel =>
-        GetContext(self).TryGetModel(out model);
-
-    /// <summary>通过当前 System Context 获取 System。</summary>
-    public static T GetSystem<T>(this ISystemLifecycle self) where T : class, ISystem =>
-        GetContext(self).GetSystem<T>();
-
-    /// <summary>通过当前 System Context 尝试获取 System。</summary>
-    public static bool TryGetSystem<T>(this ISystemLifecycle self, [NotNullWhen(true)] out T? system) where T : class, ISystem =>
-        GetContext(self).TryGetSystem(out system);
-
-    /// <summary>通过当前 System Context 获取 Utility。</summary>
-    public static T GetUtility<T>(this ISystemLifecycle self) where T : class, IUtility =>
-        GetContext(self).GetUtility<T>();
-
-    /// <summary>通过当前 System Context 尝试获取 Utility。</summary>
-    public static bool TryGetUtility<T>(this ISystemLifecycle self, [NotNullWhen(true)] out T? utility) where T : class, IUtility =>
-        GetContext(self).TryGetUtility(out utility);
-
-    private static ISystemContext GetContext(ISystemLifecycle system)
+    /// <summary>通过所属 Domain 获取 System；找不到时抛出 <see cref="KeyNotFoundException"/>。</summary>
+    public static T GetSystem<T>(this ICanGetSystem self) where T : class, ISystem
     {
-        ArgumentNullException.ThrowIfNull(system);
-        return (ISystemContext)LifecycleOwnershipTracker.GetContext(system);
+        ArgumentNullException.ThrowIfNull(self);
+        return self.GetDomain().GetSystem<T>();
     }
 }
 
-/// <summary>Domain 的轻量组合便利方法。</summary>
+/// <summary><see cref="ICanGetUtility"/> 的能力扩展。</summary>
+public static class CanGetUtilityExtensions
+{
+    /// <summary>通过所属 Domain 获取 Utility；找不到时抛出 <see cref="KeyNotFoundException"/>。</summary>
+    public static T GetUtility<T>(this ICanGetUtility self) where T : class, IUtility
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        return self.GetDomain().GetUtility<T>();
+    }
+}
+
+/// <summary><see cref="ICanSendCommand"/> 的能力扩展。</summary>
+public static class CanSendCommandExtensions
+{
+    /// <summary>同步执行一个无返回值命令。</summary>
+    public static void SendCommand(this ICanSendCommand self, ICommand command)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        self.GetDomain().SendCommand(command);
+    }
+
+    /// <summary>构造并同步执行一个无参命令。</summary>
+    public static void SendCommand<T>(this ICanSendCommand self) where T : ICommand, new()
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        self.GetDomain().SendCommand(new T());
+    }
+
+    /// <summary>同步执行一个带返回值命令。</summary>
+    public static TResult SendCommand<TResult>(this ICanSendCommand self, ICommand<TResult> command)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        return self.GetDomain().SendCommand(command);
+    }
+}
+
+/// <summary><see cref="ICanSendQuery"/> 的能力扩展。</summary>
+public static class CanSendQueryExtensions
+{
+    /// <summary>同步执行一个查询。</summary>
+    public static TResult SendQuery<TResult>(this ICanSendQuery self, IQuery<TResult> query)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        return self.GetDomain().SendQuery(query);
+    }
+}
+
+/// <summary><see cref="ICanSendEvent"/> 的能力扩展。</summary>
+public static class CanSendEventExtensions
+{
+    /// <summary>在所属 Domain 内发送事件。</summary>
+    public static void SendEvent<T>(this ICanSendEvent self, T message)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        self.GetDomain().SendEvent(message);
+    }
+
+    /// <summary>构造并在所属 Domain 内发送一个无参事件。</summary>
+    public static void SendEvent<T>(this ICanSendEvent self) where T : new()
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        self.GetDomain().SendEvent(new T());
+    }
+}
+
+/// <summary><see cref="ICanRegisterEvent"/> 的能力扩展。</summary>
+public static class CanRegisterEventExtensions
+{
+    /// <summary>在所属 Domain 内订阅事件；Domain 释放时订阅自动失效。</summary>
+    public static IUnRegister RegisterEvent<T>(this ICanRegisterEvent self, Action<T> handler)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        return self.GetDomain().RegisterEvent(handler);
+    }
+}
+
+/// <summary>直接持有 <see cref="IDomain"/> 时的便利方法。</summary>
 public static class DomainExtensions
 {
     /// <summary>构造并同步执行一个无参命令。</summary>

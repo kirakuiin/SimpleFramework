@@ -9,10 +9,16 @@ namespace Test.Framework;
 [NonParallelizable]
 public sealed class DomainLoggingTests
 {
+    /// <summary>Framework 日志器。</summary>
     private Logger _logger = null!;
+
+    /// <summary>收集日志的处理器。</summary>
     private CaptureHandler _capture = null!;
+
+    /// <summary>测试前的日志级别，测试后恢复。</summary>
     private LogLevel _originalLevel;
 
+    /// <summary>接入日志收集处理器。</summary>
     [SetUp]
     public void SetUp()
     {
@@ -23,6 +29,7 @@ public sealed class DomainLoggingTests
         _logger.AddHandler(_capture);
     }
 
+    /// <summary>移除日志收集处理器并恢复日志级别。</summary>
     [TearDown]
     public void TearDown()
     {
@@ -30,20 +37,20 @@ public sealed class DomainLoggingTests
         _logger.Level = _originalLevel;
     }
 
+    /// <summary>测试生命周期与树操作日志使用稳定的 Domain 诊断标识。</summary>
     [Test]
     public void LifecycleAndTreeLogsShareStableDomainIdentity()
     {
         var parent = ProbeDomain.Create(configure: domain =>
         {
-            domain.RegisterModel(new ProbeModel());
-            domain.RegisterSystem(new ProbeSystem());
+            domain.AddModel(new ProbeModel());
+            domain.AddSystem(new ProbeSystem());
         });
         var child = ProbeDomain.Create("child");
 
         parent.AddChild(child);
         parent.RemoveChild(child);
-        parent.AddChild(child);
-        parent.DisposeSelfOnly();
+        parent.Dispose();
         child.Dispose();
 
         var modelRegistration = _capture.Records.Single(record =>
@@ -61,21 +68,20 @@ public sealed class DomainLoggingTests
             Assert.That(parentMessages, Has.Some.EqualTo($"Domain {parentIdentity} 已激活。"));
             Assert.That(parentMessages, Has.Some.Contains("已挂载子 Domain"));
             Assert.That(parentMessages, Has.Some.Contains("已移除子 Domain"));
-            Assert.That(parentMessages, Has.Some.Contains("已分离子 Domain"));
             Assert.That(parentMessages, Has.Some.Contains("System（契约").And.Contains("释放完成"));
             Assert.That(parentMessages, Has.Some.Contains("Model（契约").And.Contains("释放完成"));
             Assert.That(parentMessages, Has.Some.EqualTo($"Domain {parentIdentity} 已释放。"));
         });
 
-        var systemReleaseIndex = parentMessages.FindIndex(message =>
-            message.Contains("System（契约") && message.Contains("释放完成"));
-        var modelReleaseIndex = parentMessages.FindIndex(message =>
-            message.Contains("Model（契约") && message.Contains("释放完成"));
+        var systemReleaseIndex = parentMessages.FindIndex(message => message.Contains("System（契约") && message.Contains("释放完成"));
+        var modelReleaseIndex = parentMessages.FindIndex(message => message.Contains("Model（契约") && message.Contains("释放完成"));
         var domainReleaseIndex = parentMessages.FindIndex(message => message == $"Domain {parentIdentity} 已释放。");
+
         Assert.That(systemReleaseIndex, Is.LessThan(modelReleaseIndex));
         Assert.That(modelReleaseIndex, Is.LessThan(domainReleaseIndex));
     }
 
+    /// <summary>测试日志处理器失败不会掩盖生命周期异常。</summary>
     [Test]
     public void LoggingHandlerFailureDoesNotMaskLifecycleFailure()
     {
@@ -86,7 +92,7 @@ public sealed class DomainLoggingTests
         try
         {
             var actual = Assert.Throws<ApplicationException>(() => ProbeDomain.Create(configure: domain =>
-                domain.RegisterModel(new ProbeModel(_ => throw expected))));
+                domain.AddModel(new ProbeModel(_ => throw expected))));
 
             Assert.That(actual, Is.SameAs(expected));
             Assert.That(_capture.Records, Has.Some.Matches<LogRecord>(record =>
@@ -98,81 +104,7 @@ public sealed class DomainLoggingTests
         }
     }
 
-    [Test]
-    public void ActivationLogCannotDisposeCandidateBeforeCreateReturns()
-    {
-        ProbeDomain? candidate = null;
-        var handler = new ActionHandler(record =>
-        {
-            if (record.Message.EndsWith("已激活。", StringComparison.Ordinal)) candidate!.Dispose();
-        });
-        _logger.AddHandler(handler);
-
-        try
-        {
-            var domain = ProbeDomain.Create(configure: value => candidate = value);
-
-            Assert.DoesNotThrow(() => domain.RegisterUtility(new ClockUtility()));
-            domain.Dispose();
-        }
-        finally
-        {
-            _logger.RemoveHandler(handler);
-            candidate?.Dispose();
-        }
-    }
-
-    [Test]
-    public void AddChildLogCannotRemoveChildBeforeAddReturns()
-    {
-        var parent = ProbeDomain.Create("parent");
-        var child = ProbeDomain.Create("child");
-        var handler = new ActionHandler(record =>
-        {
-            if (record.Message.Contains("已挂载子 Domain", StringComparison.Ordinal)) parent.RemoveChild(child);
-        });
-        _logger.AddHandler(handler);
-
-        try
-        {
-            parent.AddChild(child);
-
-            Assert.That(child.Parent, Is.SameAs(parent));
-        }
-        finally
-        {
-            _logger.RemoveHandler(handler);
-            parent.Dispose();
-            child.Dispose();
-        }
-    }
-
-    [Test]
-    public void DisposeSelfOnlyLogCannotDisposeDetachedChildBeforeReturn()
-    {
-        var parent = ProbeDomain.Create("parent");
-        var child = ProbeDomain.Create("child");
-        parent.AddChild(child);
-        var handler = new ActionHandler(record =>
-        {
-            if (record.Message.Contains("已分离子 Domain", StringComparison.Ordinal)) child.Dispose();
-        });
-        _logger.AddHandler(handler);
-
-        try
-        {
-            parent.DisposeSelfOnly();
-
-            Assert.That(child.Parent, Is.Null);
-        }
-        finally
-        {
-            _logger.RemoveHandler(handler);
-            parent.Dispose();
-            child.Dispose();
-        }
-    }
-
+    /// <summary>从日志消息中提取 Domain 诊断标识。</summary>
     private static string ExtractDomainIdentity(string message)
     {
         var match = Regex.Match(message, @"Domain (?<identity>[^ ]+#\d+)");
@@ -183,28 +115,35 @@ public sealed class DomainLoggingTests
     /// <summary>收集 Framework 日志记录供测试断言。</summary>
     private sealed class CaptureHandler : IHandler
     {
+        /// <summary>收集到的日志记录。</summary>
         public List<LogRecord> Records { get; } = [];
+
+        /// <inheritdoc />
         public LogLevel Level { get; set; } = LogLevel.NoTest;
+
+        /// <inheritdoc />
         public IFormatter Formatter { get; set; } = new StandardFormatter();
+
+        /// <inheritdoc />
         public void Emit(LogRecord record) => Records.Add(record);
+
+        /// <inheritdoc />
         public void Dispose() { }
     }
 
     /// <summary>模拟日志输出目标发送失败。</summary>
     private sealed class ThrowingHandler : IHandler
     {
+        /// <inheritdoc />
         public LogLevel Level { get; set; } = LogLevel.NoTest;
-        public IFormatter Formatter { get; set; } = new StandardFormatter();
-        public void Emit(LogRecord record) => throw new InvalidOperationException("handler failure");
-        public void Dispose() { }
-    }
 
-    /// <summary>将日志记录转发给测试回调。</summary>
-    private sealed class ActionHandler(Action<LogRecord> emit) : IHandler
-    {
-        public LogLevel Level { get; set; } = LogLevel.NoTest;
+        /// <inheritdoc />
         public IFormatter Formatter { get; set; } = new StandardFormatter();
-        public void Emit(LogRecord record) => emit(record);
+
+        /// <inheritdoc />
+        public void Emit(LogRecord record) => throw new InvalidOperationException("handler failure");
+
+        /// <inheritdoc />
         public void Dispose() { }
     }
 }

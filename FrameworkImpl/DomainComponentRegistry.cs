@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace SimpleFramework.FrameworkImpl;
 
 /// <summary>Domain 注册表中的组件分类。</summary>
@@ -15,113 +13,69 @@ internal enum ComponentCategory
     Utility
 }
 
-/// <summary>描述一个组件的分类、唯一注册键、实例及生命周期资源。</summary>
-internal sealed class DomainComponentEntry
+/// <summary>一条注册记录：分类、唯一注册键和实例。</summary>
+/// <param name="Category">组件分类。</param>
+/// <param name="Key">注册键，即查找时的精确匹配类型。</param>
+/// <param name="Instance">组件实例。</param>
+internal sealed record DomainComponentEntry(ComponentCategory Category, Type Key, object Instance)
 {
-    private readonly List<IUnRegister> _ownedResources = new();
-
-    public DomainComponentEntry(ComponentCategory category, Type key, object instance)
-    {
-        Category = category;
-        Key = key;
-        Instance = instance;
-    }
-
-    public ComponentCategory Category { get; }
-    public Type Key { get; }
-    public object Instance { get; }
-    public bool InitializationStarted { get; set; }
-    public bool Published { get; set; }
-    public ComponentContextBase? Context { get; set; }
-
-    public IUnRegister Own(IUnRegister token)
-    {
-        IUnRegister? owned = null;
-        owned = new CustomUnRegister(() =>
-        {
-            _ownedResources.Remove(owned!);
-            token.UnRegister();
-        });
-        _ownedResources.Add(owned);
-        return owned;
-    }
-
-    public IEnumerable<IUnRegister> TakeOwnedResourcesReverse()
-    {
-        // 先转移剩余 token，避免取消回调修改正在逆序遍历的归属列表。
-        var resources = _ownedResources.ToArray();
-        _ownedResources.Clear();
-        for (var index = resources.Length - 1; index >= 0; index--) yield return resources[index];
-    }
+    /// <summary>用于日志的组件描述。</summary>
+    public override string ToString() =>
+        $"{Category}（契约 {Key.FullName ?? Key.Name}，实现 {Instance.GetType().FullName ?? Instance.GetType().Name}）";
 }
 
-/// <summary>维护单个 Domain 的三类组件候选、精确键和可赋值解析。</summary>
+/// <summary>维护单个 Domain 的三类组件，提供精确键与唯一可赋值查找。</summary>
 internal sealed class DomainComponentRegistry
 {
-    private readonly Dictionary<ComponentCategory, Dictionary<Type, DomainComponentEntry>> _published = new()
+    /// <summary>按分类保存的注册键索引。</summary>
+    private readonly Dictionary<ComponentCategory, Dictionary<Type, DomainComponentEntry>> _entries = new()
     {
         [ComponentCategory.Model] = new(),
         [ComponentCategory.System] = new(),
         [ComponentCategory.Utility] = new()
     };
 
-    private readonly Dictionary<object, DomainComponentEntry> _allByInstance = new(ReferenceEqualityComparer.Instance);
+    /// <summary>已注册实例集合，按引用判等，用于拒绝同一实例占用多个键或分类。</summary>
+    private readonly HashSet<object> _instances = new(ReferenceEqualityComparer.Instance);
 
-    public IReadOnlyCollection<DomainComponentEntry> Published(ComponentCategory category) => _published[category].Values;
-
-    public bool HasKey(ComponentCategory category, Type key) =>
-        _published[category].ContainsKey(key) || _allByInstance.Values.Any(entry => entry.Category == category && entry.Key == key);
-
-    public DomainComponentEntry AddCandidate(ComponentCategory category, Type key, object instance)
+    /// <summary>添加一条注册记录。</summary>
+    /// <exception cref="InvalidOperationException">注册键已存在，或实例已经注册过。</exception>
+    public DomainComponentEntry Add(ComponentCategory category, Type key, object instance, string domainName)
     {
-        if (HasKey(category, key))
+        var entries = _entries[category];
+        if (entries.ContainsKey(key))
         {
-            throw new InvalidOperationException($"{category} 注册键 {key.FullName} 已存在，v2 不支持替换。");
+            throw new InvalidOperationException($"Domain {domainName} 的 {category} 注册键 {key.FullName} 已存在，不支持替换。");
         }
 
-        if (_allByInstance.TryGetValue(instance, out var existing))
+        if (!_instances.Add(instance))
         {
-            throw new InvalidOperationException(
-                $"实例 {instance.GetType().FullName} 已在当前 Domain 以 {existing.Category}/{existing.Key.FullName} 注册，不能重复注册或跨分类注册。");
+            throw new InvalidOperationException($"实例 {instance.GetType().FullName} 已在 Domain {domainName} 中注册，不能重复注册。");
         }
 
         var entry = new DomainComponentEntry(category, key, instance);
-        _allByInstance.Add(instance, entry);
+        entries.Add(key, entry);
         return entry;
     }
 
-    public void Publish(DomainComponentEntry entry)
-    {
-        _published[entry.Category].Add(entry.Key, entry);
-        entry.Published = true;
-    }
-
-    public void Unpublish(DomainComponentEntry entry)
-    {
-        if (entry.Published) _published[entry.Category].Remove(entry.Key);
-        entry.Published = false;
-    }
-
-    public void Forget(DomainComponentEntry entry)
-    {
-        Unpublish(entry);
-        _allByInstance.Remove(entry.Instance);
-    }
-
+    /// <summary>在本 Domain 内查找：先精确键，再唯一可赋值实例。</summary>
+    /// <exception cref="InvalidOperationException">存在多个可赋值候选。</exception>
     public bool TryResolveLocal(ComponentCategory category, Type requested, string domainName, out object? instance)
     {
-        var entries = _published[category];
+        var entries = _entries[category];
         if (entries.TryGetValue(requested, out var exact))
         {
             instance = exact.Instance;
             return true;
         }
 
+        // 查找处于热路径，用循环而不是 LINQ，命中唯一候选时不分配内存；只有歧义时才构造候选列表。
         DomainComponentEntry? match = null;
         List<DomainComponentEntry>? candidates = null;
         foreach (var entry in entries.Values)
         {
             if (!requested.IsInstanceOfType(entry.Instance)) continue;
+
             if (match is null)
             {
                 match = entry;
@@ -144,86 +98,10 @@ internal sealed class DomainComponentRegistry
         return match is not null;
     }
 
-    public void ClearUtilities()
+    /// <summary>清空全部注册；不会释放 Utility，它们由调用方管理。</summary>
+    public void Clear()
     {
-        foreach (var entry in _published[ComponentCategory.Utility].Values.ToArray()) Forget(entry);
-    }
-
-    public void ClearAllCandidates()
-    {
-        _allByInstance.Clear();
-        foreach (var category in _published.Values) category.Clear();
-    }
-}
-
-/// <summary>跨 Domain 跟踪 Model/System 实例的一次性独占生命周期所有权。</summary>
-internal static class LifecycleOwnershipTracker
-{
-    private static readonly ConditionalWeakTable<object, Ownership> Records = new();
-
-    public static void Reserve(object instance, object owner, ComponentCategory category, Type key)
-    {
-        if (Records.TryGetValue(instance, out var existing))
-        {
-            throw new InvalidOperationException(
-                $"生命周期实例 {instance.GetType().FullName} 已被 {existing.Category}/{existing.Key.FullName} 消耗，不能再次注册。");
-        }
-
-        Records.Add(instance, new Ownership(owner, category, key));
-    }
-
-    public static void Begin(object instance, object owner)
-    {
-        var record = Get(instance, owner);
-        record.Started = true;
-    }
-
-    public static void AttachContext(object instance, object owner, ComponentContextBase context)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        Get(instance, owner).Context = context;
-    }
-
-    public static ComponentContextBase GetContext(object instance)
-    {
-        if (!Records.TryGetValue(instance, out var record) || record.Context is null)
-        {
-            throw new InvalidOperationException($"生命周期组件 {instance.GetType().FullName} 当前没有可用的 Domain Context。");
-        }
-
-        return record.Context;
-    }
-
-    public static void DetachContext(object instance, ComponentContextBase? context)
-    {
-        if (context is null || !Records.TryGetValue(instance, out var record)) return;
-        if (ReferenceEquals(record.Context, context)) record.Context = null;
-    }
-
-    public static void CancelUntouched(object instance, object owner)
-    {
-        var record = Get(instance, owner);
-        if (record.Started) return;
-        Records.Remove(instance);
-    }
-
-    private static Ownership Get(object instance, object owner)
-    {
-        if (!Records.TryGetValue(instance, out var record) || !ReferenceEquals(record.Owner, owner))
-        {
-            throw new InvalidOperationException("生命周期实例不属于当前 Domain。");
-        }
-
-        return record;
-    }
-
-    /// <summary>记录生命周期实例的唯一所有者、分类、键及是否已经开始初始化。</summary>
-    private sealed class Ownership(object owner, ComponentCategory category, Type key)
-    {
-        public object Owner { get; } = owner;
-        public ComponentCategory Category { get; } = category;
-        public Type Key { get; } = key;
-        public bool Started { get; set; }
-        public ComponentContextBase? Context { get; set; }
+        foreach (var entries in _entries.Values) entries.Clear();
+        _instances.Clear();
     }
 }

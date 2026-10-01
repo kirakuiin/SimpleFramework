@@ -1,65 +1,13 @@
-using System.Runtime.CompilerServices;
 using NUnit.Framework;
 using SimpleFramework;
-using SimpleFramework.FrameworkImpl;
 
 namespace Test.Framework;
 
-/// <summary>验证同步 CQ、本地事件、严格单例和热路径分配特征。</summary>
+/// <summary>验证 Command/Query 上下文、能力规则、本地事件和严格单例契约。</summary>
 [TestFixture]
 public sealed class DomainExecutionEventSingletonTests
 {
-    [Test]
-    public void ParameterlessEventRegistrationRejectsNullWithoutLeavingSubscription()
-    {
-        var source = new Event<int>();
-        var error = Assert.Throws<ArgumentNullException>(() => ((IEvent)source).Register(null!));
-        Assert.That(error!.ParamName, Is.EqualTo("onEvent"));
-        Assert.That(source.IsEmpty, Is.True);
-
-        var calls = 0;
-        using var token = ((IEvent)source).Register(() => calls++);
-        Assert.DoesNotThrow(() => source.Trigger(1));
-        Assert.That(calls, Is.EqualTo(1));
-    }
-
-    [Test]
-    public void DisposedDomainTokensDoNotRetainOwnOrOtherEventSubscribers()
-    {
-        var (token, own, other, otherType) = CreateDisposedEventSubscriptions();
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
-        Assert.That(own.IsAlive, Is.False, "旧 token 不应保留自身监听器。");
-        Assert.That(other.IsAlive, Is.False, "旧 token 不应保留同类型的其他监听器。");
-        Assert.That(otherType.IsAlive, Is.False);
-        Assert.DoesNotThrow(() => token.UnRegister());
-        Assert.DoesNotThrow(() => token.UnRegister());
-        GC.KeepAlive(token);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static (IUnRegister Token, WeakReference Own, WeakReference Other, WeakReference OtherType) CreateDisposedEventSubscriptions()
-    {
-        var domain = ProbeDomain.Create();
-        var own = new EventSubscriber();
-        var other = new EventSubscriber();
-        var otherType = new EventSubscriber();
-        var token = domain.RegisterEvent<int>(own.Handle);
-        domain.RegisterEvent<int>(other.Handle);
-        domain.RegisterEvent<string>(otherType.HandleText);
-        domain.Dispose();
-        return (token, new WeakReference(own), new WeakReference(other), new WeakReference(otherType));
-    }
-
-    /// <summary>用于验证事件清理后回调目标可被回收的订阅者。</summary>
-    private sealed class EventSubscriber
-    {
-        public void Handle(int value) { }
-        public void HandleText(string value) { }
-    }
-
+    /// <summary>清理单例测试留下的回调和实例。</summary>
     [TearDown]
     public void TearDownSingleton()
     {
@@ -67,321 +15,375 @@ public sealed class DomainExecutionEventSingletonTests
         StrictProbeDomain.DestroyInstance();
     }
 
+    /// <summary>测试 Command 与 Query 上下文是 ref struct。</summary>
     [Test]
-    public void InitializingContextsExposeOnlyDeclaredCapabilities()
-    {
-        var handled = 0;
-        var model = new ProbeModel(context =>
-        {
-            Assert.That(context.GetUtility<IClockUtility>(), Is.Not.Null);
-            Assert.Throws<InvalidOperationException>(() => context.SendEvent(new Ping(1)));
-        });
-        var system = new ProbeSystem(context =>
-        {
-            Assert.That(context.GetModel<IPlayerModel>(), Is.SameAs(model));
-            Assert.That(context.GetUtility<IClockUtility>(), Is.Not.Null);
-            context.RegisterEvent<Ping>(_ => handled++);
-            Assert.Throws<InvalidOperationException>(() => context.GetSystem<IPlayerSystem>());
-            Assert.Throws<InvalidOperationException>(() => context.SendEvent(new Ping(1)));
-        });
-        using var domain = ProbeDomain.Create(configure: value =>
-        {
-            value.RegisterUtility<IClockUtility>(new ClockUtility());
-            value.RegisterModel(model);
-            value.RegisterSystem(system);
-        });
-        system.SavedContext!.SendEvent(new Ping(1));
-        Assert.That(system.SavedContext.GetSystem<IPlayerSystem>(), Is.SameAs(system));
-        Assert.That(handled, Is.EqualTo(1));
-    }
-
-    [Test]
-    public void LookupExtensionsSupportDirectLifecycleImplementationsAndPreserveContextRules()
-    {
-        var utility = new ClockUtility();
-        ProbeModel? model = null;
-        ProbeSystem? system = null;
-        model = new ProbeModel(_context =>
-        {
-            Assert.That(model!.GetUtility<IClockUtility>(), Is.SameAs(utility));
-            Assert.That(model!.TryGetUtility<IClockUtility>(out var found), Is.True);
-            Assert.That(found, Is.SameAs(utility));
-        });
-        system = new ProbeSystem(_context =>
-        {
-            Assert.That(system!.GetModel<IPlayerModel>(), Is.SameAs(model));
-            Assert.That(system!.TryGetModel<IPlayerModel>(out var foundModel), Is.True);
-            Assert.That(foundModel, Is.SameAs(model));
-            Assert.That(system!.GetUtility<IClockUtility>(), Is.SameAs(utility));
-            Assert.That(system!.TryGetUtility<IClockUtility>(out var foundUtility), Is.True);
-            Assert.That(foundUtility, Is.SameAs(utility));
-            Assert.Throws<InvalidOperationException>(() => system!.GetSystem<IPlayerSystem>());
-            Assert.Throws<InvalidOperationException>(() => system!.TryGetSystem<IPlayerSystem>(out _));
-        });
-
-        var domain = ProbeDomain.Create(configure: value =>
-        {
-            value.RegisterUtility<IClockUtility>(utility);
-            value.RegisterModel(model!);
-            value.RegisterSystem(system!);
-        });
-
-        Assert.That(system!.GetSystem<IPlayerSystem>(), Is.SameAs(system));
-        Assert.That(system.TryGetSystem<IPlayerSystem>(out var foundSystem), Is.True);
-        Assert.That(foundSystem, Is.SameAs(system));
-
-        domain.Dispose();
-        Assert.Throws<InvalidOperationException>(() => model!.GetUtility<IClockUtility>());
-        Assert.Throws<InvalidOperationException>(() => system.GetModel<IPlayerModel>());
-    }
-
-    [Test]
-    public void CommandAndQueryContextsHaveDistinctCapabilitiesAndAreByRefLike()
+    public void ContextsAreByRefLike()
     {
         Assert.That(typeof(CommandContext).IsByRefLike, Is.True);
         Assert.That(typeof(QueryContext).IsByRefLike, Is.True);
-        Assert.That(typeof(QueryContext).GetMethod(nameof(CommandContext.SendEvent)), Is.Null);
-        Assert.That(typeof(QueryContext).GetMethod(nameof(CommandContext.SendCommand), Type.EmptyTypes), Is.Null);
     }
 
+    /// <summary>测试命令和查询可以同步嵌套执行并返回结果。</summary>
     [Test]
-    public void CommandsAndQueriesNestSynchronouslyAndRestoreExecutionAfterFailure()
+    public void CommandsAndQueriesNestSynchronously()
+    {
+        var model = new ProbeModel();
+        using var domain = ProbeDomain.Create(configure: value => value.AddModel(model));
+        var order = new List<string>();
+
+        var result = domain.SendCommand(new DelegateCommand<int>(context =>
+        {
+            order.Add("command");
+            context.SendCommand(new DelegateCommand(_ => order.Add("nested")));
+            var resolved = context.SendQuery(new DelegateQuery<IPlayerModel>(query => query.GetModel<IPlayerModel>()));
+            Assert.That(resolved, Is.SameAs(model));
+            return 42;
+        }));
+
+        Assert.That(result, Is.EqualTo(42));
+        Assert.That(order, Is.EqualTo(new[] { "command", "nested" }));
+    }
+
+    /// <summary>测试可以直接构造上下文来执行命令。</summary>
+    [Test]
+    public void ContextsCanBeConstructedDirectlyForTests()
+    {
+        var utility = new ClockUtility { Value = 3 };
+        using var domain = ProbeDomain.Create(configure: value => value.AddUtility<IClockUtility>(utility));
+        var command = new DelegateCommand<int>(context => context.GetUtility<IClockUtility>().Value);
+
+        Assert.That(command.Execute(new CommandContext(domain)), Is.EqualTo(3));
+        Assert.Throws<ArgumentNullException>(() => _ = new QueryContext(null!));
+    }
+
+    /// <summary>测试 IController 通过扩展方法获取组件、发送命令与查询、订阅事件。</summary>
+    [Test]
+    public void ControllerUsesCapabilityExtensions()
+    {
+        var model = new ProbeModel();
+        var system = new ProbeSystem();
+        var utility = new ClockUtility();
+        using var domain = ProbeDomain.Create(configure: value =>
+        {
+            value.AddModel(model);
+            value.AddSystem(system);
+            value.AddUtility(utility);
+        });
+        var controller = new ProbeController(domain);
+        var received = new List<int>();
+        var executed = false;
+
+        using var token = controller.RegisterEvent<Ping>(ping => received.Add(ping.Value));
+        controller.SendCommand(new DelegateCommand(context =>
+        {
+            executed = true;
+            context.SendEvent(new Ping(1));
+        }));
+
+        Assert.That(controller.GetModel<IPlayerModel>(), Is.SameAs(model));
+        Assert.That(controller.GetSystem<IPlayerSystem>(), Is.SameAs(system));
+        Assert.That(controller.GetUtility<ClockUtility>(), Is.SameAs(utility));
+        Assert.That(controller.SendQuery(new DelegateQuery<int>(_ => 5)), Is.EqualTo(5));
+        Assert.That(executed, Is.True);
+        Assert.That(received, Is.EqualTo(new[] { 1 }));
+    }
+
+    /// <summary>测试基类 System 的受保护能力可用，释放后失效。</summary>
+    [Test]
+    public void BaseClassSystemUsesProtectedCapabilitiesAndLosesThemAfterRelease()
+    {
+        var model = new ProbeModel();
+        var received = new List<int>();
+        var system = new DerivedSystem(self => self.Subscribe<Ping>(ping => received.Add(ping.Value)));
+        var domain = ProbeDomain.Create(configure: value =>
+        {
+            value.AddModel(model);
+            value.AddSystem(system);
+        });
+
+        system.Publish(new Ping(7));
+
+        Assert.That(system.ReadModel<IPlayerModel>(), Is.SameAs(model));
+        Assert.That(system.ReadSystem<IPlayerSystem>(), Is.SameAs(system));
+        Assert.That(received, Is.EqualTo(new[] { 7 }));
+
+        domain.Dispose();
+
+        Assert.Throws<InvalidOperationException>(() => system.ReadModel<IPlayerModel>());
+    }
+
+    /// <summary>测试基类 Model 的能力在释放后失效。</summary>
+    [Test]
+    public void BaseClassModelLosesCapabilitiesAfterRelease()
+    {
+        var utility = new ClockUtility();
+        var model = new DerivedModel();
+        var domain = ProbeDomain.Create(configure: value =>
+        {
+            value.AddModel(model);
+            value.AddUtility(utility);
+        });
+
+        Assert.That(model.ReadUtility<ClockUtility>(), Is.SameAs(utility));
+
+        domain.Dispose();
+
+        Assert.Throws<InvalidOperationException>(() => model.ReadUtility<ClockUtility>());
+        Assert.Throws<InvalidOperationException>(() => model.Publish(new Ping(0)));
+    }
+
+    /// <summary>测试命令上下文支持无参的命令和事件便利方法。</summary>
+    [Test]
+    public void CommandContextSupportsParameterlessCommandsAndEvents()
     {
         using var domain = ProbeDomain.Create();
-        var order = new List<string>();
+        var received = 0;
+        domain.RegisterEvent<Ping>(_ => received++);
+
         domain.SendCommand(new DelegateCommand(context =>
         {
-            order.Add("outer-start");
-            var result = context.SendQuery(new DelegateQuery<int>(_ =>
-            {
-                order.Add("query");
-                return 7;
-            }));
-            order.Add($"outer-{result}");
+            context.SendEvent<Ping>();
+            context.SendCommand<EmptyCommand>();
         }));
-        Assert.That(order, Is.EqualTo(new[] { "outer-start", "query", "outer-7" }));
 
-        var expected = new ApplicationException("command");
-        Assert.That(Assert.Throws<ApplicationException>(() =>
-            domain.SendCommand(new DelegateCommand(_ => throw expected))), Is.SameAs(expected));
-        domain.RegisterUtility(new ClockUtility());
+        Assert.That(received, Is.EqualTo(1));
     }
 
-    [Test]
-    public void SameCommandInstanceCanRunSequentiallyAcrossDomains()
-    {
-        var values = new List<int>();
-        var command = new DelegateCommand(context => values.Add(context.GetUtility<IClockUtility>().Value));
-        using var first = ProbeDomain.Create(configure: value => value.RegisterUtility<IClockUtility>(new ClockUtility { Value = 1 }));
-        using var second = ProbeDomain.Create(configure: value => value.RegisterUtility<IClockUtility>(new ClockUtility { Value = 2 }));
-        first.SendCommand(command);
-        second.SendCommand(command);
-        Assert.That(values, Is.EqualTo(new[] { 1, 2 }));
-    }
-
+    /// <summary>测试事件只在本 Domain 内按注册顺序分发。</summary>
     [Test]
     public void EventsAreLocalAndRunInRegistrationOrder()
     {
         using var parent = ProbeDomain.Create();
-        using var child = ProbeDomain.Create();
+        var child = ProbeDomain.Create();
         parent.AddChild(child);
         var order = new List<string>();
         parent.RegisterEvent<Ping>(_ => order.Add("parent"));
-        child.RegisterEvent<Ping>(_ => order.Add("child-1"));
-        child.RegisterEvent<Ping>(_ => order.Add("child-2"));
-        child.SendEvent(new Ping(1));
-        Assert.That(order, Is.EqualTo(new[] { "child-1", "child-2" }));
+        child.RegisterEvent<Ping>(_ => order.Add("first"));
+        child.RegisterEvent<Ping>(_ => order.Add("second"));
+
+        child.SendEvent(new Ping(0));
+
+        Assert.That(order, Is.EqualTo(new[] { "first", "second" }));
     }
 
+    /// <summary>测试分发中新注册的处理器从下一次发送开始生效。</summary>
     [Test]
-    public void EventRegistrationChangesOnlyFutureCopyOnWriteSnapshots()
+    public void HandlerRegisteredDuringSendRunsOnlyOnNextSend()
     {
         using var domain = ProbeDomain.Create();
         var calls = new List<string>();
-        IUnRegister? secondToken = null;
+        domain.RegisterEvent<Ping>(_ =>
+        {
+            calls.Add("outer");
+            if (calls.Count == 1) domain.RegisterEvent<Ping>(_ => calls.Add("inner"));
+        });
+
+        domain.SendEvent(new Ping(0));
+        domain.SendEvent(new Ping(1));
+
+        Assert.That(calls, Is.EqualTo(new[] { "outer", "outer", "inner" }));
+    }
+
+    /// <summary>测试分发中被取消的处理器本轮不再调用。</summary>
+    [Test]
+    public void HandlerUnregisteredDuringSendIsSkippedInThatSend()
+    {
+        using var domain = ProbeDomain.Create();
+        var calls = new List<string>();
+        IUnRegister? later = null;
         domain.RegisterEvent<Ping>(_ =>
         {
             calls.Add("first");
-            secondToken?.UnRegister();
-            domain.RegisterEvent<Ping>(_ => calls.Add("late"));
+            later!.UnRegister();
         });
-        secondToken = domain.RegisterEvent<Ping>(_ => calls.Add("second"));
-        domain.SendEvent(new Ping(1));
-        Assert.That(calls, Is.EqualTo(new[] { "first", "second" }));
-        calls.Clear();
-        domain.SendEvent(new Ping(2));
-        Assert.That(calls, Is.EqualTo(new[] { "first", "late" }));
+        later = domain.RegisterEvent<Ping>(_ => calls.Add("later"));
+
+        domain.SendEvent(new Ping(0));
+
+        Assert.That(calls, Is.EqualTo(new[] { "first" }));
     }
 
+    /// <summary>测试分发中释放 Domain 后剩余处理器不再调用。</summary>
     [Test]
-    public void EventFailureIsFailFastAndRestoresTreeExecution()
+    public void DisposingDomainDuringSendStopsRemainingHandlers()
+    {
+        var domain = ProbeDomain.Create();
+        var calls = new List<string>();
+        domain.RegisterEvent<Ping>(_ =>
+        {
+            calls.Add("first");
+            domain.Dispose();
+        });
+        domain.RegisterEvent<Ping>(_ => calls.Add("second"));
+
+        Assert.DoesNotThrow(() => domain.SendEvent(new Ping(0)));
+        Assert.That(calls, Is.EqualTo(new[] { "first" }));
+    }
+
+    /// <summary>测试处理器抛异常时停止后续处理器并原样抛出。</summary>
+    [Test]
+    public void EventFailureIsFailFast()
     {
         using var domain = ProbeDomain.Create();
-        var laterRan = false;
-        var expected = new ApplicationException("event");
-        domain.RegisterEvent<Ping>(_ => throw expected);
-        domain.RegisterEvent<Ping>(_ => laterRan = true);
-        Assert.That(Assert.Throws<ApplicationException>(() => domain.SendEvent(new Ping(1))), Is.SameAs(expected));
-        Assert.That(laterRan, Is.False);
-        domain.RegisterUtility(new ClockUtility());
-    }
-
-    [Test]
-    public void SystemOwnedEventsAreCanceledBeforeRelease()
-    {
+        var failure = new ApplicationException("handler");
         var calls = 0;
-        ProbeSystem? system = null;
-        var domain = ProbeDomain.Create(configure: value =>
-        {
-            system = new ProbeSystem(
-                context => context.RegisterEvent<Ping>(_ => calls++),
-                () => system!.SavedContext!.SendEvent(new Ping(2)));
-            value.RegisterSystem(system);
-        });
-        domain.SendEvent(new Ping(1));
-        Assert.That(calls, Is.EqualTo(1));
-        Assert.Throws<InvalidOperationException>(() => domain.Dispose());
-        Assert.That(calls, Is.EqualTo(1));
-        domain.Dispose();
+        domain.RegisterEvent<Ping>(_ => throw failure);
+        domain.RegisterEvent<Ping>(_ => calls++);
+
+        Assert.That(Assert.Throws<ApplicationException>(() => domain.SendEvent(new Ping(0))), Is.SameAs(failure));
+        Assert.That(calls, Is.Zero);
     }
 
+    /// <summary>测试取消注册句柄幂等，Domain 释放后调用也无害。</summary>
     [Test]
     public void EventTokensAreIdempotentAndHarmlessAfterDisposal()
     {
         var domain = ProbeDomain.Create();
-        var token = domain.RegisterEvent<Ping>(_ => { });
+        var calls = 0;
+        var token = domain.RegisterEvent<Ping>(_ => calls++);
+
         token.UnRegister();
         token.UnRegister();
+        domain.SendEvent(new Ping(0));
+        var lateToken = domain.RegisterEvent<Ping>(_ => calls++);
         domain.Dispose();
-        token.UnRegister();
+
+        Assert.That(calls, Is.Zero);
+        Assert.DoesNotThrow(() => lateToken.UnRegister());
     }
 
+    /// <summary>测试同一委托注册两次时句柄只取消自己那一次。</summary>
     [Test]
-    public void EventTokenOnlyRemovesItsExactDuplicateDelegateRegistration()
+    public void EventTokenOnlyRemovesItsOwnDuplicateDelegateRegistration()
     {
-        var @event = new Event<int>();
+        using var domain = ProbeDomain.Create();
         var calls = 0;
-        Action<int> handler = _ => calls++;
-        var first = @event.Register(handler);
-        _ = @event.Register(handler);
+        void Handler(Ping _) => calls++;
+        var first = domain.RegisterEvent<Ping>(Handler);
+        domain.RegisterEvent<Ping>(Handler);
 
-        @event.UnRegister(handler);
         first.UnRegister();
-        @event.Trigger(1);
+        domain.SendEvent(new Ping(0));
 
         Assert.That(calls, Is.EqualTo(1));
     }
 
+    /// <summary>测试已释放的 Domain 对各种操作抛出 ObjectDisposedException。</summary>
     [Test]
-    public void SingletonPublishesOnlyAfterOnActivated()
+    public void DisposedDomainRejectsOperationsWithObjectDisposedException()
     {
-        StrictProbeDomain? seenDuringConfigure = null;
-        StrictProbeDomain.SetHooks(configure: _ => seenDuringConfigure = StrictProbeDomain.GetInstance());
+        var domain = ProbeDomain.Create();
+        var other = ProbeDomain.Create();
+        domain.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => _ = domain.Parent);
+        Assert.Throws<ObjectDisposedException>(() => domain.GetModel<IPlayerModel>());
+        Assert.Throws<ObjectDisposedException>(() => domain.SendEvent(new Ping(0)));
+        Assert.Throws<ObjectDisposedException>(() => domain.RegisterEvent<Ping>(_ => { }));
+        Assert.Throws<ObjectDisposedException>(() => domain.SendCommand(new EmptyCommand()));
+        Assert.Throws<ObjectDisposedException>(() => domain.AddChild(other));
+        Assert.Throws<ObjectDisposedException>(() => other.AddChild(domain));
+        other.Dispose();
+    }
+
+    /// <summary>测试查找、发送事件、命令与查询在热身后不分配内存。</summary>
+    [Test]
+    public void HotPathsHaveNoPerCallAllocationAfterWarmup()
+    {
+        using var domain = ProbeDomain.Create(configure: value =>
+        {
+            value.AddUtility<IClockUtility>(new ClockUtility());
+            value.AddModel(new ProbeModel());
+        });
+        var command = new EmptyCommand();
+        var query = new DelegateQuery<int>(_ => 1);
+        domain.RegisterEvent<Ping>(_ => { });
+        _ = domain.GetUtility<IClockUtility>();
+        _ = domain.GetModel<IPlayerModel>();
+        domain.SendEvent(new Ping(0));
+        domain.SendCommand(command);
+        _ = domain.SendQuery(query);
+
+        // GetModel<IPlayerModel> 走的是可赋值扫描（注册键是 ProbeModel），GetUtility 走精确键。
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1_000; index++)
+        {
+            _ = domain.GetUtility<IClockUtility>();
+            _ = domain.GetModel<IPlayerModel>();
+            domain.SendEvent(new Ping(index));
+            domain.SendCommand(command);
+            _ = domain.SendQuery(query);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(allocated, Is.Zero);
+    }
+
+    /// <summary>测试单例在激活完成后才发布。</summary>
+    [Test]
+    public void SingletonPublishesOnlyAfterActivation()
+    {
+        StrictProbeDomain? observed = null;
+        StrictProbeDomain.SetHooks(activated: _ => observed = StrictProbeDomain.GetInstance());
+
         var instance = StrictProbeDomain.Instance;
-        Assert.That(seenDuringConfigure, Is.Null);
+
+        Assert.That(observed, Is.Null);
         Assert.That(StrictProbeDomain.GetInstance(), Is.SameAs(instance));
         Assert.That(StrictProbeDomain.Instance, Is.SameAs(instance));
     }
 
+    /// <summary>测试单例拒绝创建期间重入，失败后可以重试。</summary>
     [Test]
     public void SingletonRejectsCreationReentrancyAndCanRetryAfterFailure()
     {
         StrictProbeDomain.SetHooks(configure: _ => _ = StrictProbeDomain.Instance);
+
         Assert.Throws<InvalidOperationException>(() => _ = StrictProbeDomain.Instance);
         Assert.That(StrictProbeDomain.GetInstance(), Is.Null);
 
         StrictProbeDomain.SetHooks();
+
         Assert.That(StrictProbeDomain.Instance, Is.Not.Null);
     }
 
+    /// <summary>测试创建期间销毁单例被拒绝，单例不存在时销毁不会创建。</summary>
     [Test]
     public void SingletonDestroyDuringCreationIsRejectedAndAbsentDestroyDoesNotCreate()
     {
-        StrictProbeDomain.DestroyInstance();
-        Assert.That(StrictProbeDomain.GetInstance(), Is.Null);
         StrictProbeDomain.SetHooks(configure: _ => StrictProbeDomain.DestroyInstance());
+
         Assert.Throws<InvalidOperationException>(() => _ = StrictProbeDomain.Instance);
+
+        StrictProbeDomain.SetHooks();
+        StrictProbeDomain.DestroyInstance();
+
         Assert.That(StrictProbeDomain.GetInstance(), Is.Null);
     }
 
+    /// <summary>测试直接释放单例会清空静态引用。</summary>
     [Test]
     public void DirectSingletonDisposeClearsPublishedReference()
     {
         var first = StrictProbeDomain.Instance;
+
         first.Dispose();
+
         Assert.That(StrictProbeDomain.GetInstance(), Is.Null);
-        var second = StrictProbeDomain.Instance;
-        Assert.That(second, Is.Not.SameAs(first));
+        Assert.That(StrictProbeDomain.Instance, Is.Not.SameAs(first));
     }
 
+    /// <summary>测试 OnActivated 释放自身时创建失败。</summary>
     [Test]
     public void OnActivatedCannotReturnDisposedCandidate()
     {
         ProbeDomain? candidate = null;
+
         Assert.Throws<InvalidOperationException>(() => ProbeDomain.Create(activated: value =>
         {
             candidate = value;
             value.Dispose();
         }));
-        Assert.Throws<ObjectDisposedException>(() => candidate!.TryGetUtility<IClockUtility>(out _));
-    }
-
-    [Test]
-    public void ExactLookupEventSendAndCommandContextHaveNoPerCallAllocationAfterWarmup()
-    {
-        using var domain = ProbeDomain.Create(configure: value => value.RegisterUtility<IClockUtility>(new ClockUtility()));
-        var command = new EmptyCommand();
-        domain.RegisterEvent<Ping>(_ => { });
-        _ = domain.GetUtility<IClockUtility>();
-        domain.SendEvent(new Ping(0));
-        domain.SendCommand(command);
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 1_000; index++)
-        {
-            _ = domain.GetUtility<IClockUtility>();
-            domain.SendEvent(new Ping(index));
-            domain.SendCommand(command);
-        }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.That(allocated, Is.Zero);
-    }
-
-    [Test]
-    public void AssignableFallbackReflectsCurrentRegistryWithoutCache()
-    {
-        using var domain = ProbeDomain.Create(configure: value => value.RegisterModel(new ProbeModel()));
-        Assert.That(domain.GetModel<IPlayerModel>(), Is.TypeOf<ProbeModel>());
-        _ = domain.GetModel<IPlayerModel>();
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 1_000; index++) _ = domain.GetModel<IPlayerModel>();
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.That(allocated, Is.Zero);
-        domain.RegisterModel(new AlternateModel());
-        Assert.Throws<InvalidOperationException>(() => domain.GetModel<IPlayerModel>());
-    }
-
-    [Test]
-    public void DeepTreeUsesSharedExecutionGuard()
-    {
-        var nodes = new List<ProbeDomain>();
-        var root = ProbeDomain.Create("0");
-        nodes.Add(root);
-        var current = root;
-        for (var index = 1; index <= 128; index++)
-        {
-            var child = ProbeDomain.Create(index.ToString());
-            current.AddChild(child);
-            nodes.Add(child);
-            current = child;
-        }
-        var detached = ProbeDomain.Create("detached");
-        current.SendQuery(new DelegateQuery<int>(_ =>
-        {
-            Assert.Throws<InvalidOperationException>(() => root.AddChild(detached));
-            return 0;
-        }));
-        root.Dispose();
-        detached.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => candidate!.GetModel<IPlayerModel>());
     }
 }
