@@ -26,7 +26,7 @@ hub 实现 `IDisposable`：谁创建谁释放，与其他 Utility 的所有权�
 
 ### D2. 复用现有事件实现
 
-`EventHub` 内部持有一个 `DomainEventBus`，只在外层加已释放检查。这样分发语义（顺序、写时复制、分发中失效跳过、首个异常即停止）与本地事件天然一致，不重复实现。
+`EventHub` 内部持有一个 `EventBus`，只在外层加已释放检查。这样分发语义（顺序、写时复制、分发中失效跳过、首个异常即停止）与本地事件天然一致，不重复实现。
 
 备选：独立实现一套字典与事件。否决原因是重复同一份稳定知识。
 
@@ -38,7 +38,7 @@ hub 实现 `IDisposable`：谁创建谁释放，与其他 Utility 的所有权�
 
 ### D4. System 订阅的自动取消放在 `AbstractSystem` 内
 
-`AbstractSystem` 维护一个句柄列表。`SubscribeEvent` 与 `UnRegisterOnRelease` 都把句柄登记进去，返回一个包装句柄：提前取消时同时从列表移除，避免反复订阅、取消时列表无限增长。`Release` 时先逆序取消全部句柄，再调用 `OnRelease`，最后解除 Domain 绑定，使 System 在自己的 `OnRelease` 中不再收到 hub 事件。
+`AbstractSystem` 维护一个句柄列表。`SubscribeEvent` 与 `UnRegisterOnRelease` 都把句柄登记进去，返回一个包装句柄：通过包装句柄提前取消时同时从列表移除，避免反复订阅、取消时列表无限增长。`UnRegisterOnRelease` 传入的原句柄不知道自己已被登记，直接取消它能停止回调，但登记项保留到 System 释放；文档要求提前取消时使用返回的句柄，不为此增加 API（`SubscribeEvent` 只返回包装句柄，不受影响）。`Release` 时先逆序取消全部句柄，再调用 `OnRelease`，最后解除 Domain 绑定，使 System 在自己的 `OnRelease` 中不再收到 hub 事件。
 
 只放在 `AbstractSystem`：订阅能力只属于 System 和 Controller；Controller 的生命周期由引擎决定，框架无法替它判断何时取消。
 

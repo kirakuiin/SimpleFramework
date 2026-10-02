@@ -23,7 +23,7 @@ public interface IEventHub : IUtility, IDisposable
 public sealed class EventHub : IEventHub
 {
     /// <summary>实际保存订阅和执行分发的事件容器。</summary>
-    private readonly DomainEventBus _events = new();
+    private readonly EventBus _events = new();
 
     /// <summary>是否已释放。</summary>
     private bool _isDisposed;

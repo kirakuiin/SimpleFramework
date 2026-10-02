@@ -262,6 +262,40 @@ public sealed class EnterBattleCommand(int matchId) : ICommand
 
 挂载会拒绝：挂载自身、已有父级的 Domain、形成环、非 Active 的 Domain。树操作只按引用身份判断，不受派生类重写 `Equals` 影响。已缓存的父组件引用和订阅不会因移动而刷新。
 
+### 释放子域
+
+结束一个子域直接调用它的 `Dispose()`，它会自动从父域摘除；父域释放时也会连带释放全部子域。`RemoveChild` 只用于“断开但继续存活”（例如移到另一个父域下），不属于释放流程：
+
+| 想做的事 | 调用 |
+| --- | --- |
+| 场景结束，彻底销毁 | `child.Dispose()`，自动从父域摘除 |
+| 父域销毁时连带销毁子域 | 无需操作 |
+| 断开父子关系但子域继续存活 | `parent.RemoveChild(child)` |
+
+管理子域的对象收到“子域关闭”之类的通知时，只清理自己的引用，**不要调用 `RemoveChild`**。此时子域正在释放（可能是被直接释放，也可能是随父域一起释放），`RemoveChild` 会抛 `InvalidOperationException`；摘除由框架完成，子域剩余的释放回调也因此仍能回退查找父域组件。同理，也不要在关闭通知里移动正在释放的子域的上级（例如把它的父域从祖父域上 `RemoveChild`），否则它剩余的释放回调会失去回退查找。
+
+示例中 `SceneDomain` 在 `OnDeactivating` 里通过事件中心发布关闭通知（本地 `SendEvent` 到不了父域的 System）：
+
+```csharp
+public sealed class SceneManager : AbstractSystem
+{
+    private SceneDomain? _current;
+
+    // SceneDomain.OnDeactivating 中：GetUtility<IEventHub>().Publish(new SceneClosed(this));
+    protected override void OnInitialize() =>
+        SubscribeEvent<SceneClosed>(e =>
+        {
+            if (ReferenceEquals(_current, e.Scene)) _current = null; // 只清理引用
+        });
+
+    public void Enter(int sceneId, AbstractDomain root)
+    {
+        _current?.Dispose(); // 自动从父域摘除
+        _current = SceneDomain.Create(sceneId, parent: root);
+    }
+}
+```
+
 ## Command、Query 与本地事件
 
 ```csharp
@@ -353,7 +387,7 @@ var token = this.SubscribeEvent<GameOver>(handler); // Controller 中，需要�
 
 ### 订阅父域 `BindableProperty`
 
-只有 Domain 本地事件和 `SubscribeEvent` 的订阅会自动取消。`BindableProperty` 是普通对象，不知道订阅者属于哪个 Domain。子域订阅父域的属性后如果不取消，子域释放后回调仍挂在父域上、继续被调用；回调一旦访问组件就会抛出 `InvalidOperationException`，而且是从父域修改属性的地方抛出的。
+只有 Domain 本地事件和 `SubscribeEvent` 的订阅会自动取消。`BindableProperty` 是普通对象，不知道订阅者属于哪个 Domain。子域订阅父域的属性后如果不取消，子域释放后回调仍挂在父域上、继续被调用；对继承 `AbstractSystem` 的订阅者，回调一旦访问组件就会抛出 `InvalidOperationException`，而且是从父域修改属性的地方抛出的。
 
 对订阅句柄调用 `UnRegisterOnRelease(this)`，让它随 System 释放自动取消：
 
@@ -376,6 +410,7 @@ public sealed class BattleHudSystem : AbstractSystem
 注意：
 
 - `UnRegisterOnRelease` 只在 `AbstractSystem` 上可用。在 System 未绑定或正在释放时调用会抛 `InvalidOperationException`，传入的订阅会被立即取消。
+- 订阅与 System 同生命周期时丢弃返回值即可。需要提前取消时，**保存并取消 `UnRegisterOnRelease` 的返回值**，不要再用原句柄：原句柄不知道自己已被登记，直接取消它虽然能停止回调，但登记项要到 System 释放时才移除，反复订阅、取消会让登记列表持续增长。`SubscribeEvent` 只返回包装句柄，没有这个问题。
 - 在通知回调里回写同一个属性会被拒绝（`BindableProperty` 的防重入保护）。
 - 移动子树后，订阅仍指向原父域的属性，不会自动切换。
 
@@ -394,7 +429,7 @@ public sealed class BattleHudSystem : AbstractSystem
 ```
 
 - 释放期间仍可读取组件，适合在 `OnRelease` 中保存数据；Model 在 System 之后释放，所以 System 释放时仍能拿到 Model。
-- 组件按初始化逆序释放，与初始化对称：先注册的 System 后释放。**`OnRelease` 里不要调用其他 System 的方法**，后注册的 System 此时已经释放，调用会抛 `InvalidOperationException`。需要多个组件配合的退出逻辑（例如统一保存），放到 Domain 的 `OnDeactivating` 中，那时所有组件都还可用：
+- 组件按初始化逆序释放，与初始化对称：先注册的 System 后释放。**`OnRelease` 里不要调用其他 System 的方法**，后注册的 System 此时已经释放，它的方法一旦访问组件或事件就会抛 `InvalidOperationException`。需要多个组件配合的退出逻辑（例如统一保存），放到 Domain 的 `OnDeactivating` 中，那时所有组件都还可用：
 
 ```csharp
 public sealed class GameDomain : AbstractDomain
@@ -409,6 +444,7 @@ public sealed class GameDomain : AbstractDomain
 - System 在 `OnRelease` 中不能再 `SubscribeEvent` 或 `UnRegisterOnRelease`，否则抛 `InvalidOperationException`。
 - 释放过程中再次调用 `Dispose` 无效果，包括子域释放回调间接释放父域的情况。启动期间（例如在 `Configure` 中）调用 `Dispose` 会导致启动失败。
 - 父域在释放子域时已处于 Disposing，所以子域的释放回调里不能再挂载或移除父域的子域。
+- 正在释放的子域不能被 `RemoveChild`，即使父域仍是 Active（例如直接释放子域时，子域回调或其他 System 收到关闭通知后去摘除它）：会抛 `InvalidOperationException`。子域会在释放结束时自己脱离父域。
 - 每一步都会执行到底：一个失败保留原异常和堆栈，多个失败按发生顺序展开为 `AggregateException`；无论如何 Domain 都会进入 Disposed 并从树中摘除。回调自己抛出的非空 `AggregateException` 也会被展开，调用方拿到的是其中的内层异常。
 - 直接释放一个已挂载的子 Domain，会同时把它从父级移除。
 - 已知限制：直接释放子域时，如果子域的释放回调又释放了父域，父域会先于子域释放完；之后子域在 `OnRelease` 中回退查找父域组件，会得到说明“父 Domain 已释放”的 `ObjectDisposedException`。
@@ -425,6 +461,7 @@ public sealed class GameDomain : AbstractDomain
 | 回退查找时父域已释放 | `ObjectDisposedException`，说明父域已释放 | 检查是否在子域启动或释放过程中释放了父域 |
 | 组件初始化失败 | 原异常抛出，Domain 被释放 | 在 `OnInitialize` 内清理自身资源 |
 | 以未就绪的 Domain 为父创建子域 | `InvalidOperationException` | 在父域的 `OnActivated` 中创建 |
+| 对正在释放的子域调用 `RemoveChild` | `InvalidOperationException` | 关闭通知中只清理引用，摘除由框架完成 |
 | `PublishEvent` / `SubscribeEvent` 找不到事件中心 | `KeyNotFoundException`，提示注册 `IEventHub` | 在根 Domain 的 `Configure` 中注册；子域用 `parent:` 创建 |
 | System 释放期间订阅 | `InvalidOperationException` | 订阅放在 `OnInitialize` 或运行期 |
 | 多个释放步骤失败 | `AggregateException` | 按 `InnerExceptions` 顺序检查 |

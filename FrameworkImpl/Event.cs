@@ -7,7 +7,7 @@ public interface IEvent
     IUnRegister Register(Action onEvent);
 }
 
-/// <summary>供 Domain 统一失效不同消息类型的事件订阅。</summary>
+/// <summary>供事件容器（<see cref="EventBus"/>）的所有者统一失效不同消息类型的事件订阅。</summary>
 internal interface IClearableEvent
 {
     /// <summary>失效并移除全部订阅。</summary>
@@ -137,17 +137,20 @@ public sealed class Event<T> : IEvent, IClearableEvent
     }
 }
 
-/// <summary>保存单个 Domain 的本地事件。</summary>
-internal sealed class DomainEventBus
+/// <summary>
+/// 按消息类型保存事件，供 Domain 本地事件与 <see cref="EventHub"/> 共用，使两者分发语义一致。
+/// <para>由所有者在释放时调用 <see cref="Clear"/>；EventHub 在释放后先行拒绝访问，因此清理后的订阅异常只会由 Domain 触发。</para>
+/// </summary>
+internal sealed class EventBus
 {
     /// <summary>按消息类型保存的事件。</summary>
     private readonly Dictionary<Type, IClearableEvent> _events = new();
 
-    /// <summary>是否已在 Domain 释放时清理；清理后不再接受订阅，发送变为无操作。</summary>
+    /// <summary>是否已由所有者清理；清理后不再接受订阅，发送变为无操作。</summary>
     private bool _cleared;
 
     /// <summary>订阅指定类型的消息。</summary>
-    /// <exception cref="InvalidOperationException">Domain 正在释放或已释放。</exception>
+    /// <exception cref="InvalidOperationException">所有者已清理（Domain 正在释放）。</exception>
     public IUnRegister Register<T>(Action<T> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);

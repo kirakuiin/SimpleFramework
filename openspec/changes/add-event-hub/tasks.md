@@ -1,6 +1,6 @@
 ## 1. 事件中心
 
-- [x] 1.1 新增 `EventHub.cs`：`IEventHub : IUtility, IDisposable` 与默认实现 `EventHub`，内部复用 `DomainEventBus`，释放后发布与订阅抛 `ObjectDisposedException`
+- [x] 1.1 新增 `EventHub.cs`：`IEventHub : IUtility, IDisposable` 与默认实现 `EventHub`，内部复用 `EventBus`，释放后发布与订阅抛 `ObjectDisposedException`
 - [x] 1.2 新增内部查找辅助：通过 `IDomain.TryGetUtility<IEventHub>` 获取 hub，找不到时抛带注册提示的 `KeyNotFoundException`
 
 ## 2. 语法糖
@@ -33,3 +33,11 @@
 - [x] 6.1 新增 `Test/Framework/EventHubTests.cs`：树内共享、子域遮蔽、Domain 释放不影响 hub、分发语义、hub 释放、Controller 与 Command、未注册提示、子域释放后订阅失效、`BindableProperty` 随释放取消、提前取消、热路径零分配
 - [x] 6.2 `docs/domain-lifecycle.md` 新增跨 Domain 事件一节（含释放期间与本地事件的差异）；更新 `README.md` 核心章节与 `AGENTS.md` 核心行为说明
 - [x] 6.3 全部类型与成员中文 XML 注释；运行 `dotnet build .\SimpleFramework.sln`、`dotnet test .\SimpleFramework.sln`、`openspec validate add-event-hub --strict`
+
+## 7. 第四轮审查修复
+
+- [x] 7.1 `RemoveChild` 同时要求子域为 Active，拒绝正在释放的子域提前摘除自身，补测试
+- [x] 7.2 文档与注释说明 `UnRegisterOnRelease` 提前取消必须使用返回句柄，补测试固定返回句柄提前取消会移除登记项
+- [x] 7.3 `DomainEventBus` 更名为 `EventBus`（同时服务 Domain 本地事件与 `EventHub`）；修正 docs 中释放后访问的异常描述
+- [x] 7.4 docs 新增“释放子域”一节：直接 `Dispose` 子域即自动摘除，关闭通知中只清理引用、不调用 `RemoveChild`；释放规则与常见失败表补充对应条目
+- [x] 7.5 docs“释放子域”补充：示例注明经事件中心在 `OnDeactivating` 中发布关闭通知；关闭通知中也不要移动正在释放子域的上级

@@ -16,7 +16,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
     private readonly DomainComponentRegistry _registry = new();
 
     /// <summary>本 Domain 的本地事件。</summary>
-    private readonly DomainEventBus _events = new();
+    private readonly EventBus _events = new();
 
     /// <summary>直接子 Domain，按挂载顺序。</summary>
     private readonly List<AbstractDomain> _children = new();
@@ -185,7 +185,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
     }
 
     /// <summary>移除一个直接子域但不释放它；移除后的子树仍为 Active 独立树。</summary>
-    /// <exception cref="InvalidOperationException">当前 Domain 不是 Active，或目标不是直接子域。</exception>
+    /// <exception cref="InvalidOperationException">任一方不是 Active（例如子域正在释放），或目标不是直接子域。</exception>
     /// <exception cref="ObjectDisposedException">当前 Domain 已释放。</exception>
     public void RemoveChild(AbstractDomain child)
     {
@@ -194,6 +194,9 @@ public abstract class AbstractDomain : IDomain, IDisposable
 
         var index = IndexOfChild(child);
         if (index < 0) throw new InvalidOperationException("只能移除当前 Domain 的直接子域。");
+
+        // 正在释放的子域由释放流程自己从父级摘除；提前摘除会让它剩余的释放回调失去父域回退查找。
+        child.ThrowIfNotActive();
 
         _children.RemoveAt(index);
         child._parent = null;

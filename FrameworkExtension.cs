@@ -127,7 +127,9 @@ public static class UnRegisterExtensions
 {
     /// <summary>
     /// 让订阅随指定 System 释放而取消，适用于父域 Model 的 <see cref="BindableProperty{T}"/> 等不会随 Domain 自动失效的订阅。
-    /// 返回的句柄可用于提前取消。
+    /// <para>需要提前取消时，保存并取消返回的句柄，不要再使用传入的原句柄：原句柄不知道自己已被登记，
+    /// 直接取消它虽然能停止回调，但登记项要到 System 释放时才移除，反复订阅、取消会让登记列表持续增长。
+    /// 订阅与 System 同生命周期时，丢弃返回值即可。</para>
     /// </summary>
     /// <exception cref="InvalidOperationException">System 未绑定 Domain 或正在释放；此时传入的订阅会被立即取消。</exception>
     public static IUnRegister UnRegisterOnRelease(this IUnRegister subscription, AbstractSystem owner)

@@ -129,6 +129,7 @@ public abstract class AbstractSystem : ISystemLifecycle
     /// <summary>
     /// 登记一个随本 System 释放而取消的订阅句柄，返回可提前取消的包装句柄。
     /// 无法登记时会先取消传入的订阅再抛出异常。
+    /// <para>只有取消包装句柄才会移除登记项；传入的原句柄被直接取消时无法得知，登记项保留到释放时。</para>
     /// </summary>
     /// <exception cref="InvalidOperationException">System 未绑定 Domain 或正在释放。</exception>
     internal IUnRegister Own(IUnRegister subscription)

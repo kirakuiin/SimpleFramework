@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using NUnit.Framework;
 using SimpleFramework;
 using SimpleFramework.FrameworkImpl;
@@ -315,6 +316,34 @@ public sealed class EventHubTests
         var token = new ScoreModel().Score.Register((_, _) => { });
 
         Assert.Throws<InvalidOperationException>(() => token.UnRegisterOnRelease(system));
+    }
+
+    /// <summary>测试通过 UnRegisterOnRelease 返回的句柄提前取消后，System 不再持有原订阅。</summary>
+    [Test]
+    public void EarlyCancellationThroughReturnedTokenStopsTracking()
+    {
+        var system = new DerivedSystem();
+        using var domain = ProbeDomain.Create(configure: value => value.AddSystem(system));
+
+        var original = OwnAndCancelThroughReturnedToken(system);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.That(original.IsAlive, Is.False);
+        GC.KeepAlive(system);
+    }
+
+    /// <summary>
+    /// 登记一个原句柄并通过返回句柄取消，只返回原句柄的弱引用。
+    /// 放在独立且不内联的方法里，确保调用方栈上没有残留的强引用，弱引用的存活只取决于 System 是否仍持有它。
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference OwnAndCancelThroughReturnedToken(DerivedSystem system)
+    {
+        var original = new CustomUnRegister(() => { });
+        original.UnRegisterOnRelease(system).UnRegister();
+        return new WeakReference(original);
     }
 
     /// <summary>测试通过事件中心发布在热身后不分配内存。</summary>

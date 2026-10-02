@@ -271,6 +271,23 @@ public sealed class DomainTreeLifecycleTests
         Assert.DoesNotThrow(() => parent.AddChild(other));
     }
 
+    /// <summary>测试正在释放的子域不能被提前从父域移除，其释放回调仍可回退查找父域组件。</summary>
+    [Test]
+    public void DisposingChildCannotBeRemovedFromParent()
+    {
+        using var parent = ProbeDomain.Create(configure: value => value.AddModel(new ProbeModel()));
+        var resolvedInRelease = false;
+        var child = ProbeDomain.Create(
+            configure: value => value.AddSystem(new DerivedSystem(release: self =>
+                resolvedInRelease = self.ReadModel<IPlayerModel>() is not null)),
+            deactivating: self => parent.RemoveChild(self),
+            parent: parent);
+
+        Assert.Throws<InvalidOperationException>(() => child.Dispose());
+        Assert.That(resolvedInRelease, Is.True);
+        Assert.Throws<InvalidOperationException>(() => parent.RemoveChild(child));
+    }
+
     /// <summary>测试释放回调中仍可读取组件。</summary>
     [Test]
     public void ReleaseCallbacksCanStillReadComponents()

@@ -26,3 +26,18 @@ A child Domain MUST complete its own creation and become Active before `AddChild
 #### Scenario: Child startup fails
 - **WHEN** a child created with a parent fails during Configure or component initialization
 - **THEN** the child ends Disposed and the parent's child list and components are unchanged
+
+### Requirement: Tree changes are explicit and allowed during execution
+Moving a subtree MUST be expressed as `oldParent.RemoveChild(child)` followed by `newParent.AddChild(child)`. AddChild and RemoveChild SHALL be allowed from any code path, including Command, Query, and Event handlers, as long as both participants are Active. Failed preconditions MUST leave both trees unchanged.
+
+#### Scenario: Command switches scenes
+- **WHEN** a Command removes and disposes a MenuDomain child and attaches a newly created GameDomain child
+- **THEN** both tree operations succeed and the Command completes normally
+
+#### Scenario: Structural validation fails
+- **WHEN** any precondition for AddChild or RemoveChild fails
+- **THEN** parent links and internal child retention remain unchanged
+
+#### Scenario: Disposing child asks its parent to remove it
+- **WHEN** a child that is being disposed calls `RemoveChild` on its Active parent with itself as the argument
+- **THEN** `InvalidOperationException` is thrown, the child stays attached until its own disposal detaches it, and its release callbacks can still resolve parent components
