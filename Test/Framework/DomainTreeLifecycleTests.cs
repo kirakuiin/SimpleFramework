@@ -27,6 +27,114 @@ public sealed class DomainTreeLifecycleTests
         Assert.That(model.ReleaseCount, Is.Zero);
     }
 
+    /// <summary>测试创建时指定父域，子域初始化期间即可回退查找父域组件，启动后自动挂载。</summary>
+    [Test]
+    public void ChildCreatedWithParentResolvesParentDuringInitialization()
+    {
+        var model = new ProbeModel();
+        using var parent = ProbeDomain.Create(configure: value => value.AddModel(model));
+        IPlayerModel? observed = null;
+
+        var child = ProbeDomain.Create(
+            configure: value => value.AddSystem(new DerivedSystem(self => observed = self.ReadModel<IPlayerModel>())),
+            parent: parent);
+
+        Assert.That(observed, Is.SameAs(model));
+        Assert.That(child.Parent, Is.SameAs(parent));
+        Assert.DoesNotThrow(() => parent.RemoveChild(child));
+        child.Dispose();
+    }
+
+    /// <summary>测试父域仍在启动时不能作为新子域的父域。</summary>
+    [Test]
+    public void ParentStillStartingIsRejected()
+    {
+        Assert.Throws<InvalidOperationException>(() => ProbeDomain.Create(configure: value =>
+            ProbeDomain.Create("child", parent: value)));
+    }
+
+    /// <summary>测试指定父域的子域启动失败时，父域的子域列表不受影响。</summary>
+    [Test]
+    public void ChildStartupFailureLeavesParentUnchanged()
+    {
+        var parentModel = new ProbeModel();
+        using var parent = ProbeDomain.Create(configure: value => value.AddModel(parentModel));
+        ProbeDomain? candidate = null;
+
+        Assert.Throws<ApplicationException>(() => ProbeDomain.Create(
+            configure: value =>
+            {
+                candidate = value;
+                throw new ApplicationException("child");
+            },
+            parent: parent));
+
+        Assert.Throws<ObjectDisposedException>(() => _ = candidate!.Parent);
+        Assert.Throws<InvalidOperationException>(() => parent.RemoveChild(candidate!));
+        Assert.That(parentModel.ReleaseCount, Is.Zero);
+    }
+
+    /// <summary>测试子域初始化期间释放了父域时，子域启动失败而不会挂到已释放的父域上。</summary>
+    [Test]
+    public void ChildStartupFailsWhenParentIsDisposedDuringInitialization()
+    {
+        var parent = ProbeDomain.Create();
+
+        Assert.Throws<ObjectDisposedException>(() => ProbeDomain.Create(
+            configure: value => value.AddSystem(new DerivedSystem(_ => parent.Dispose())),
+            parent: parent));
+    }
+
+    /// <summary>测试带父域创建的子域在 OnActivated 抛异常时，会从父域的子域列表中移除。</summary>
+    [Test]
+    public void ChildWithParentFailingInOnActivatedIsRemovedFromParent()
+    {
+        using var parent = ProbeDomain.Create();
+        ProbeDomain? candidate = null;
+
+        Assert.Throws<ApplicationException>(() => ProbeDomain.Create(
+            activated: value =>
+            {
+                candidate = value;
+                throw new ApplicationException("activated");
+            },
+            parent: parent));
+
+        Assert.Throws<InvalidOperationException>(() => parent.RemoveChild(candidate!));
+    }
+
+    /// <summary>测试子域在 OnActivated 中释放父域时，创建失败并说明可能是父域被释放。</summary>
+    [Test]
+    public void ParentDisposedDuringChildOnActivatedFailsCreation()
+    {
+        var parent = ProbeDomain.Create();
+
+        var error = Assert.Throws<InvalidOperationException>(() => ProbeDomain.Create(
+            activated: _ => parent.Dispose(),
+            parent: parent));
+
+        Assert.That(error!.Message, Does.Contain("父域"));
+    }
+
+    /// <summary>测试子域初始化期间父域被释放后，回退查找报告父域已释放，而不是找不到组件。</summary>
+    [Test]
+    public void LookupThroughDisposedParentReportsParentDisposed()
+    {
+        var parent = ProbeDomain.Create(configure: value => value.AddModel(new ProbeModel()));
+        string? message = null;
+
+        Assert.Throws<ObjectDisposedException>(() => ProbeDomain.Create(
+            configure: value => value.AddSystem(new DerivedSystem(self =>
+            {
+                parent.Dispose();
+                try { self.ReadModel<IPlayerModel>(); }
+                catch (ObjectDisposedException error) { message = error.Message; }
+            })),
+            parent: parent));
+
+        Assert.That(message, Does.Contain("父 Domain 已释放"));
+    }
+
     /// <summary>测试非法挂载被拒绝且两棵树都保持不变。</summary>
     [Test]
     public void InvalidAttachmentLeavesBothTreesUnchanged()

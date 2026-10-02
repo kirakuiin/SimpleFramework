@@ -1,6 +1,6 @@
 # SimpleFramework
 
-SimpleFramework 是一个面向 C#/.NET 的轻量级游戏与应用框架集合。项目以模块化项目组织，提供领域容器、事件总线、命令/查询分离、ECS、常用设计模式、网络协议工具、数学工具、配置工具和 Godot 扩展。
+SimpleFramework 是一个面向 C#/.NET 的轻量级游戏与应用框架集合。项目以模块化项目组织，提供 Domain 组件容器、本地与跨 Domain 事件、命令/查询分离、ECS、常用设计模式、网络协议工具、数学工具、配置工具和 Godot 扩展。
 
 项目当前主要面向 `.NET 8`，解决方案中包含 NUnit 测试项目用于覆盖核心行为。
 
@@ -16,6 +16,7 @@ SimpleFramework 是一个面向 C#/.NET 的轻量级游戏与应用框架集合�
 - `Utility`：由调用方管理、可跨 Domain 共享的底层能力。
 - `Command` / `Query`：接收不可逃逸的同步栈上下文，避免保存或异步滥用。
 - 本地事件：按注册顺序同步分发，Domain 释放时订阅自动失效。
+- 跨 Domain 事件：`IEventHub` / `EventHub` 是由调用方持有的共享 Utility，用 `PublishEvent` / `SubscribeEvent` 收发；`AbstractSystem` 的订阅随释放自动取消，`UnRegisterOnRelease(this)` 也可用于订阅父域的 `BindableProperty`。
 - `BindableProperty<T>`：可监听变化的属性封装。
 
 ```csharp
@@ -39,19 +40,19 @@ var byConcrete = domain.GetModel<PlayerModel>(); // 同一实例
 
 注册只能在 `Configure` 中进行；启动时先初始化全部 Model，再初始化全部 System。不支持替换或移除组件。查找按“本地精确键、本地唯一可赋值对象、父域”解析，查不到或有歧义都会明确抛出。
 
-子 Domain 先独立创建，再动态挂载：
+子 Domain 可以创建时指定父域（初始化期间即可使用父域组件），也可以先独立创建再挂载：
 
 ```csharp
-var battle = BattleDomain.Create(matchId);
+var battle = BattleDomain.Create(matchId, parent: domain); // 内部调用 CreateDomain(factory, parent)
+domain.RemoveChild(battle); // 不释放，battle 成为独立 Active 根
 domain.AddChild(battle);
-domain.RemoveChild(battle); // 不释放，battle 仍为 Active 根
 ```
 
 挂载、移除和释放可以在 Command 或事件处理中进行。`Dispose()` 释放仍附着的完整子树。Domain 采用同步、单线程协作模型。
 
 核心文档：
 
-- [Domain v2 完整使用与生命周期](docs/domain-lifecycle.md)
+- [Domain 设计与使用（含生命周期与跨 Domain 通信）](docs/domain-lifecycle.md)
 - [BindableProperty 使用说明](docs/bindable-property.md)
 
 属性绑定可以为单个实例设置比较器，`WithComparer` 只影响当前实例。通知同步完成期间禁止写入不同的新值，以避免监听器观察到逆序的旧通知；相同值仍按比较器作为无操作处理:

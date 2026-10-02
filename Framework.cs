@@ -84,10 +84,10 @@ public interface ICanSendCommand : IBelongToDomain { }
 /// <summary>允许发送 Query 的能力规则。</summary>
 public interface ICanSendQuery : IBelongToDomain { }
 
-/// <summary>允许发送本地事件的能力规则。</summary>
+/// <summary>允许发送事件的能力规则：本地事件（SendEvent）与跨 Domain 事件（PublishEvent）。</summary>
 public interface ICanSendEvent : IBelongToDomain { }
 
-/// <summary>允许订阅本地事件的能力规则。</summary>
+/// <summary>允许订阅事件的能力规则：本地事件（RegisterEvent）与跨 Domain 事件（SubscribeEvent）。</summary>
 public interface ICanRegisterEvent : IBelongToDomain { }
 
 /// <summary>
@@ -170,6 +170,14 @@ public readonly ref struct CommandContext
 
     /// <summary>构造并发送一个无参事件。</summary>
     public void SendEvent<T>() where T : new() => _domain.SendEvent(new T());
+
+    /// <summary>通过 Domain 可见的 <see cref="IEventHub"/> 发布跨 Domain 事件。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    public void PublishEvent<T>(T message) => EventHubResolver.Resolve(_domain).Publish(message);
+
+    /// <summary>构造并发布一个无参跨 Domain 事件。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    public void PublishEvent<T>() where T : new() => EventHubResolver.Resolve(_domain).Publish(new T());
 
     /// <summary>同步发送命令。</summary>
     public void SendCommand(ICommand command) => _domain.SendCommand(command);

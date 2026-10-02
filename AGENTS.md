@@ -8,7 +8,7 @@ SimpleFramework 是一个由多个项目组成的 C#/.NET 解决方案，用于�
 
 主要项目：
 
-- `SimpleFramework.csproj`：`Domain v2` 核心框架，支持分类组件查找、动态 `Domain` 树、生命周期 `Context`、同步栈上下文命令/查询抽象、本地事件、可绑定属性以及可选的抽象组件基类。
+- `SimpleFramework.csproj`：QFramework 风格的 Domain 核心框架，支持分类组件查找、动态 `Domain` 树、`ICanXxx` 能力规则接口、`IController`、同步栈上下文命令/查询、本地事件、跨 Domain 事件中心 `IEventHub`、可绑定属性以及 `AbstractModel`/`AbstractSystem` 基类。
 - `Collections/Collections.csproj`：提供 `DefaultDict<TKey,TValue>` 和 `Counter<T>`。
 - `ECS/ECS.csproj`：强调可读性的 ECS 实现，包含 `World`、`Entity`、`Archetype`、`TypeSignature`、`Query`、`IComponent` 和 `EcsSystem`。
 - `Patterns/Patterns.csproj`：提供单例、服务定位器、对象池、消息通道、黑板以及事件驱动的分层状态机。
@@ -66,12 +66,13 @@ dotnet test .\Test\Test.csproj
 - 能力由 `ICanXxx` 规则接口在编译期约束，与 QFramework 一致：Model 只能获取 Utility、发送事件；System 不能发送 Command/Query；Query 不能获取 Utility。`AbstractModel`/`AbstractSystem` 以 `protected` 方法提供能力，`IController` 等纯接口实现者使用扩展方法；`TryGet*` 只在 `IDomain` 上提供。
 - 未显式指定泛型契约的 `Register` 重载以运行时具体类型作为唯一键。查找顺序为：本地精确匹配、本地唯一可赋值匹配、父级匹配；存在歧义时抛出异常。注册即可被查找，初始化期间可能拿到尚未初始化的组件。
 - 启动先初始化全部 Model 再初始化全部 System；失败时逆序释放已初始化的组件并释放 Domain。不支持替换、删除组件或 Active 阶段注册。
-- 子 `Domain` 在执行 `AddChild` 前已经独立处于 `Active` 状态。唯一的强树关系同时提供父级组件回退和默认子树释放；`RemoveChild` 永远不会释放子 `Domain`。挂载、移除、释放可以在 Command、Query、事件处理中进行，已释放 Domain 的访问抛 `ObjectDisposedException`。
+- 子 `Domain` 可以通过 `CreateDomain(factory, parent)` 创建时指定 Active 父域：初始化期间即可回退查找父域组件，启动成功后自动挂载，启动失败不影响父域；也可以先独立创建到 `Active` 再 `AddChild`。回退查找遇到已释放的父域抛 `ObjectDisposedException`。唯一的强树关系同时提供父级组件回退和默认子树释放；`RemoveChild` 永远不会释放子 `Domain`。挂载、移除、释放可以在 Command、Query、事件处理中进行，已释放 Domain 的访问抛 `ObjectDisposedException`。
 - 释放顺序：进入 Disposing 并失效全部事件订阅 → 子树逆序 → `OnDeactivating`（仅进入过 Active 时）→ System 逆序 → Model 逆序 → 清空注册表。释放期间仍可读取组件，但不能订阅事件或修改树；重入 `Dispose` 无操作。组件按初始化逆序释放，`OnRelease` 中不要调用其他 System；需要协调的退出逻辑放在 `OnDeactivating`。
-- 只有 Domain 本地事件会自动失效；订阅 `BindableProperty` 等非本地来源时必须在 `OnRelease` 中取消。
+- 跨 Domain 事件使用调用方持有的 `IEventHub`（默认实现 `EventHub`），通常注册在根 Domain；`PublishEvent` 跟随 `ICanSendEvent`，`SubscribeEvent` 跟随 `ICanRegisterEvent`，Query 两者都没有。`AbstractSystem.SubscribeEvent` 与 `UnRegisterOnRelease(this)` 登记的订阅在 System 释放（`OnRelease` 之前）或初始化失败时取消；释放期间登记会抛异常。Controller 的订阅由自己取消。
+- 只有 Domain 本地事件与 System 自有订阅会自动取消；订阅父域 `BindableProperty` 等非本地来源时使用 `UnRegisterOnRelease(this)`。
 - `Utility` 由调用方拥有，可以在多个 `Domain` 之间共享。运行时对象若跨越多个组件类别，将被拒绝注册。
 - `Command`/`Query` 使用同步的 `readonly ref struct` 上下文，构造函数公开以便测试。
-- `Domain` 事件为本地事件并采用写时复制；分发中被取消或所属 Domain 已释放的订阅会被跳过。不存在全局事件总线，跨 `Domain` 通信应使用显式共享的 `Utility` 或服务。
+- `Domain` 事件为本地事件并采用写时复制；分发中被取消或所属 Domain 已释放的订阅会被跳过。不存在静态全局事件总线，跨 `Domain` 通信使用 `IEventHub` 或其他显式共享的 `Utility`。
 - `BindableProperty<T>.WithComparer` 仅作用于当前实例。
 
 ## 模块说明

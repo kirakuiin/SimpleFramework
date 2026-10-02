@@ -1,7 +1,8 @@
 namespace SimpleFramework;
 
 /// <summary>
-/// Model 生命周期基类。子类可直接调用 <see cref="GetUtility{T}"/> 和 <see cref="SendEvent{T}(T)"/>。
+/// Model 生命周期基类。子类可直接调用 <see cref="GetUtility{T}"/>、<see cref="SendEvent{T}(T)"/>
+/// 和跨 Domain 的 <see cref="PublishEvent{T}(T)"/>。
 /// </summary>
 public abstract class AbstractModel : IModelLifecycle
 {
@@ -57,4 +58,12 @@ public abstract class AbstractModel : IModelLifecycle
 
     /// <summary>构造并在所属 Domain 内发送一个无参事件。</summary>
     protected void SendEvent<T>() where T : new() => Domain.SendEvent(new T());
+
+    /// <summary>通过所属 Domain 可见的 <see cref="IEventHub"/> 发布跨 Domain 事件。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    protected void PublishEvent<T>(T message) => EventHubResolver.Resolve(Domain).Publish(message);
+
+    /// <summary>构造并发布一个无参跨 Domain 事件。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    protected void PublishEvent<T>() where T : new() => EventHubResolver.Resolve(Domain).Publish(new T());
 }

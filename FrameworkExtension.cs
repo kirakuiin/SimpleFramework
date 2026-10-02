@@ -72,6 +72,22 @@ public static class CanSendQueryExtensions
 /// <summary><see cref="ICanSendEvent"/> 的能力扩展。</summary>
 public static class CanSendEventExtensions
 {
+    /// <summary>通过所属 Domain 可见的 <see cref="IEventHub"/> 发布跨 Domain 事件。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    public static void PublishEvent<T>(this ICanSendEvent self, T message)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        EventHubResolver.Resolve(self.GetDomain()).Publish(message);
+    }
+
+    /// <summary>构造并发布一个无参跨 Domain 事件。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    public static void PublishEvent<T>(this ICanSendEvent self) where T : new()
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        EventHubResolver.Resolve(self.GetDomain()).Publish(new T());
+    }
+
     /// <summary>在所属 Domain 内发送事件。</summary>
     public static void SendEvent<T>(this ICanSendEvent self, T message)
     {
@@ -90,11 +106,34 @@ public static class CanSendEventExtensions
 /// <summary><see cref="ICanRegisterEvent"/> 的能力扩展。</summary>
 public static class CanRegisterEventExtensions
 {
+    /// <summary>在所属 Domain 可见的 <see cref="IEventHub"/> 上订阅跨 Domain 事件；订阅由调用方取消。</summary>
+    /// <exception cref="KeyNotFoundException">没有注册事件中心。</exception>
+    public static IUnRegister SubscribeEvent<T>(this ICanRegisterEvent self, Action<T> handler)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        return EventHubResolver.Resolve(self.GetDomain()).Subscribe(handler);
+    }
+
     /// <summary>在所属 Domain 内订阅事件；Domain 释放时订阅自动失效。</summary>
     public static IUnRegister RegisterEvent<T>(this ICanRegisterEvent self, Action<T> handler)
     {
         ArgumentNullException.ThrowIfNull(self);
         return self.GetDomain().RegisterEvent(handler);
+    }
+}
+
+/// <summary>订阅句柄的生命周期扩展。</summary>
+public static class UnRegisterExtensions
+{
+    /// <summary>
+    /// 让订阅随指定 System 释放而取消，适用于父域 Model 的 <see cref="BindableProperty{T}"/> 等不会随 Domain 自动失效的订阅。
+    /// 返回的句柄可用于提前取消。
+    /// </summary>
+    /// <exception cref="InvalidOperationException">System 未绑定 Domain 或正在释放；此时传入的订阅会被立即取消。</exception>
+    public static IUnRegister UnRegisterOnRelease(this IUnRegister subscription, AbstractSystem owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        return owner.Own(subscription);
     }
 }
 

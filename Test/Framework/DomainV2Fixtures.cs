@@ -135,6 +135,9 @@ internal sealed class DerivedModel(Action<DerivedModel>? initialize = null, Acti
     /// <summary>转发 <see cref="AbstractModel.SendEvent{T}(T)"/>。</summary>
     public void Publish<T>(T message) => SendEvent(message);
 
+    /// <summary>转发 <see cref="AbstractModel.PublishEvent{T}(T)"/>。</summary>
+    public void PublishToHub<T>(T message) => PublishEvent(message);
+
     /// <inheritdoc />
     protected override void OnInitialize()
     {
@@ -174,6 +177,12 @@ internal sealed class DerivedSystem(Action<DerivedSystem>? initialize = null, Ac
 
     /// <summary>转发 <see cref="AbstractSystem.RegisterEvent{T}"/>。</summary>
     public IUnRegister Subscribe<T>(Action<T> handler) => RegisterEvent(handler);
+
+    /// <summary>转发 <see cref="AbstractSystem.PublishEvent{T}(T)"/>。</summary>
+    public void PublishToHub<T>(T message) => PublishEvent(message);
+
+    /// <summary>转发 <see cref="AbstractSystem.SubscribeEvent{T}"/>。</summary>
+    public IUnRegister SubscribeToHub<T>(Action<T> handler) => SubscribeEvent(handler);
 
     /// <inheritdoc />
     protected override void OnInitialize()
@@ -263,8 +272,9 @@ internal sealed class ProbeDomain : AbstractDomain
         string name = "probe",
         Action<ProbeDomain>? configure = null,
         Action<ProbeDomain>? activated = null,
-        Action<ProbeDomain>? deactivating = null) =>
-        CreateDomain(() => new ProbeDomain(name, configure, activated, deactivating));
+        Action<ProbeDomain>? deactivating = null,
+        ProbeDomain? parent = null) =>
+        CreateDomain(() => new ProbeDomain(name, configure, activated, deactivating), parent);
 
     /// <summary>模拟工厂误返回已在使用的实例，用于验证只能启动一次。</summary>
     public static ProbeDomain CreateFrom(ProbeDomain existing) => CreateDomain(() => existing);

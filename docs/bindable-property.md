@@ -100,4 +100,17 @@ public sealed class SettingsVolumeProperty : BindableProperty<float>
 }
 ```
 
+## 跨 Domain 订阅
+
+子域的 System 可以订阅父域 Model 上的属性，但 `BindableProperty<T>` 不知道订阅者属于哪个 Domain，子域释放时订阅不会自动取消。订阅后对句柄调用 `UnRegisterOnRelease(this)`，让它随 System 释放自动取消：
+
+```csharp
+protected override void OnInitialize() =>
+    GetModel<IMatchModel>().Score.Register((_, score) => Refresh(score)).UnRegisterOnRelease(this);
+```
+
+父域 Model 对外建议只暴露 `IReadonlyBindableProperty<T>`，子域需要修改父域状态时通过事件中心发布事件。详见 [Domain 设计与使用](domain-lifecycle.md#跨-domain-通信)。
+
+## 线程
+
 `BindableProperty<T>` 本身不加锁。与 Domain 一样，应用应在所属对象的拥有线程上串行读取、写入和管理订阅。

@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.ExceptionServices;
 using SimpleFramework.FrameworkImpl;
 
 namespace SimpleFramework;
@@ -60,12 +59,21 @@ public abstract class AbstractDomain : IDomain, IDisposable
     /// </summary>
     /// <typeparam name="TDomain">具体 Domain 类型。</typeparam>
     /// <param name="factory">可捕获构造参数的同步工厂。</param>
+    /// <param name="parent">
+    /// 可选的父 Domain。指定后，子域在初始化期间就能回退查找父域的组件（例如父域注册的 <see cref="IEventHub"/>），
+    /// 启动成功后自动挂为父域的子域，相当于创建后再调用 <see cref="AddChild"/>。
+    /// </param>
     /// <returns>完成 Configure、组件初始化和 OnActivated 的 Active Domain。</returns>
-    protected static TDomain CreateDomain<TDomain>(Func<TDomain> factory) where TDomain : AbstractDomain
+    /// <exception cref="InvalidOperationException">父 Domain 不是 Active。</exception>
+    /// <exception cref="ObjectDisposedException">父 Domain 已释放。</exception>
+    protected static TDomain CreateDomain<TDomain>(Func<TDomain> factory, AbstractDomain? parent = null)
+        where TDomain : AbstractDomain
     {
         ArgumentNullException.ThrowIfNull(factory);
+        parent?.ThrowIfNotActive();
+
         var candidate = factory() ?? throw new InvalidOperationException("Domain 工厂返回了 null。");
-        candidate.Start();
+        candidate.Start(parent);
         return candidate;
     }
 
@@ -263,18 +271,22 @@ public abstract class AbstractDomain : IDomain, IDisposable
 
         var failures = new List<Exception>();
         DisposeCore(failures);
-        ThrowFailures(failures);
+        Failures.ThrowIfAny(failures);
     }
 
     /// <summary>Domain 进入 Disposed 后的内部回调，供单例清理静态引用。</summary>
     private protected virtual void OnTerminalDisposed() { }
 
     /// <summary>执行 Configure 和组件初始化；任一步失败都会释放已初始化的组件并抛出。</summary>
-    private void Start()
+    private void Start(AbstractDomain? parent)
     {
         // 放在 try 之外：工厂误返回已在使用的 Domain 时只报错，不能走失败清理把它释放掉。
         if (_isStartInvoked) throw new InvalidOperationException($"Domain {DiagnosticName} 只能启动一次，工厂必须返回新实例。");
         _isStartInvoked = true;
+
+        // 启动期间只建立子到父的查找链接，不加入父域的子域列表：启动失败时父域完全不受影响，
+        // 父域在此期间被释放也不会去释放一个仍在启动中的子域。
+        _parent = parent;
 
         try
         {
@@ -285,13 +297,22 @@ public abstract class AbstractDomain : IDomain, IDisposable
             foreach (var entry in _models) InitializeComponent(entry);
             foreach (var entry in _systems) InitializeComponent(entry);
 
+            // 子域组件初始化期间可能间接释放了父域，此时不能挂到一个已不再 Active 的父域上。
+            parent?.ThrowIfNotActive();
+
             _state = DomainState.Active;
+            if (parent is not null)
+            {
+                parent._children.Add(this);
+                Log.Info($"Domain {parent.DiagnosticName} 已挂载子 Domain {DiagnosticName}。");
+            }
+
             OnActivated();
 
             // OnActivated 里释放自身会让 Create 返回一个不可用的实例，必须视为启动失败。
             if (_state != DomainState.Active)
             {
-                throw new InvalidOperationException("OnActivated 不能释放正在创建的 Domain。");
+                throw new InvalidOperationException("OnActivated 期间 Domain 已被释放（可能是父域被释放），不能返回该实例。");
             }
 
             Log.Info($"Domain {DiagnosticName} 已激活。");
@@ -301,9 +322,9 @@ public abstract class AbstractDomain : IDomain, IDisposable
             Log.Error($"Domain {DiagnosticName} 启动失败。", startupFailure);
 
             var failures = new List<Exception>();
-            AddFailure(failures, startupFailure);
+            Failures.Add(failures, startupFailure);
             DisposeCore(failures);
-            ThrowFailures(failures);
+            Failures.ThrowIfAny(failures);
         }
     }
 
@@ -379,7 +400,9 @@ public abstract class AbstractDomain : IDomain, IDisposable
             _systems.Clear();
             _registry.Clear();
 
-            if (_parent is not null) _parent._children.RemoveAt(_parent.IndexOfChild(this));
+            // 启动失败的子域只有查找链接，不在父域的子域列表里，因此要先确认存在再移除。
+            var indexInParent = _parent?.IndexOfChild(this) ?? -1;
+            if (indexInParent >= 0) _parent!._children.RemoveAt(indexInParent);
             _parent = null;
             _state = DomainState.Disposed;
             RunCleanupStep(OnTerminalDisposed, failures, "终态清理回调失败");
@@ -410,7 +433,7 @@ public abstract class AbstractDomain : IDomain, IDisposable
         catch (Exception exception)
         {
             Log.Error($"Domain {DiagnosticName} {description}。", exception);
-            AddFailure(failures, exception);
+            Failures.Add(failures, exception);
         }
     }
 
@@ -428,6 +451,13 @@ public abstract class AbstractDomain : IDomain, IDisposable
 
         for (var domain = this; domain is not null; domain = domain._parent)
         {
+            // 只有启动中的子域，或子域释放回调里释放了父域，才会走到已释放的父域；
+            // 明确报出原因，而不是在已清空的注册表里误报“找不到组件”。
+            if (domain._state == DomainState.Disposed)
+            {
+                throw new ObjectDisposedException(domain.DiagnosticName, "父 Domain 已释放，无法回退查找组件。");
+            }
+
             if (domain._registry.TryResolveLocal(category, typeof(T), domain.DiagnosticName, out var instance)
                 && instance is T typed)
             {
@@ -472,27 +502,6 @@ public abstract class AbstractDomain : IDomain, IDisposable
         {
             throw new InvalidOperationException($"组件 {component.GetType().FullName} 同时属于多个分类。");
         }
-    }
-
-    /// <summary>收集异常；展开非空的 AggregateException，使调用方看到的是扁平的失败列表。</summary>
-    private static void AddFailure(List<Exception> failures, Exception exception)
-    {
-        if (exception is AggregateException { InnerExceptions.Count: > 0 } aggregate)
-        {
-            foreach (var inner in aggregate.InnerExceptions) AddFailure(failures, inner);
-        }
-        else
-        {
-            failures.Add(exception);
-        }
-    }
-
-    /// <summary>单个异常保留原始堆栈重抛，多个异常包装为 <see cref="AggregateException"/>。</summary>
-    private static void ThrowFailures(List<Exception> failures)
-    {
-        if (failures.Count == 0) return;
-        if (failures.Count == 1) ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        throw new AggregateException(failures);
     }
 }
 
