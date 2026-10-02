@@ -35,7 +35,7 @@ public sealed class GameDomain : AbstractDomain
 
 using var domain = GameDomain.Create();
 var byInterface = domain.GetModel<IPlayerModel>();
-var byConcrete = domain.GetModel<PlayerModel>(); // 同一实例
+var byConcrete = domain.GetModel<PlayerModel>(); // 同一实例；可以查到，但建议按业务接口获取
 ```
 
 注册只能在 `Configure` 中进行；启动时先初始化全部 Model，再初始化全部 System。不支持替换或移除组件。查找按“本地精确键、本地唯一可赋值对象、父域”解析，查不到或有歧义都会明确抛出。
@@ -180,33 +180,50 @@ dotnet test .\Test\Test.csproj
 ### Domain、Model、Command、Query
 
 ```csharp
+using SimpleFramework;
+
+using var game = GameDomain.Create();
+game.SendCommand(new DamageCommand(10));
+var hp = game.SendQuery(new ReadHpQuery()); // 90
+
+public interface IPlayerModel : IModel
+{
+    IReadonlyBindableProperty<int> Hp { get; } // 对外只读，表现层可订阅变化
+    void Damage(int amount);
+}
+
+public sealed class PlayerModel : AbstractModel, IPlayerModel
+{
+    private readonly BindableProperty<int> _hp = new(100);
+
+    public IReadonlyBindableProperty<int> Hp => _hp;
+
+    public void Damage(int amount) => _hp.Value -= amount;
+
+    protected override void OnInitialize() { }
+}
+
+public sealed class DamageCommand(int amount) : ICommand
+{
+    public void Execute(CommandContext context) => context.GetModel<IPlayerModel>().Damage(amount);
+}
+
+public sealed class ReadHpQuery : IQuery<int>
+{
+    public int Execute(QueryContext context) => context.GetModel<IPlayerModel>().Hp.Value;
+}
+
 public sealed class GameDomain : AbstractDomain
 {
     private GameDomain() { }
+
     public static GameDomain Create() => CreateDomain(() => new GameDomain());
 
-    protected override void Configure()
-    {
-        RegisterModel(new PlayerModel());
-        RegisterUtility(new IniConfigTool());
-    }
+    protected override void Configure() => RegisterModel<IPlayerModel>(new PlayerModel());
 }
-
-public sealed class PlayerModel : AbstractModel
-{
-    public BindableProperty<int> Hp { get; } = new(100);
-    protected override void OnInitialize() {}
-}
-
-public sealed class ReadHpQuery : AbstractQuery<int>
-{
-    protected override int OnExecute(QueryContext context) =>
-        context.GetModel<PlayerModel>().Hp.Value;
-}
-
-using var game = GameDomain.Create();
-var hp = game.SendQuery(new ReadHpQuery());
 ```
+
+组件分工、Controller、事件、Domain 树和测试写法见 [Domain 设计与使用](docs/domain-lifecycle.md)。
 
 ### ECS 查询
 

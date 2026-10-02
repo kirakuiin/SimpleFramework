@@ -1,35 +1,30 @@
 # Domain 设计与使用
 
-Domain 提供分类组件访问、生命周期管理和可动态调整的 Domain 树，用法与 QFramework 接近：Model、System、Utility 三类组件，同步的 Command/Query，Domain 内的本地事件，以及跨 Domain 的事件中心。它采用同步、单线程协作模型。
+Domain 是 SimpleFramework 的核心框架：用 Model、System、Utility 三类组件组织业务，通过同步的 Command/Query 读写状态，用 Domain 内的本地事件和跨 Domain 的事件中心通信。用法与 QFramework 接近，采用同步、单线程协作模型。
 
 与 QFramework 相比，主要区别是：可以创建多个 Domain 并组成树；查不到组件时抛异常而不是返回 `null`；重复注册会报错而不是静默覆盖；按接口或具体类型都能查到组件；初始化失败会回滚，释放失败会汇总；Command/Query 的上下文不能被保存；跨 Domain 事件没有静态全局总线，System 的订阅会随释放自动取消。
 
-## 设计目标与原则
+设计目标、健壮性底线和有意不做的事见文末的[设计目标与原则](#设计目标与原则)。
 
-**目标是“顺手”**：用法向 QFramework 看齐但更规范，以尽量低的复杂度提供多实例、Domain 树和可靠的生命周期。
+## 核心概念
 
-**健壮性底线**，可以为易用让步，但不能低于以下要求，且整体强于 QFramework：
+| 角色 | 放什么 | 例子 |
+| --- | --- | --- |
+| Domain | 一组组件的容器和生命周期边界；可以组成树，子域查不到组件时回退到父域 | 应用根、一场对局、一个场景 |
+| Model | 状态数据，以及只涉及自身数据的简单操作 | 玩家血量、背包、设置 |
+| System | 业务规则、跨多个 Model 的逻辑、需要长期订阅事件的流程 | 伤害结算、成就统计 |
+| Utility | 与业务无关、可替换的底层能力或外部服务，由调用方创建，可跨 Domain 共享 | 存档、配置读写、网络、事件中心 |
+| Command | 一次修改操作的入口；表现层的修改都通过它 | 攻击、购买、开始对局 |
+| Query | 一次只读查询，可组合多个 Model、System 的数据 | 计算总战力 |
+| Controller | 表现层入口（UI、引擎节点）：读数据、发 Command/Query、订阅变化并刷新显示 | 血条、按钮 |
 
-- 用户没有犯错时，框架绝不出问题。
-- 用户犯错时，抛出说明原因的明确异常，不静默覆盖、不返回 `null`、不吞掉错误。
+判断原则：
 
-**性能**：查找组件、发送本地事件、发布到事件中心、执行 Command/Query 这些热路径，热身后不分配内存（由测试保证）。
+- 有状态放 Model，有规则或流程放 System，与业务无关、测试时想替换的放 Utility。
+- 表现层读取 Model（或发 Query）并发送 Command，不直接修改 Model。
+- 状态变化通知表现层有两种方式：Model 暴露 `BindableProperty`（见[数据驱动 UI](#数据驱动-ui)），或由 System、Command 发送事件（见下方入门示例）。
 
-**有意不做的事**：
-
-| 不做 | 原因 |
-| --- | --- |
-| 自定义异常类型 | 使用 .NET 标准异常（`KeyNotFoundException`、`InvalidOperationException`、`ObjectDisposedException`、`AggregateException`），调用方无需认识新类型 |
-| 终结器 | Domain 必须显式 `Dispose`；终结器线程上的释放会违反单线程模型 |
-| 按需初始化 | 与 QFramework 一致，初始化期间可能拿到尚未初始化的组件；靠约定（`OnInitialize` 只缓存引用）而不是框架追踪依赖 |
-| 替换、删除组件，Active 阶段注册 | 需要动态增减的功能用子 Domain 表达 |
-| 执行期树守卫、全局生命周期所有权表、Context 三态、注册两阶段、`DisposeSelfOnly` | 这些机制只防范罕见误用，却妨碍常见用法（例如在 Command 中切换场景、脱离真实 Domain 测试 Command），已经删除 |
-| 静态全局事件总线 | 跨 Domain 通信使用调用方持有的 `IEventHub`，测试之间不共享状态 |
-| 线程安全 | 采用同步、单线程协作模型，见[线程边界](#线程边界) |
-
-新增防护前先确认它针对的是“用户没犯错却出问题”，或者是“用户犯错却没有明确异常”；只为防范罕见误用而增加的复杂度不符合上述目标。
-
-## 最小结构
+一个应用通常由一棵 Domain 树组成：
 
 ```text
 Root Domain
@@ -45,8 +40,14 @@ Root Domain
 
 ## 完整入门示例
 
+下面的代码可以直接作为控制台程序的 `Program.cs`（C# 要求顶层语句写在类型声明之前）。流程是：Command 发送事件 → System 处理事件并修改 Model → 调用方读取 Model。
+
 ```csharp
 using SimpleFramework;
+
+using var game = GameDomain.Create();
+game.SendCommand(new DamageCommand(10));
+Console.WriteLine(game.GetModel<IPlayerModel>().Hp); // 90
 
 public interface ISaveUtility : IUtility
 {
@@ -107,10 +108,6 @@ public sealed class GameDomain : AbstractDomain
         RegisterUtility<ISaveUtility>(new SaveUtility());
     }
 }
-
-using var game = GameDomain.Create();
-game.SendCommand(new DamageCommand(10));
-var hp = game.GetModel<IPlayerModel>().Hp; // 90
 ```
 
 `Configure` 中的书写顺序不影响分类顺序：上例先注册 System，框架仍先初始化全部 Model，再初始化全部 System。
@@ -171,6 +168,59 @@ public partial class HpLabel : Label, IController
 ```
 
 Godot 节点也可以配合 GDExt 的 `UnRegisterWhenNodeExit`。
+
+`GetDomain()` 返回 Controller 所属的 Domain。单例 Domain 直接返回 `Instance`；不是单例，或者 Controller 是普通 C# 类时，在构造时传入 Domain 并保存，见下一节的 `CounterView`。
+
+### 数据驱动 UI
+
+最常见的写法：Model 用 `BindableProperty` 保存状态并对外只读，Controller 订阅它刷新显示，修改通过 Command 完成。
+
+```csharp
+public interface ICounterModel : IModel
+{
+    IReadonlyBindableProperty<int> Count { get; } // 对外只读，表现层不能直接改
+    void Increase();
+}
+
+public sealed class CounterModel : AbstractModel, ICounterModel
+{
+    private readonly BindableProperty<int> _count = new(0);
+
+    public IReadonlyBindableProperty<int> Count => _count;
+
+    public void Increase() => _count.Value++;
+
+    protected override void OnInitialize() { }
+}
+
+public sealed class IncreaseCommand : ICommand
+{
+    public void Execute(CommandContext context) => context.GetModel<ICounterModel>().Increase();
+}
+
+// 普通 C# 类实现的 Controller：构造时传入所属 Domain
+public sealed class CounterView : IController, IDisposable
+{
+    private readonly IDomain _domain;
+    private readonly IUnRegister _count;
+
+    public CounterView(IDomain domain)
+    {
+        _domain = domain;
+        _count = this.GetModel<ICounterModel>().Count.RegisterWithNotify((_, value) => Render(value)); // 立即显示一次初始值
+    }
+
+    public IDomain GetDomain() => _domain;
+
+    public void OnClick() => this.SendCommand<IncreaseCommand>();
+
+    public void Dispose() => _count.UnRegister(); // Controller 的订阅由自己取消
+
+    private static void Render(int value) => Console.WriteLine($"Count: {value}");
+}
+```
+
+`BindableProperty` 的比较器、静默写入和通知期间的写入限制见 [BindableProperty 使用说明](bindable-property.md)。
 
 ### 直接实现生命周期接口
 
@@ -329,9 +379,23 @@ public sealed class ReadHpQuery : IQuery<int>
     public int Execute(QueryContext context) => context.GetModel<IPlayerModel>().Hp;
 }
 
+// 带返回值的命令：执行修改并返回结果
+public sealed class HealCommand(int amount) : ICommand<int>
+{
+    public int Execute(CommandContext context)
+    {
+        var player = context.GetModel<IPlayerModel>();
+        player.Hp += amount;
+        return player.Hp;
+    }
+}
+
 var hp = domain.SendQuery(new ReadHpQuery());
-domain.SendCommand<RestartBattleCommand>(); // 无参便利写法
+var healed = domain.SendCommand(new HealCommand(5));
+domain.SendCommand<RestartBattleCommand>(); // 无参命令的便利写法
 ```
+
+也可以继承 `AbstractCommand`、`AbstractCommand<TResult>`、`AbstractQuery<TResult>` 并重写 `OnExecute`。它们只是把 `Execute` 转发给 `OnExecute`，与直接实现接口等价，按团队习惯选择即可。
 
 - 上下文是 `readonly ref struct`，不能保存到字段、装箱或跨越 `await`。构造函数是公开的，测试可以直接 `command.Execute(new CommandContext(domain))`。
 - Query 表达只读意图，但不保证返回对象不可变。
@@ -474,6 +538,51 @@ public sealed class GameDomain : AbstractDomain
 - 直接释放一个已挂载的子 Domain，会同时把它从父级移除。
 - 已知限制：直接释放子域时，如果子域的释放回调又释放了父域，父域会先于子域释放完；之后子域在 `OnRelease` 中回退查找父域组件，会得到说明“父 Domain 已释放”的 `ObjectDisposedException`。
 
+## 如何测试
+
+- **每个测试创建新的 Domain**，用 `using` 释放。不要在测试之间共享单例或静态事件中心，否则订阅和状态会串到下一个测试。
+- **依赖按接口获取**，测试时注册假实现。让 Domain 通过 `Create` 参数接收 Utility，生产和测试就能复用同一个 Domain。
+- **单独测试 Command/Query**：上下文接收 `IDomain` 且构造函数公开，可以对只注册了所需组件的小 Domain 执行 `command.Execute(new CommandContext(domain))`，也可以直接 `domain.SendCommand(...)`。
+
+```csharp
+public sealed class FakeSaveUtility(int hp) : ISaveUtility
+{
+    public int Saved { get; private set; }
+    public int LoadHp() => hp;
+    public void SaveHp(int value) => Saved = value;
+}
+
+public sealed class PlayerTestDomain : AbstractDomain
+{
+    private readonly ISaveUtility _save;
+
+    private PlayerTestDomain(ISaveUtility save) => _save = save;
+
+    public static PlayerTestDomain Create(ISaveUtility save) => CreateDomain(() => new PlayerTestDomain(save));
+
+    protected override void Configure()
+    {
+        RegisterUtility<ISaveUtility>(_save); // 假实现
+        RegisterModel<IPlayerModel>(new PlayerModel());
+        RegisterSystem<IPlayerSystem>(new PlayerSystem());
+    }
+}
+
+[Test]
+public void DamageIsSavedOnRelease()
+{
+    var save = new FakeSaveUtility(hp: 50);
+
+    using (var domain = PlayerTestDomain.Create(save))
+    {
+        domain.SendCommand(new DamageCommand(10));
+        Assert.That(domain.GetModel<IPlayerModel>().Hp, Is.EqualTo(40));
+    }
+
+    Assert.That(save.Saved, Is.EqualTo(40)); // PlayerSystem 释放时保存
+}
+```
+
 ## 常见失败与处理方式
 
 | 情况 | 结果 | 建议 |
@@ -496,6 +605,31 @@ public sealed class GameDomain : AbstractDomain
 ## 线程边界
 
 框架不加锁、不记录线程所有者，也不自动切回主线程。应用应在一个线程串行使用同一棵 Domain 树和它共享的事件中心；后台任务完成后，先调度回该线程，再调用 Domain API。
+
+## 设计目标与原则
+
+**目标是“顺手”**：用法向 QFramework 看齐但更规范，以尽量低的复杂度提供多实例、Domain 树和可靠的生命周期。
+
+**健壮性底线**，可以为易用让步，但不能低于以下要求，且整体强于 QFramework：
+
+- 用户没有犯错时，框架绝不出问题。
+- 用户犯错时，抛出说明原因的明确异常，不静默覆盖、不返回 `null`、不吞掉错误。
+
+**性能**：查找组件、发送本地事件、发布到事件中心、执行 Command/Query 这些热路径，热身后不分配内存（由测试保证）。
+
+**有意不做的事**：
+
+| 不做 | 原因 |
+| --- | --- |
+| 自定义异常类型 | 使用 .NET 标准异常（`KeyNotFoundException`、`InvalidOperationException`、`ObjectDisposedException`、`AggregateException`），调用方无需认识新类型 |
+| 终结器 | Domain 必须显式 `Dispose`；终结器线程上的释放会违反单线程模型 |
+| 按需初始化 | 与 QFramework 一致，初始化期间可能拿到尚未初始化的组件；靠约定（`OnInitialize` 只缓存引用）而不是框架追踪依赖 |
+| 替换、删除组件，Active 阶段注册 | 需要动态增减的功能用子 Domain 表达 |
+| 执行期树守卫、全局生命周期所有权表、Context 三态、注册两阶段、`DisposeSelfOnly` | 这些机制只防范罕见误用，却妨碍常见用法（例如在 Command 中切换场景、脱离真实 Domain 测试 Command），已经删除 |
+| 静态全局事件总线 | 跨 Domain 通信使用调用方持有的 `IEventHub`，测试之间不共享状态 |
+| 线程安全 | 采用同步、单线程协作模型，见[线程边界](#线程边界) |
+
+新增防护前先确认它针对的是“用户没犯错却出问题”，或者是“用户犯错却没有明确异常”；只为防范罕见误用而增加的复杂度不符合上述目标。
 
 ## 延伸阅读
 
