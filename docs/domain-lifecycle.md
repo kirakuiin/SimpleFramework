@@ -4,6 +4,31 @@ Domain 提供分类组件访问、生命周期管理和可动态调整的 Domain
 
 与 QFramework 相比，主要区别是：可以创建多个 Domain 并组成树；查不到组件时抛异常而不是返回 `null`；重复注册会报错而不是静默覆盖；按接口或具体类型都能查到组件；初始化失败会回滚，释放失败会汇总；Command/Query 的上下文不能被保存；跨 Domain 事件没有静态全局总线，System 的订阅会随释放自动取消。
 
+## 设计目标与原则
+
+**目标是“顺手”**：用法向 QFramework 看齐但更规范，以尽量低的复杂度提供多实例、Domain 树和可靠的生命周期。
+
+**健壮性底线**，可以为易用让步，但不能低于以下要求，且整体强于 QFramework：
+
+- 用户没有犯错时，框架绝不出问题。
+- 用户犯错时，抛出说明原因的明确异常，不静默覆盖、不返回 `null`、不吞掉错误。
+
+**性能**：查找组件、发送本地事件、发布到事件中心、执行 Command/Query 这些热路径，热身后不分配内存（由测试保证）。
+
+**有意不做的事**：
+
+| 不做 | 原因 |
+| --- | --- |
+| 自定义异常类型 | 使用 .NET 标准异常（`KeyNotFoundException`、`InvalidOperationException`、`ObjectDisposedException`、`AggregateException`），调用方无需认识新类型 |
+| 终结器 | Domain 必须显式 `Dispose`；终结器线程上的释放会违反单线程模型 |
+| 按需初始化 | 与 QFramework 一致，初始化期间可能拿到尚未初始化的组件；靠约定（`OnInitialize` 只缓存引用）而不是框架追踪依赖 |
+| 替换、删除组件，Active 阶段注册 | 需要动态增减的功能用子 Domain 表达 |
+| 执行期树守卫、全局生命周期所有权表、Context 三态、注册两阶段、`DisposeSelfOnly` | 这些机制只防范罕见误用，却妨碍常见用法（例如在 Command 中切换场景、脱离真实 Domain 测试 Command），已经删除 |
+| 静态全局事件总线 | 跨 Domain 通信使用调用方持有的 `IEventHub`，测试之间不共享状态 |
+| 线程安全 | 采用同步、单线程协作模型，见[线程边界](#线程边界) |
+
+新增防护前先确认它针对的是“用户没犯错却出问题”，或者是“用户犯错却没有明确异常”；只为防范罕见误用而增加的复杂度不符合上述目标。
+
 ## 最小结构
 
 ```text
@@ -248,7 +273,7 @@ network.AddChild(battle);  // 移动必须先 Remove 再 Add
 - 子域启动失败时，父域不受任何影响，子域不会出现在父域的子域列表里。
 - 子域初始化期间父域被释放，子域启动失败；此时回退查找会抛出说明“父 Domain 已释放”的 `ObjectDisposedException`。
 
-挂载、移除、释放**可以在 Command、Query 或事件处理中进行**。命令上下文不暴露所属 Domain（与 QFramework 一致，命令没有管理能力），切换场景由持有子域的对象完成，例如单例 Domain：
+挂载、移除、释放**可以在 Command、Query 或事件处理中进行**。本框架的命令上下文不暴露所属 Domain，切换场景由持有子域的对象完成，例如单例 Domain：
 
 ```csharp
 public sealed class EnterBattleCommand(int matchId) : ICommand

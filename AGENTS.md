@@ -59,6 +59,15 @@ dotnet test .\Test\Test.csproj
 - 除缺陷审查外，任务简报必须明确要求审查者对照当前项目 `AGENTS.md` 的“编码智能体指导纲领”检查本次改动，单独说明规范符合性并给出可执行建议；规范建议与 `$review-agent` 的缺陷发现分开呈现。
 - 主智能体收到审查结果后，必须结合用户意图、设计、实际代码和验证证据逐项复核，不盲从审查结论；向用户反馈完整结果，说明问题是否成立、依据、优先级及处理建议。是否修复及修复后是否再次审查由用户决定，不自动形成递归审查。
 
+## Domain 设计底线
+
+修改 Domain 核心框架前先阅读 `docs/domain-lifecycle.md` 的“设计目标与原则”一节。要点：
+
+- 目标是“顺手”：用法向 QFramework 看齐但更规范，复杂度尽量低；健壮性可以为易用让步，但整体必须强于 QFramework。
+- 底线：用户没有犯错时绝不出问题；用户犯错时抛出明确的 .NET 标准异常，不静默覆盖、不返回 `null`。不新增自定义异常类型，Domain 不实现终结器。
+- 查找、发送本地事件、发布到事件中心、执行 Command/Query 等热路径热身后不分配内存，修改时保持相关零分配测试通过。
+- 不要为了“更健壮”重新引入已删除的机制：执行期树守卫、全局生命周期所有权表、Context 三态、注册两阶段、`DisposeSelfOnly`、Active 阶段注册、按需初始化、静态全局事件总线。新增防护必须针对上述底线中的具体问题。
+
 ## 核心行为说明
 
 - 具体 `Domain` 使用私有构造函数，并通过调用 `CreateDomain(() => new Domain(...))` 的静态工厂创建；严格单例继承 `AbstractSingletonDomain<T>`，通过 `GetOrCreateInstance` 暴露 `Instance`。
@@ -67,7 +76,7 @@ dotnet test .\Test\Test.csproj
 - 未显式指定泛型契约的 `Register` 重载以运行时具体类型作为唯一键。查找顺序为：本地精确匹配、本地唯一可赋值匹配、父级匹配；存在歧义时抛出异常。注册即可被查找，初始化期间可能拿到尚未初始化的组件。
 - 启动先初始化全部 Model 再初始化全部 System；失败时逆序释放已初始化的组件并释放 Domain。不支持替换、删除组件或 Active 阶段注册。
 - 子 `Domain` 可以通过 `CreateDomain(factory, parent)` 创建时指定 Active 父域：初始化期间即可回退查找父域组件，启动成功后自动挂载，启动失败不影响父域；也可以先独立创建到 `Active` 再 `AddChild`。回退查找遇到已释放的父域抛 `ObjectDisposedException`。唯一的强树关系同时提供父级组件回退和默认子树释放；`RemoveChild` 永远不会释放子 `Domain`。挂载、移除、释放可以在 Command、Query、事件处理中进行，已释放 Domain 的访问抛 `ObjectDisposedException`。
-- 释放顺序：进入 Disposing 并失效全部事件订阅 → 子树逆序 → `OnDeactivating`（仅进入过 Active 时）→ System 逆序 → Model 逆序 → 清空注册表。释放期间仍可读取组件，但不能订阅事件或修改树；重入 `Dispose` 无操作。组件按初始化逆序释放，`OnRelease` 中不要调用其他 System；需要协调的退出逻辑放在 `OnDeactivating`。
+- 释放顺序：进入 Disposing 并失效全部本地事件订阅 → 子树逆序 → `OnDeactivating`（仅进入过 Active 时）→ System 逆序 → Model 逆序 → 清空注册表。释放期间仍可读取组件，但不能订阅本地事件或修改树；重入 `Dispose` 无操作。事件中心订阅不会在 Domain 进入 Disposing 时统一失效；`AbstractSystem` 自有订阅在各 System 释放时、`OnRelease` 之前取消，因此 `OnDeactivating` 期间仍可能收到事件中心通知。组件按初始化逆序释放，`OnRelease` 中不要调用其他 System；需要协调的退出逻辑放在 `OnDeactivating`。
 - 跨 Domain 事件使用调用方持有的 `IEventHub`（默认实现 `EventHub`），通常注册在根 Domain；`PublishEvent` 跟随 `ICanSendEvent`，`SubscribeEvent` 跟随 `ICanRegisterEvent`，Query 两者都没有。`AbstractSystem.SubscribeEvent` 与 `UnRegisterOnRelease(this)` 登记的订阅在 System 释放（`OnRelease` 之前）或初始化失败时取消；释放期间登记会抛异常。Controller 的订阅由自己取消。
 - 只有 Domain 本地事件与 System 自有订阅会自动取消；订阅父域 `BindableProperty` 等非本地来源时使用 `UnRegisterOnRelease(this)`。
 - `Utility` 由调用方拥有，可以在多个 `Domain` 之间共享。运行时对象若跨越多个组件类别，将被拒绝注册。
