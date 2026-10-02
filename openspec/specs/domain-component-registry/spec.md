@@ -1,11 +1,9 @@
 ## Purpose
 
 Define categorized single-key registration, exclusive lifecycle ownership, delayed publication, and exact, assignable, and parent component resolution for Domain v2.
-
 ## Requirements
-
 ### Requirement: Domain registration is categorized and single-keyed
-The Domain MUST maintain separate System, Model, and Utility categories. Each local registration SHALL create one entry with one primary key and one instance. Non-generic Register MUST use the instance runtime type as the primary key. Explicit generic Register MUST use the supplied contract type and validate assignability before changing state. An instance MUST NOT occupy multiple local keys or categories, and a runtime type that belongs to multiple component categories MUST be rejected.
+The Domain MUST maintain separate System, Model, and Utility categories. Each local registration SHALL create one entry with one primary key and one instance. Non-generic Register MUST use the instance runtime type as the primary key. Explicit generic Register MUST use the supplied contract type and validate assignability before changing state. An instance MUST NOT occupy multiple local keys or categories, a primary key MUST NOT be registered twice in one category, and a runtime type that belongs to multiple component categories MUST be rejected.
 
 #### Scenario: Concrete Model registration ignores variable static type
 - **WHEN** RegisterModel is called without an explicit contract for a PlayerModel instance
@@ -17,7 +15,15 @@ The Domain MUST maintain separate System, Model, and Utility categories. Each lo
 
 #### Scenario: Explicit contract is incompatible
 - **WHEN** explicit generic registration names a contract not implemented by the instance
-- **THEN** it throws `ArgumentException` before reserving, initializing, or publishing the instance
+- **THEN** it throws `ArgumentException` before the instance becomes visible to lookup
+
+#### Scenario: Primary key is registered twice
+- **WHEN** Configure registers a second Model under a primary key that already exists in the Domain
+- **THEN** registration throws `InvalidOperationException` and the first entry remains unchanged
+
+#### Scenario: Same instance is registered twice
+- **WHEN** Configure registers one instance under two different keys or categories
+- **THEN** the second registration throws `InvalidOperationException`
 
 ### Requirement: Component lookup uses exact then assignable resolution
 Lookup MUST search only the requested category. It SHALL return a current-Domain exact primary-key match first; otherwise it SHALL return the single distinct current-Domain instance assignable to the requested type. Only if no local candidate exists SHALL lookup continue at the parent Domain. Exact-key lookup MUST use a dictionary; v2 SHALL NOT require an assignable-result cache.
@@ -56,21 +62,6 @@ Parent lookup MUST occur only when local resolution has neither an exact nor an 
 - **WHEN** an unattached child initializes before AddChild
 - **THEN** lookup cannot resolve components from its future parent
 
-### Requirement: System and Model instances have exclusive terminal ownership
-Once initialization of a System or Model begins, that object MUST belong to exactly one Domain, one lifecycle category, and one primary key. Registration in another Domain, key, or category MUST fail. Successful or failed Release leaves the object permanently ineligible. A candidate reserved during Configure but never passed to Initialize because Configure failed SHALL become eligible again.
-
-#### Scenario: Active component is registered elsewhere
-- **WHEN** a lifecycle component already owned by one Domain is registered in another
-- **THEN** the second registration throws `InvalidOperationException` without changing either Domain
-
-#### Scenario: Failed initialization instance is reused
-- **WHEN** Initialize began, failed, and failure cleanup attempted Release
-- **THEN** later lifecycle registration of that same object is rejected
-
-#### Scenario: Configure-only reservation is released
-- **WHEN** Configure fails before a collected lifecycle candidate begins Initialize
-- **THEN** that untouched candidate may be registered in a later Domain creation attempt
-
 ### Requirement: Utility registration is caller-managed
 Utility entries MUST participate in categorized lookup but MUST receive no framework initialization or cleanup callback. A pure Utility instance MAY be registered in multiple Domains because the caller owns its lifetime. An object whose runtime type also belongs to Model or System lifecycle categories MUST be rejected as a Utility to prevent conflicting ownership.
 
@@ -83,60 +74,38 @@ Utility entries MUST participate in categorized lookup but MUST receive no frame
 - **THEN** Utility registration throws before publishing the instance
 
 ### Requirement: Registration and lookup keep component marker constraints
-System contracts used for registration or lookup MUST inherit ISystem, Model contracts MUST inherit IModel, and Utility contracts MUST inherit IUtility. Lifecycle eligibility MUST be expressed separately by ISystemLifecycle or IModelLifecycle on the concrete instance.
+System contracts used for registration or lookup MUST inherit ISystem, Model contracts MUST inherit IModel, and Utility contracts MUST inherit IUtility. Lifecycle eligibility MUST be expressed separately by ISystemLifecycle or IModelLifecycle on the concrete instance. The lifecycle interfaces SHALL carry the role's capability rule interfaces, while business contracts that inherit only the category markers MUST NOT expose lifecycle methods or capability extensions to their consumers.
 
 #### Scenario: Business Model contract participates in lookup
 - **WHEN** `IPlayerModel : IModel` and PlayerModel implements both IPlayerModel and IModelLifecycle
-- **THEN** registration and lookup can use IPlayerModel without exposing Initialize or Release through the business contract
+- **THEN** registration and lookup can use IPlayerModel without exposing Initialize, Release, GetUtility, or SendEvent through the business contract
 
 ### Requirement: Get and TryGet have distinct missing behavior
-Get MUST throw `KeyNotFoundException` when the complete local and parent lookup chain has no candidate. TryGet MUST return false and assign null only for that missing case. Null arguments, ambiguity, invalid phase, and disposed access MUST retain their own exceptions.
+Every Get operation MUST throw `KeyNotFoundException` when the complete local and parent lookup chain has no candidate. TryGetModel, TryGetSystem, and TryGetUtility SHALL exist only on `IDomain`; they MUST return false and assign null only for the missing case. Null arguments, ambiguity, and disposed access MUST retain their own exceptions. Base classes, capability rule extensions, CommandContext, and QueryContext MUST expose only Get operations.
 
 #### Scenario: Required component is missing
 - **WHEN** GetUtility<IOptionalUtility> finds no compatible Utility in the lookup chain
 - **THEN** it throws `KeyNotFoundException` with category, type, and Domain information
 
 #### Scenario: Optional component is missing
-- **WHEN** TryGetUtility<IOptionalUtility> finds no compatible Utility
+- **WHEN** `IDomain.TryGetUtility<IOptionalUtility>` finds no compatible Utility
 - **THEN** it returns false and sets the output to null
 
-### Requirement: Lifecycle components publish only after successful initialization
-Model and System entries MUST remain private candidates while Initialize runs and SHALL become visible only after success. Release MUST cancel publication before invoking the component callback. Utilities collected during Configure SHALL become available before Model initialization.
+### Requirement: Registration is limited to Configure and immediately visible
+Register methods MUST be callable only while the framework is running Configure; any other call MUST throw `InvalidOperationException`. A registered component SHALL become visible to lookup as soon as Register returns, before Model or System initialization runs. Lookup during initialization MAY therefore return a component whose Initialize has not run yet.
 
-#### Scenario: Model initialization requests itself
-- **WHEN** a Model Initialize callback requests the key currently being initialized
-- **THEN** lookup does not observe that unpublished candidate
+#### Scenario: Registration outside Configure
+- **WHEN** code calls RegisterModel on an Active Domain
+- **THEN** it throws `InvalidOperationException` and the Domain is unchanged
 
-#### Scenario: Initialization succeeds
-- **WHEN** lifecycle Initialize returns successfully
-- **THEN** the entry is published exactly once and later lookup returns it
+#### Scenario: System obtains a later-registered System during initialization
+- **WHEN** System A registered before System B calls GetSystem<B> from its OnInitialize
+- **THEN** lookup returns the registered B instance even though B has not been initialized yet
 
-#### Scenario: Release callback performs external lookup
-- **WHEN** a component has been selected for Release
-- **THEN** it is already absent from its Domain Registry and its saved Context has no capability
+### Requirement: Framework base classes reject repeated initialization
+`AbstractModel` and `AbstractSystem` MUST throw `InvalidOperationException` when Initialize is called while they are already bound to a Domain, and MUST clear the binding after Release. Direct lifecycle implementations SHALL be responsible for their own reuse rules.
 
-### Requirement: Active registration adds only a new key atomically
-An Active Domain in an idle tree MAY register one component under an absent key. Lifecycle initialization MUST finish before publication. Failure SHALL clean the candidate and preserve all pre-existing registration bindings and lifecycle ownership. This guarantee covers the candidate and its owned subscriptions; it does not roll back business-state changes or subscriptions created through other objects. Existing keys, replacement, removal, and batch rollback MUST NOT be supported.
+#### Scenario: Base-class Model is registered in a second Domain
+- **WHEN** an AbstractModel instance that is still active in one Domain is registered in another Domain's Configure
+- **THEN** creation of the second Domain fails with `InvalidOperationException` and the first Domain is unaffected
 
-#### Scenario: Active new Model succeeds
-- **WHEN** an Active idle Domain registers a lifecycle Model under an absent key and Initialize succeeds
-- **THEN** the Model becomes immediately available after Register returns
-
-#### Scenario: Active new System fails
-- **WHEN** an Active registration candidate throws during Initialize
-- **THEN** the framework attempts its Release, permanently consumes that candidate, leaves the key absent, and preserves all older entries
-
-#### Scenario: Active key already exists
-- **WHEN** Register targets any existing primary key
-- **THEN** it throws `InvalidOperationException` without releasing or replacing the current instance
-
-#### Scenario: Failed candidate indirectly creates another System's subscription
-- **WHEN** a dynamic candidate's Initialize calls an existing System's business method that registers through that System's Context, and the candidate then fails
-- **THEN** the subscription remains owned by the existing System and is not automatically canceled by candidate cleanup; a caller that needs candidate-scoped cancellation must retain the token and cancel it during candidate Release
-
-### Requirement: Dynamic registration may change assignable resolution
-Adding a new entry MAY change a previously unique assignable request into an ambiguity. The framework MUST apply current Registry contents on each non-exact lookup and MUST NOT preserve an earlier successful answer unless a future versioned cache proves equivalent.
-
-#### Scenario: New candidate creates ambiguity
-- **WHEN** GetModel<IServiceModel> initially resolves one assignable entry and a second compatible entry is later registered under another key
-- **THEN** the next GetModel<IServiceModel> throws ambiguity unless an exact IServiceModel key exists

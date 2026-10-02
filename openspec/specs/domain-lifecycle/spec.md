@@ -1,11 +1,9 @@
 ## Purpose
 
 Define the one-shot Domain v2 lifecycle, factory and singleton creation, phase guards, failure propagation, and deterministic terminal teardown.
-
 ## Requirements
-
 ### Requirement: Domain lifecycle is explicit and one-shot
-Each Domain instance MUST follow the private lifecycle `Starting -> Active -> Disposing -> Disposed`. Creation failure SHALL perform cleanup and leave the instance Disposed. A Disposed instance MUST NOT return to an earlier state. `Create` and singleton `Instance` MUST return only an Active instance.
+Each Domain instance MUST follow the private lifecycle `Starting -> Active -> Disposing -> Disposed`. Creation failure SHALL perform cleanup and leave the instance Disposed. A Disposed instance MUST NOT return to an earlier state. `Create` and singleton `Instance` MUST return only an Active instance. Dispose MUST be idempotent, including reentrant calls made while the same Domain is Disposing.
 
 #### Scenario: Successful creation
 - **WHEN** a newly constructed Domain completes Configure, component initialization, and OnActivated
@@ -13,14 +11,26 @@ Each Domain instance MUST follow the private lifecycle `Starting -> Active -> Di
 
 #### Scenario: Creation fails
 - **WHEN** Configure, component initialization, or OnActivated throws
-- **THEN** the framework cleans all framework-owned resources, leaves the candidate Disposed, and does not return or publish it
+- **THEN** the framework releases every successfully initialized component in reverse order, does not release the component whose Initialize failed, invokes OnDeactivating only if the candidate had become Active, leaves the candidate Disposed, and does not return or publish it
+
+#### Scenario: Factory returns an existing Domain
+- **WHEN** a CreateDomain factory returns a Domain instance that has already been started
+- **THEN** CreateDomain throws `InvalidOperationException` without running cleanup on that instance
+
+#### Scenario: Configure restarts its own Domain
+- **WHEN** Configure passes the Domain that is currently starting to CreateDomain again
+- **THEN** the inner call throws `InvalidOperationException` instead of recursing, the outer startup fails with that exception, and the Domain ends Disposed
 
 #### Scenario: Disposed operation is attempted
-- **WHEN** any public operation other than idempotent Dispose is called on a Disposed Domain
+- **WHEN** any public operation other than Dispose is called on a Disposed Domain
 - **THEN** it throws `ObjectDisposedException`
 
+#### Scenario: Release callback disposes its own Domain
+- **WHEN** a component Release callback calls Dispose on the Domain that is releasing it
+- **THEN** the call returns without effect and the original disposal continues
+
 ### Requirement: Singleton creation rejects initialization reentrancy
-Each `AbstractSingletonDomain<T>` MUST maintain static `Empty`, `Creating`, and `Published` states. Accessing `Instance` or calling `DestroyInstance` while T is Creating MUST throw a clear `InvalidOperationException`; `GetInstance` MUST return null until publication. Failure SHALL return the singleton state to Empty, and only successful OnActivated SHALL publish the candidate.
+Each `AbstractSingletonDomain<T>` MUST reject access to `Instance` or `DestroyInstance` while T is being created by throwing a clear `InvalidOperationException`; `GetInstance` MUST return null until a created instance is published. Failure SHALL leave no published instance, and only a fully Active candidate SHALL be published.
 
 #### Scenario: Startup accesses Instance of the same type
 - **WHEN** Configure, component Initialize, or OnActivated for T accesses T.Instance
@@ -32,63 +42,7 @@ Each `AbstractSingletonDomain<T>` MUST maintain static `Empty`, `Creating`, and 
 
 #### Scenario: Published singleton is directly disposed
 - **WHEN** the published singleton instance is disposed
-- **THEN** its static reference returns to Empty and a future Instance access may create a fresh instance
-
-### Requirement: Operations obey the lifecycle phase
-Public Domain operations MUST centralize state, Context, ExecutionDepth, and transition checks. Starting SHALL permit only framework-orchestrated Configure registration and declared initialization Context capabilities. Active SHALL permit consumption and new-key dynamic registration while the tree is idle. Disposing and Disposed SHALL reject public operations except idempotent Dispose.
-
-#### Scenario: Configure attempts lookup
-- **WHEN** Configure calls Get, TryGet, CQ, Event, tree mutation, or Dispose
-- **THEN** the operation throws `InvalidOperationException`
-
-#### Scenario: Active Domain receives normal operation
-- **WHEN** an Active Domain in an idle tree receives Get, CQ, Event, registration, or tree management allowed by its public surface
-- **THEN** the operation executes under the relevant category and tree guards
-
-#### Scenario: Operation occurs during transition
-- **WHEN** public user code attempts registration, tree mutation, execution, or disposal while its tree is transitioning
-- **THEN** the operation is rejected before user-visible state changes
-
-### Requirement: Initialization permits only recoverable Domain operations
-Configure MUST only collect categorized registrations. Model initialization MUST only use Utility lookup. System initialization MUST only use Model/Utility lookup and owned local event registration. Component initialization MUST reject nested registration, tree mutation, disposal, Command, Query, Event sending, and System lookup, including when dynamic registration occurs in an Active Domain.
-
-#### Scenario: Model reads Utility during initialization
-- **WHEN** a Model Initialize callback resolves a registered Utility
-- **THEN** the framework returns that Utility if resolution succeeds
-
-#### Scenario: Initializer performs nested registration
-- **WHEN** a Model or System Initialize callback calls any Register method
-- **THEN** the framework throws `InvalidOperationException` before registering the nested component
-
-#### Scenario: Dynamic System sends during initialization
-- **WHEN** a System added to an Active Domain sends a Command, Query, or Event before its Initialize returns
-- **THEN** its Initializing Context rejects the operation
-
-### Requirement: Full teardown has defined dependency order
-Normal subtree teardown MUST release children in reverse-attachment postorder. Each Domain MUST then enter Disposing, invalidate Context capabilities, invoke OnDeactivating, release Systems in reverse successful activation order, release Models in reverse successful activation order, clear local events, clear Utility references without disposing Utilities, unlink relationships, and enter Disposed. Each System MUST be unpublished and have owned event tokens canceled before Release; each Model MUST be unpublished before Release.
-
-#### Scenario: Components and children are released in order
-- **WHEN** children, Systems, and Models were attached or activated in a known sequence
-- **THEN** later children finish before earlier siblings, all children finish before their parent, Systems finish before Models, and each category uses reverse successful activation order
-
-#### Scenario: Release tries to use Context
-- **WHEN** OnDeactivating or a component Release callback invokes a saved Context
-- **THEN** the call fails because release-time Context capabilities no longer exist
-
-### Requirement: Teardown is exhaustive and terminal despite failures
-The Domain MUST attempt every targeted child, lifecycle component, event clear, Utility clear, relationship unlink, and derived cleanup hook even when earlier work fails. Structural and terminal state updates MUST run in `finally`. One failure SHALL propagate with its original stack; multiple failures SHALL be flattened in occurrence order into AggregateException. A component whose Release fails MUST remain permanently consumed.
-
-#### Scenario: Multiple cleanup stages fail
-- **WHEN** child, OnDeactivating, component, or final cleanup stages throw
-- **THEN** all remaining cleanup stages run, every targeted Domain becomes Disposed and unlinked, and the caller receives every failure in deterministic order
-
-#### Scenario: Creation and cleanup both fail
-- **WHEN** a creation hook throws and one or more failure-cleanup steps also throw
-- **THEN** AggregateException contains the original creation failure first and cleanup failures afterward
-
-#### Scenario: A lifecycle callback throws an empty aggregate
-- **WHEN** Configure, Initialize, OnActivated, or a cleanup callback throws an AggregateException with no inner exceptions
-- **THEN** the exception itself MUST remain a failure, including inside nested aggregates; cleanup continues and the original empty aggregate is propagated alone or retained in the ordered failure list
+- **THEN** its static reference is cleared and a future Instance access may create a fresh instance
 
 ### Requirement: Framework cleanup excludes external side effects
 Creation failure MUST clean framework-owned registry entries, component lifecycle resources, owned local event subscriptions, tree relations, and singleton candidate state. It MUST NOT claim to roll back Utility calls, already executed event handlers, I/O, or other external business side effects.
@@ -109,16 +63,66 @@ Concrete non-singleton Domains MUST use non-public constructors and concrete sta
 - **THEN** normal C# accessibility prevents obtaining an unstarted Domain
 
 ### Requirement: Startup collects before initialization
-Starting MUST invoke Configure exactly once, make collected Utilities available, initialize all Models in registration order, then initialize all Systems in registration order. Lifecycle components MUST publish only after their own Initialize succeeds. OnActivated MUST run after state becomes Active and the creation transition lock is cleared.
+Starting MUST invoke Configure exactly once, then initialize all Models in registration order, then initialize all Systems in registration order, then enter Active and invoke OnActivated. Every registered component SHALL be resolvable from the moment it is registered.
 
 #### Scenario: System is registered before Model in Configure
 - **WHEN** Configure registers a System before a Model
 - **THEN** every Model still initializes before any System
 
 #### Scenario: OnActivated uses Active capability
-- **WHEN** OnActivated registers a new component, executes CQ, sends an Event, or changes the tree
-- **THEN** the operation follows normal Active rules because creation transition has already ended
+- **WHEN** OnActivated executes a Command or Query, sends an Event, or changes the tree
+- **THEN** the operation follows normal Active rules
 
 #### Scenario: OnActivated disposes its Domain
 - **WHEN** OnActivated leaves the candidate in a state other than Active
 - **THEN** Create throws and never returns or publishes that candidate
+
+### Requirement: Operations follow the simplified lifecycle phases
+Registration MUST be allowed only inside Configure. Lookup, Command, Query, SendEvent, and RegisterEvent SHALL be allowed while the Domain is Starting or Active. While Disposing, lookup, Command, Query, and SendEvent SHALL remain allowed so release callbacks can persist state, but RegisterEvent MUST throw `InvalidOperationException` and event subscriptions are already inactive. AddChild, RemoveChild, and Dispose SHALL require an Active Domain, except that Dispose on a Disposing or Disposed Domain is a no-op. Disposed Domains MUST reject every operation except Dispose with `ObjectDisposedException`.
+
+#### Scenario: Model reads Utility during initialization
+- **WHEN** a Model's OnInitialize resolves a Utility registered in the same Configure
+- **THEN** lookup returns that Utility
+
+#### Scenario: System persists data during release
+- **WHEN** a System's OnRelease reads a Model and calls a Utility to save it
+- **THEN** both lookups succeed because Models are released after Systems and the registry is cleared last
+
+#### Scenario: Release callback subscribes to an event
+- **WHEN** OnDeactivating or a component Release callback calls RegisterEvent
+- **THEN** it throws `InvalidOperationException`
+
+### Requirement: Teardown follows a fixed dependency order
+Each Domain MUST enter Disposing before releasing its children, so that reentrant Dispose calls and tree mutations made from descendant release callbacks are a no-op or rejected respectively. Entering Disposing MUST also deactivate all of its local event subscriptions before any child is released. It MUST then release children in reverse-attachment postorder, invoke OnDeactivating only if it had become Active, release Systems in reverse initialization order, release Models in reverse initialization order, clear its registry without disposing Utilities, unlink parent and child relationships, and enter Disposed.
+
+#### Scenario: Components and children are released in order
+- **WHEN** children, Systems, and Models were attached or initialized in a known sequence
+- **THEN** later children finish before earlier siblings, all children finish before their parent, Systems finish before Models, and each category uses reverse initialization order
+
+#### Scenario: Child release callback disposes its parent
+- **WHEN** a child's OnDeactivating or component Release calls Dispose on its parent while the parent is disposing that child
+- **THEN** the call is a no-op, OnDeactivating of the parent runs exactly once, and the child finishes before the parent
+
+#### Scenario: Child release callback uses its disposing parent's events
+- **WHEN** a child's release callback sends an event to, or subscribes to, its parent while the parent is disposing that child
+- **THEN** the sent event reaches no handler and the subscription throws `InvalidOperationException`
+
+#### Scenario: OnActivated throws
+- **WHEN** OnActivated throws after the Domain entered Active
+- **THEN** OnDeactivating is invoked during the failure cleanup and Create rethrows the original exception
+
+#### Scenario: Event is sent during release
+- **WHEN** a component Release callback sends an event of a type that other Systems in the same Domain subscribed to
+- **THEN** no handler of the disposing Domain is invoked
+
+### Requirement: Teardown runs every step and always terminates
+The Domain MUST attempt every targeted child, OnDeactivating, lifecycle Release, registry clear, and relationship unlink even when earlier work fails. Structural and terminal state updates MUST run in `finally`. One failure SHALL propagate with its original stack; multiple failures SHALL be flattened in occurrence order into AggregateException.
+
+#### Scenario: Multiple cleanup stages fail
+- **WHEN** child, OnDeactivating, or component Release stages throw
+- **THEN** all remaining cleanup stages run, every targeted Domain becomes Disposed and unlinked, and the caller receives every failure in deterministic order
+
+#### Scenario: Creation and cleanup both fail
+- **WHEN** a creation hook throws and one or more failure-cleanup steps also throw
+- **THEN** AggregateException contains the original creation failure first and cleanup failures afterward
+

@@ -42,7 +42,24 @@ Each `AbstractSingletonDomain<T>` MUST reject access to `Instance` or `DestroyIn
 - **WHEN** the published singleton instance is disposed
 - **THEN** its static reference is cleared and a future Instance access may create a fresh instance
 
-### Requirement: Operations obey the lifecycle phase
+### Requirement: Startup collects before initialization
+Starting MUST invoke Configure exactly once, then initialize all Models in registration order, then initialize all Systems in registration order, then enter Active and invoke OnActivated. Every registered component SHALL be resolvable from the moment it is registered.
+
+#### Scenario: System is registered before Model in Configure
+- **WHEN** Configure registers a System before a Model
+- **THEN** every Model still initializes before any System
+
+#### Scenario: OnActivated uses Active capability
+- **WHEN** OnActivated executes a Command or Query, sends an Event, or changes the tree
+- **THEN** the operation follows normal Active rules
+
+#### Scenario: OnActivated disposes its Domain
+- **WHEN** OnActivated leaves the candidate in a state other than Active
+- **THEN** Create throws and never returns or publishes that candidate
+
+## ADDED Requirements
+
+### Requirement: Operations follow the simplified lifecycle phases
 Registration MUST be allowed only inside Configure. Lookup, Command, Query, SendEvent, and RegisterEvent SHALL be allowed while the Domain is Starting or Active. While Disposing, lookup, Command, Query, and SendEvent SHALL remain allowed so release callbacks can persist state, but RegisterEvent MUST throw `InvalidOperationException` and event subscriptions are already inactive. AddChild, RemoveChild, and Dispose SHALL require an Active Domain, except that Dispose on a Disposing or Disposed Domain is a no-op. Disposed Domains MUST reject every operation except Dispose with `ObjectDisposedException`.
 
 #### Scenario: Model reads Utility during initialization
@@ -57,7 +74,7 @@ Registration MUST be allowed only inside Configure. Lookup, Command, Query, Send
 - **WHEN** OnDeactivating or a component Release callback calls RegisterEvent
 - **THEN** it throws `InvalidOperationException`
 
-### Requirement: Full teardown has defined dependency order
+### Requirement: Teardown follows a fixed dependency order
 Each Domain MUST enter Disposing before releasing its children, so that reentrant Dispose calls and tree mutations made from descendant release callbacks are a no-op or rejected respectively. Entering Disposing MUST also deactivate all of its local event subscriptions before any child is released. It MUST then release children in reverse-attachment postorder, invoke OnDeactivating only if it had become Active, release Systems in reverse initialization order, release Models in reverse initialization order, clear its registry without disposing Utilities, unlink parent and child relationships, and enter Disposed.
 
 #### Scenario: Components and children are released in order
@@ -80,7 +97,7 @@ Each Domain MUST enter Disposing before releasing its children, so that reentran
 - **WHEN** a component Release callback sends an event of a type that other Systems in the same Domain subscribed to
 - **THEN** no handler of the disposing Domain is invoked
 
-### Requirement: Teardown is exhaustive and terminal despite failures
+### Requirement: Teardown runs every step and always terminates
 The Domain MUST attempt every targeted child, OnDeactivating, lifecycle Release, registry clear, and relationship unlink even when earlier work fails. Structural and terminal state updates MUST run in `finally`. One failure SHALL propagate with its original stack; multiple failures SHALL be flattened in occurrence order into AggregateException.
 
 #### Scenario: Multiple cleanup stages fail
@@ -91,23 +108,20 @@ The Domain MUST attempt every targeted child, OnDeactivating, lifecycle Release,
 - **WHEN** a creation hook throws and one or more failure-cleanup steps also throw
 - **THEN** AggregateException contains the original creation failure first and cleanup failures afterward
 
-### Requirement: Startup collects before initialization
-Starting MUST invoke Configure exactly once, then initialize all Models in registration order, then initialize all Systems in registration order, then enter Active and invoke OnActivated. Every registered component SHALL be resolvable from the moment it is registered.
-
-#### Scenario: System is registered before Model in Configure
-- **WHEN** Configure registers a System before a Model
-- **THEN** every Model still initializes before any System
-
-#### Scenario: OnActivated uses Active capability
-- **WHEN** OnActivated executes a Command or Query, sends an Event, or changes the tree
-- **THEN** the operation follows normal Active rules
-
-#### Scenario: OnActivated disposes its Domain
-- **WHEN** OnActivated leaves the candidate in a state other than Active
-- **THEN** Create throws and never returns or publishes that candidate
-
 ## REMOVED Requirements
 
 ### Requirement: Initialization permits only recoverable Domain operations
 **Reason**: Per-phase Context restrictions blocked common initialization code such as System-to-System lookup and added a three-state Context machine.
 **Migration**: Initialization code may use every capability of its role. Do not depend on another System having finished initialization.
+
+### Requirement: Operations obey the lifecycle phase
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Operations follow the simplified lifecycle phases".
+
+### Requirement: Full teardown has defined dependency order
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Teardown follows a fixed dependency order".
+
+### Requirement: Teardown is exhaustive and terminal despite failures
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Teardown runs every step and always terminates".

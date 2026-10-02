@@ -37,24 +37,6 @@ Each attached child MUST have exactly one strong `Parent` reference and each par
 - **WHEN** a Domain is asked to remove a node that is not its direct child
 - **THEN** it throws `InvalidOperationException` without changing either tree
 
-### Requirement: Disposal strategy has explicit child ownership semantics
-`Dispose()` MUST dispose the currently attached subtree in reverse-attachment postorder before disposing the current Domain. Disposing an attached child directly MUST also remove it from its parent. A child removed before a later parent Dispose MUST remain unaffected.
-
-#### Scenario: Parent disposes attached subtree
-- **WHEN** a parent with several attached descendants is disposed
-- **THEN** later-attached siblings finish first, every descendant finishes before its parent, and all targeted nodes become Disposed
-
-#### Scenario: Attached child is disposed directly
-- **WHEN** an attached child is disposed while its parent stays Active
-- **THEN** the child becomes Disposed and the parent no longer lists it as a child
-
-### Requirement: Tree consistency survives cleanup failures
-Disposal MUST continue after child or component failures and MUST use `finally` paths to unlink every Disposed node from both directions.
-
-#### Scenario: One child cleanup fails
-- **WHEN** cleanup of one child throws while siblings and a parent remain
-- **THEN** all remaining targeted nodes are still cleaned, all disposed relationships are removed, and the caller receives the recorded failure after structural cleanup
-
 ## ADDED Requirements
 
 ### Requirement: Tree changes are explicit and allowed during execution
@@ -68,8 +50,34 @@ Moving a subtree MUST be expressed as `oldParent.RemoveChild(child)` followed by
 - **WHEN** any precondition for AddChild or RemoveChild fails
 - **THEN** parent links and internal child retention remain unchanged
 
+### Requirement: Dispose releases the attached subtree
+`Dispose()` MUST dispose the currently attached subtree in reverse-attachment postorder before disposing the current Domain. Disposing an attached child directly MUST also remove it from its parent. A child removed before a later parent Dispose MUST remain unaffected.
+
+#### Scenario: Parent disposes attached subtree
+- **WHEN** a parent with several attached descendants is disposed
+- **THEN** later-attached siblings finish first, every descendant finishes before its parent, and all targeted nodes become Disposed
+
+#### Scenario: Attached child is disposed directly
+- **WHEN** an attached child is disposed while its parent stays Active
+- **THEN** the child becomes Disposed and the parent no longer lists it as a child
+
+### Requirement: Tree links are cleaned up despite failures
+Disposal MUST continue after child or component failures and MUST use `finally` paths to unlink every Disposed node from both directions.
+
+#### Scenario: One child cleanup fails
+- **WHEN** cleanup of one child throws while siblings and a parent remain
+- **THEN** all remaining targeted nodes are still cleaned, all disposed relationships are removed, and the caller receives the recorded failure after structural cleanup
+
 ## REMOVED Requirements
 
 ### Requirement: Tree changes are explicit and transition-safe
 **Reason**: Execution and transition locks are removed so tree changes work from Commands and event handlers.
 **Migration**: See "Tree changes are explicit and allowed during execution".
+
+### Requirement: Disposal strategy has explicit child ownership semantics
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Dispose releases the attached subtree".
+
+### Requirement: Tree consistency survives cleanup failures
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Tree links are cleaned up despite failures".

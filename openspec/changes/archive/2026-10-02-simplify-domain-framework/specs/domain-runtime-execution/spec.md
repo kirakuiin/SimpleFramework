@@ -26,32 +26,6 @@ CommandContext MUST expose GetModel, GetSystem, GetUtility, SendEvent, SendComma
 - **WHEN** QueryContext resolves a Model whose business API contains mutation
 - **THEN** the framework does not claim to enforce deep read-only behavior
 
-### Requirement: Event dispatch uses copy-on-write snapshot semantics
-Each event type MUST store an immutable current subscription array. Registration and unregistration SHALL replace that array; sending SHALL capture one array reference and iterate it without allocating a snapshot. A handler registered during dispatch MUST NOT run in that dispatch. A subscription that becomes inactive during dispatch, because it was unregistered or its Domain began disposal, MUST be skipped for the remainder of that dispatch.
-
-#### Scenario: Handler is registered during send
-- **WHEN** an event handler registers another handler of the same event type
-- **THEN** the new handler does not run in the current send and is available on the next send
-
-#### Scenario: Handler unregisters a later handler during send
-- **WHEN** handler A unregisters handler B during a dispatch in which B has not run yet
-- **THEN** B does not run in that dispatch
-
-#### Scenario: Handler disposes the Domain during send
-- **WHEN** handler A disposes the Domain whose event is being dispatched
-- **THEN** no later handler of that Domain runs in that dispatch and SendEvent returns normally
-
-### Requirement: Event failures are fail-fast and tokens are idempotent
-The first event handler exception MUST stop later handlers and propagate unchanged. Every unregistration token MUST be idempotent and MUST become a harmless no-op after Domain disposal.
-
-#### Scenario: First handler throws
-- **WHEN** an earlier handler throws during synchronous event dispatch
-- **THEN** later handlers do not run and the same exception propagates
-
-#### Scenario: Token is used after Domain disposal
-- **WHEN** an external caller unregisters a token after its Domain was disposed
-- **THEN** the call has no effect and does not throw
-
 ## ADDED Requirements
 
 ### Requirement: Capability rule interfaces define component capabilities
@@ -91,6 +65,32 @@ Command, Query, and Event dispatch SHALL be synchronous and MAY be nested. Tree 
 - **WHEN** a Command disposes its own Domain and then calls GetModel through its Context
 - **THEN** the call throws `ObjectDisposedException`
 
+### Requirement: Event dispatch uses snapshots and skips inactive subscriptions
+Each event type MUST store an immutable current subscription array. Registration and unregistration SHALL replace that array; sending SHALL capture one array reference and iterate it without allocating a snapshot. A handler registered during dispatch MUST NOT run in that dispatch. A subscription that becomes inactive during dispatch, because it was unregistered or its Domain began disposal, MUST be skipped for the remainder of that dispatch.
+
+#### Scenario: Handler is registered during send
+- **WHEN** an event handler registers another handler of the same event type
+- **THEN** the new handler does not run in the current send and is available on the next send
+
+#### Scenario: Handler unregisters a later handler during send
+- **WHEN** handler A unregisters handler B during a dispatch in which B has not run yet
+- **THEN** B does not run in that dispatch
+
+#### Scenario: Handler disposes the Domain during send
+- **WHEN** handler A disposes the Domain whose event is being dispatched
+- **THEN** no later handler of that Domain runs in that dispatch and SendEvent returns normally
+
+### Requirement: Event failures stop dispatch and tokens are idempotent
+The first event handler exception MUST stop later handlers and propagate unchanged. Every unregistration token MUST be idempotent and MUST become a harmless no-op after Domain disposal.
+
+#### Scenario: First handler throws
+- **WHEN** an earlier handler throws during synchronous event dispatch
+- **THEN** later handlers do not run and the same exception propagates
+
+#### Scenario: Token is used after Domain disposal
+- **WHEN** an external caller unregisters a token after its Domain was disposed
+- **THEN** the call has no effect and does not throw
+
 ## REMOVED Requirements
 
 ### Requirement: Component Context exposes categorized capabilities
@@ -108,3 +108,11 @@ Command, Query, and Event dispatch SHALL be synchronous and MAY be nested. Tree 
 ### Requirement: Subscription ownership follows the registering Context
 **Reason**: Systems live exactly as long as their Domain now that dynamic registration is removed, and Domain disposal deactivates every subscription.
 **Migration**: Systems may ignore their tokens. Controllers remain responsible for unregistering their own subscriptions.
+
+### Requirement: Event dispatch uses copy-on-write snapshot semantics
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Event dispatch uses snapshots and skips inactive subscriptions".
+
+### Requirement: Event failures are fail-fast and tokens are idempotent
+**Reason**: Rewritten by the simplification; some old scenarios describe removed behavior (Context invalidation, transition locks, DisposeSelfOnly, owned subscriptions).
+**Migration**: See "Event failures stop dispatch and tokens are idempotent".
