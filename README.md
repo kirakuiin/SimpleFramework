@@ -159,6 +159,27 @@ SimpleFramework/
 - 测试框架：NUnit。
 - Godot 扩展项目依赖 `GodotSharp`，普通核心开发不一定需要直接使用它。
 
+## 在自己的项目中使用核心框架
+
+业务项目引用仓库根目录的 `SimpleFramework.csproj`，它会自动引用所需的 Utility 项目。仅使用核心框架无需引用整个解决方案或 GDExt。
+
+以下命令在本仓库根目录执行，将示例项目创建在仓库外的同级目录，避免被框架项目编译进去：
+
+```powershell
+dotnet new console --output ../SimpleFrameworkDemo
+dotnet add ../SimpleFrameworkDemo/SimpleFrameworkDemo.csproj reference ./SimpleFramework.csproj
+```
+
+示例项目使用当前 SDK 模板的默认目标框架（仓库指定的 .NET 9 SDK 默认创建 `net9.0` 项目），可以引用目标为 `net8.0` 的核心库。
+
+将下方 [Domain、Model、Command、Query](#domainmodelcommandquery) 的完整代码替换到 `../SimpleFrameworkDemo/Program.cs`，然后运行：
+
+```powershell
+dotnet run --project ../SimpleFrameworkDemo/SimpleFrameworkDemo.csproj
+```
+
+输出包含 `90`，表示创建 Domain、执行命令、查询状态和退出释放的流程已跑通。角色分工与更多用法见 [Domain 设计与使用](docs/domain-lifecycle.md)。
+
 ## 构建与测试
 
 在仓库根目录运行：
@@ -185,6 +206,7 @@ using SimpleFramework;
 using var game = GameDomain.Create();
 game.SendCommand(new DamageCommand(10));
 var hp = game.SendQuery(new ReadHpQuery()); // 90
+Console.WriteLine(hp);
 
 public interface IPlayerModel : IModel
 {

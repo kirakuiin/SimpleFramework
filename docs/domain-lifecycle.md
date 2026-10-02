@@ -175,7 +175,15 @@ Godot 节点也可以配合 GDExt 的 `UnRegisterWhenNodeExit`。
 
 最常见的写法：Model 用 `BindableProperty` 保存状态并对外只读，Controller 订阅它刷新显示，修改通过 Command 完成。
 
+下面是可独立替换 `Program.cs` 的完整示例。创建 View 时显示初始值，点击后自动刷新；作用域结束时先释放 View 的订阅，再释放 Domain。
+
 ```csharp
+using SimpleFramework;
+
+using var domain = CounterDomain.Create();
+using var view = new CounterView(domain); // 输出 Count: 0
+view.OnClick();                          // 输出 Count: 1
+
 public interface ICounterModel : IModel
 {
     IReadonlyBindableProperty<int> Count { get; } // 对外只读，表现层不能直接改
@@ -217,6 +225,15 @@ public sealed class CounterView : IController, IDisposable
     public void Dispose() => _count.UnRegister(); // Controller 的订阅由自己取消
 
     private static void Render(int value) => Console.WriteLine($"Count: {value}");
+}
+
+public sealed class CounterDomain : AbstractDomain
+{
+    private CounterDomain() { }
+
+    public static CounterDomain Create() => CreateDomain(() => new CounterDomain());
+
+    protected override void Configure() => RegisterModel<ICounterModel>(new CounterModel());
 }
 ```
 
@@ -427,7 +444,7 @@ domain.SendCommand<RestartBattleCommand>(); // 无参命令的便利写法
 **注册**：在根 Domain 的 `Configure` 中注册一次，推荐从外部传入，便于测试时每次换一个新实例：
 
 ```csharp
-var hub = new EventHub();
+using var hub = new EventHub();
 using var root = RootDomain.Create(hub);
 
 public sealed class RootDomain : AbstractDomain
@@ -441,6 +458,8 @@ public sealed class RootDomain : AbstractDomain
     protected override void Configure() => RegisterUtility<IEventHub>(_hub);
 }
 ```
+
+`using` 按声明的逆序释放：先释放 `root` 及其子域，再释放 `hub`，让组件退出期间仍可使用事件中心。
 
 也可以放在静态字段里，例如 `AppEvents.Hub`，再在 `Configure` 中注册。这样写更简单，但测试之间会共享订阅，相当于回到了全局状态。
 
@@ -615,7 +634,7 @@ public void DamageIsSavedOnRelease()
 - 用户没有犯错时，框架绝不出问题。
 - 用户犯错时，抛出说明原因的明确异常，不静默覆盖、不返回 `null`、不吞掉错误。
 
-**性能**：查找组件、发送本地事件、发布到事件中心、执行 Command/Query 这些热路径，热身后不分配内存（由测试保证）。
+**性能**：成功查找组件，以及发送本地事件、发布到事件中心、执行 Command/Query 的框架分发路径，在热身后不产生每次调用的内存分配（由测试覆盖）。这不包含业务对象创建、回调内部、异常路径或值类型 Command/Query 转为接口时的装箱。`new DamageCommand(...)`、创建引用类型事件，以及 `SendCommand<T>()` / `SendEvent<T>()` / `PublishEvent<T>()` 便利方法创建引用类型实例，仍会分配内存。需要零分配时，应在语义允许的前提下复用命令和查询对象，并使用值类型事件或已有事件对象。
 
 **有意不做的事**：
 
