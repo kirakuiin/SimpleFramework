@@ -318,32 +318,34 @@ public sealed class EventHubTests
         Assert.Throws<InvalidOperationException>(() => token.UnRegisterOnRelease(system));
     }
 
-    /// <summary>测试通过 UnRegisterOnRelease 返回的句柄提前取消后，System 不再持有原订阅。</summary>
+    /// <summary>测试通过 UnRegisterOnRelease 返回的句柄提前取消后，System 不再持有该登记项。</summary>
     [Test]
     public void EarlyCancellationThroughReturnedTokenStopsTracking()
     {
         var system = new DerivedSystem();
         using var domain = ProbeDomain.Create(configure: value => value.AddSystem(system));
 
-        var original = OwnAndCancelThroughReturnedToken(system);
+        var returned = OwnAndCancelThroughReturnedToken(system);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        Assert.That(original.IsAlive, Is.False);
+        Assert.That(returned.IsAlive, Is.False);
         GC.KeepAlive(system);
     }
 
     /// <summary>
-    /// 登记一个原句柄并通过返回句柄取消，只返回原句柄的弱引用。
+    /// 登记一个订阅并取消返回的包装句柄，只返回包装句柄的弱引用。
+    /// 必须观察包装句柄而不是原句柄：包装句柄取消后会清空回调、不再引用原句柄，
+    /// 即使它仍留在登记列表里，原句柄也可回收，无法证明登记项已移除。
     /// 放在独立且不内联的方法里，确保调用方栈上没有残留的强引用，弱引用的存活只取决于 System 是否仍持有它。
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference OwnAndCancelThroughReturnedToken(DerivedSystem system)
     {
-        var original = new CustomUnRegister(() => { });
-        original.UnRegisterOnRelease(system).UnRegister();
-        return new WeakReference(original);
+        var returned = new CustomUnRegister(() => { }).UnRegisterOnRelease(system);
+        returned.UnRegister();
+        return new WeakReference(returned);
     }
 
     /// <summary>测试通过事件中心发布在热身后不分配内存。</summary>
